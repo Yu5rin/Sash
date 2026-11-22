@@ -84,6 +84,7 @@ export interface HostApi {
   'app.close': { req: undefined; res: null };
   'file.open': { req: { path?: string } | undefined; res: OpenedDocument | null };
   'file.save': { req: { path: string; parts: PartToSave[] }; res: { backup: string } };
+  'file.exportText': { req: { defaultName: string; filter: string; content: string }; res: string | null };
   'file.recent': { req: undefined; res: RecentFile[] };
   'file.removeRecent': { req: { path: string }; res: null };
   'settings.get': { req: undefined; res: Settings };
@@ -210,6 +211,15 @@ const mock = {
         return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }] });
       case 'file.save':
         return r({ backup: '(ブラウザ実行中のため保存しません)' });
+      case 'file.exportText': {
+        // ブラウザ実行中はダウンロードで代用する
+        const p = payload as { defaultName: string; content: string };
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([p.content], { type: 'application/json' }));
+        a.download = p.defaultName;
+        a.click();
+        return r(p.defaultName);
+      }
       case 'file.recent':
         return r([{ path: 'C:\\sample\\集計ツール.xlam', exists: true }]);
       case 'settings.get':

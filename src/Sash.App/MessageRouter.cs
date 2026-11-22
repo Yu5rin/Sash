@@ -24,6 +24,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "app.close" => Close(),
                 "file.open" => OpenFile(body),
                 "file.save" => SaveFile(Read<SaveRequest>(body)),
+                "file.exportText" => ExportText(Read<ExportRequest>(body)),
                 "file.recent" => RecentFiles(),
                 "file.removeRecent" => RemoveRecent(Read<PathRequest>(body)),
                 "settings.get" => ToDto(settings.Load()),
@@ -151,6 +152,24 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         {
             return true;
         }
+    }
+
+    /// <summary>保存ダイアログを出してテキストを書き出す（.sash.json）。キャンセル時は null。</summary>
+    private object? ExportText(ExportRequest req)
+    {
+        using var dialog = new SaveFileDialog
+        {
+            FileName = req.DefaultName,
+            Filter = string.IsNullOrEmpty(req.Filter) ? "すべてのファイル (*.*)|*.*" : req.Filter,
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog(owner) != DialogResult.OK)
+        {
+            return null;
+        }
+
+        File.WriteAllText(dialog.FileName, req.Content, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        return dialog.FileName;
     }
 
     private object RecentFiles() =>
@@ -294,6 +313,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     private sealed record PathRequest(string Path);
 
     private sealed record IdRequest(string Id);
+
+    private sealed record ExportRequest(string DefaultName, string Filter, string Content);
 
     private sealed record ImageDto(string Id, string Base64);
 

@@ -5,6 +5,8 @@ import { app } from './app';
 import { invoke, isHosted, onHostEvent, sendDroppedFiles, type PartToSave, type Settings } from './bridge';
 import { insertStubs, setupRibbonHolder, vba } from './callbacks';
 import { openCatalog } from './dialogs/catalogDialog';
+import { openDiff } from './dialogs/diffDialog';
+import { exportSash, parseSash, partXml } from './sashJson';
 import { openCommandPalette, type Command } from './dialogs/commandPalette';
 import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
 import { builtinRecipes } from './recipes';
@@ -49,6 +51,7 @@ $('btn-format').replaceChildren(svg(uiIcons.format));
 $('btn-catalog').replaceChildren(svg(uiIcons.catalog));
 $('btn-settings').replaceChildren(svg(uiIcons.settings));
 $('btn-recipes').replaceChildren(svg(uiIcons.recipe));
+$('btn-diff').replaceChildren(svg(uiIcons.diff));
 $('btn-command').replaceChildren(svg(uiIcons.command));
 
 function updateToolbar(): void {
@@ -65,6 +68,7 @@ function updateToolbar(): void {
   $<HTMLButtonElement>('btn-format').disabled = !store || store.syncError !== null;
   $<HTMLButtonElement>('btn-catalog').disabled = !s;
   $<HTMLButtonElement>('btn-recipes').disabled = !s;
+  $<HTMLButtonElement>('btn-diff').disabled = !s;
 
   const sw = $<HTMLSelectElement>('part-switch');
   sw.hidden = !s || s.parts.size < 2;
@@ -264,6 +268,44 @@ function openSettings(): void {
   openModal('設定', content);
 }
 
+// ---- .sash.json の書き出し・読み込み ----
+
+async function exportSashFile(): Promise<void> {
+  const s = app.session;
+  if (!s) return;
+  const base = s.path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '');
+  try {
+    const saved = await invoke('file.exportText', { defaultName: `${base}.sash.json`, filter: 'Sash のリボン定義 (*.sash.json)|*.sash.json', content: exportSash([...s.parts.values()], s.path.split(/[\\/]/).pop()) });
+    if (saved) toast(`リボン定義を書き出しました：${saved}`);
+  } catch (e) {
+    toast((e as Error).message, 'error');
+  }
+}
+
+function importSashFile(): void {
+  const input = h('input', { type: 'file', accept: '.json,.sash.json' });
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) void file.text().then(applySash).catch((e: Error) => toast(e.message, 'error'));
+  });
+  input.click();
+}
+
+async function applySash(text: string): Promise<void> {
+  const s = app.session;
+  if (!s) return;
+  const data = parseSash(text);
+  const target = s.active;
+  const part = data.parts.find((p) => p.version === target.version) ?? data.parts[0]!;
+  const r = await ask('リボン定義を読み込む', `編集中の ${target.version === 'office2010' ? 'customUI14' : 'customUI'} を、${data.source ?? 'ファイル'} のリボン定義（画像 ${part.images.length} 個を含む）で置き換えます。元に戻す（Ctrl+Z）で取り消せます。`, [
+    { value: 'ok', label: '置き換える', primary: true },
+    { value: 'cancel', label: 'キャンセル' },
+  ]);
+  if (r !== 'ok') return;
+  target.replaceAll(partXml(part), part.images.map((i) => ({ id: i.id, dataUrl: `data:${i.contentType};base64,${i.base64}`, isNew: true })));
+  toast(part.version !== target.version ? '形式（2007 / 2010以降）が違うリボン定義を読み込みました。名前空間を確認してください' : 'リボン定義を読み込みました');
+}
+
 // ---- コマンドパレット ----
 
 function openImageMsoCatalog(): void {
@@ -278,6 +320,9 @@ function buildCommands(): Command[] {
   return [
     { id: 'file.open', group: 'ファイル', title: 'ファイルを開く', shortcut: 'Ctrl+O', run: () => void open() },
     { id: 'file.save', group: 'ファイル', title: '保存', shortcut: 'Ctrl+S', enabled: has, run: () => void save() },
+    { id: 'file.diff', group: 'ファイル', title: '保存済みとの差分を表示', keywords: 'diff compare', enabled: has, run: openDiff },
+    { id: 'file.export', group: 'ファイル', title: 'リボン定義を書き出す（.sash.json）', keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
+    { id: 'file.import', group: 'ファイル', title: 'リボン定義を読み込む（.sash.json）', keywords: 'import json', enabled: has, run: importSashFile },
     { id: 'file.apply', group: 'ファイル', title: 'Excelへ反映', shortcut: 'F5', keywords: 'apply reload', enabled: has, run: () => void applyToExcel() },
     { id: 'edit.undo', group: '編集', title: '元に戻す', shortcut: 'Ctrl+Z', enabled: () => app.store?.canUndo === true, run: undo },
     { id: 'edit.redo', group: '編集', title: 'やり直し', shortcut: 'Ctrl+Y', enabled: () => app.store?.canRedo === true, run: redo },
@@ -358,6 +403,7 @@ $('btn-redo').addEventListener('click', redo);
 $('btn-format').addEventListener('click', () => app.store?.format());
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-recipes').addEventListener('click', () => void openRecipes(toast));
+$('btn-diff').addEventListener('click', openDiff);
 $('btn-command').addEventListener('click', () => openCommandPalette(buildCommands));
 $('btn-catalog').addEventListener('click', () => {
   const el = app.store?.selectedElement;
