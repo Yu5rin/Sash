@@ -567,3 +567,18 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-muted); border: 1
 .diff-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1; font-size: 12px; color: var(--text-muted); }
 .tag.removed { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error); }
 .diff-editor { flex: 1; min-height: 0; border: 1px solid var(--border); }
+
+/* ---- アイコンライブラリ ---- */
+
+.library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; overflow: auto; flex: 1; align-content: start; }
+.library-item { display: grid; grid-template-columns: 32px 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; position: relative; }
+.library-item.pickable { cursor: pointer; }
+.library-item:hover, .library-item:focus { background: var(--surface-3); outline: none; }
+.library-item img { grid-row: span 2; }
+.library-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-tags { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-actions { position: absolute; top: 2px; right: 2px; display: none; background: var(--surface); border-radius: 4px; }
+.library-item:hover .library-actions, .library-item:focus-within .library-actions { display: flex; }
+.library-actions .fav.on { color: var(--warning); }
+.library-item .fav.on { display: inline-flex; }
+.path-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; font-size: 12px; }

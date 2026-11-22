@@ -12,7 +12,8 @@ import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
 import { builtinRecipes } from './recipes';
 import { ask, openModal } from './dialogs/modal';
 import { $, h, svg } from './dom';
-import { openIconDialog } from './icon/iconDialog';
+import { applyLibraryIcon, openIconDialog } from './icon/iconDialog';
+import { openLibrary } from './dialogs/libraryDialog';
 import { uiIcons } from './icons';
 import { mountLayout } from './layout';
 import { duplicateElement, elementAt, pathOf } from './model';
@@ -256,6 +257,8 @@ function openSettings(): void {
     h('label', null, 'アイコンの出力サイズ', h('select', { onchange: (e: Event) => void update({ iconSize: Number((e.target as HTMLSelectElement).value) as 32 | 64 }) },
       h('option', { value: '32', selected: s.iconSize === 32 }, '32 × 32'),
       h('option', { value: '64', selected: s.iconSize === 64 }, '64 × 64（高DPI）'))),
+    h('h3', null, 'アイコンライブラリ'),
+    h('label', null, '保存先', h('div', { class: 'insp-inline' }, h('span', { class: 'muted path-text', title: s.iconLibraryPath }, s.iconLibraryPath), h('button', { type: 'button', class: 'small', onclick: async () => { const p = await invoke('library.chooseFolder'); if (p) { app.settings = await invoke('settings.get'); modal.close(); openSettings(); } } }, '変更'))),
     h('h3', null, 'コールバック'),
     h('label', null, '名前の規則', h('input', { type: 'text', value: s.callbackPattern, spellcheck: false, title: '{id} と {attr} が置き換わります', onchange: (e: Event) => void update({ callbackPattern: (e.target as HTMLInputElement).value.trim() }) })),
     h('label', null, 'Subの共有', h('select', { onchange: (e: Event) => void update({ callbackShared: (e.target as HTMLSelectElement).value === 'shared' }) },
@@ -265,7 +268,7 @@ function openSettings(): void {
     h('label', null, '挿入先のモジュール', h('input', { type: 'text', value: s.callbackModule, spellcheck: false, onchange: (e: Event) => void update({ callbackModule: (e.target as HTMLInputElement).value.trim() }) })),
     h('p', { class: 'muted' }, `Sash ${app.info.version} ・ Excel ${app.info.excelInstalled ? 'あり' : 'なし（ファイル編集のみ）'}`),
   );
-  openModal('設定', content);
+  const modal = openModal('設定', content);
 }
 
 // ---- .sash.json の書き出し・読み込み ----
@@ -337,6 +340,7 @@ function buildCommands(): Command[] {
     { id: 'vba.refresh', group: 'VBA', title: 'VBAを再読み込みして照合', keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
     { id: 'vba.insert', group: 'VBA', title: '未実装のコールバックをモジュールに挿入', keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => run(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: 'onLoad と Invalidate の雛形を入れる', keywords: 'ribbon invalidate onload', enabled: has, run: () => run(setupRibbonHolder()) },
+    { id: 'view.library', group: '表示', title: 'アイコンライブラリを開く', keywords: 'icon library', run: () => void openLibrary(undefined, toast) },
     { id: 'view.catalog', group: '表示', title: 'imageMso カタログを開く', keywords: 'icon catalog', enabled: has, run: openImageMsoCatalog },
     { id: 'view.idmso', group: '表示', title: 'idMso カタログを開く（IDをコピー）', keywords: 'idmso catalog', enabled: has, run: () => openCatalog('idMso', '', (v) => void navigator.clipboard.writeText(v).then(() => toast(`${v} をコピーしました`))) },
     { id: 'view.problems', group: '表示', title: '問題の一覧を表示', enabled: has, run: () => showBottomTab('problems') },
@@ -385,6 +389,10 @@ mountInspector($('inspector'), {
   },
   pickImageMso: (cur, apply) => openCatalog('imageMso', cur, apply),
   editImage: (existing) => openImageEditor(undefined, existing),
+  pickFromLibrary: () => {
+    const sel = app.store?.selection;
+    if (sel) void openLibrary((d) => applyLibraryIcon(sel, d), toast);
+  },
 });
 mountBottom($('bottom-tabs'), $('bottom-body'), toast, (existing) => {
   // 一覧から開いたときは、コントロールには設定せずに画像だけを作り直す

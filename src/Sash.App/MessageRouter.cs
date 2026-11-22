@@ -32,6 +32,13 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.openWorkbooks" => ExcelInstalled ? await excel.Value.ListOpenWorkbooksAsync() : [],
                 "excel.apply" => await ApplyAsync(Read<ApplyRequest>(body)),
                 "excel.imageMso" => await ImageMsoAsync(Read<ImageMsoRequest>(body)),
+                "library.list" => LibraryList(),
+                "library.get" => LibraryGet(Read<IdRequest>(body)),
+                "library.save" => LibrarySave(Read<LibrarySaveRequest>(body)),
+                "library.update" => LibraryUpdate(Read<LibraryUpdateRequest>(body)),
+                "library.delete" => LibraryDelete(Read<IdRequest>(body)),
+                "library.chooseFolder" => ChooseLibraryFolder(),
+                "library.toggleFavorite" => ToggleFavorite(Read<IdRequest>(body)),
                 "icons.fromExecutable" => IconsFromExecutable(),
                 "recipes.list" => recipes.List(),
                 "recipes.save" => SaveRecipe(body),
@@ -203,6 +210,100 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         };
     }
 
+    // ---- アイコンライブラリ（仕様書 §6.4） ----
+
+    private Sash.Core.Library.IconLibrary Library()
+    {
+        var path = settings.Load().IconLibraryPath;
+        return new Sash.Core.Library.IconLibrary(string.IsNullOrWhiteSpace(path) ? AppPaths.Icons : path);
+    }
+
+    private object LibraryList()
+    {
+        var lib = Library();
+        var favorites = settings.Load().IconFavorites.ToHashSet(StringComparer.Ordinal);
+        return new
+        {
+            root = lib.Root,
+            icons = lib.List().Select(i => new
+            {
+                id = i.Id,
+                name = i.Name,
+                tags = i.Tags,
+                createdAt = i.CreatedAt,
+                hasSource = i.SourceName is not null,
+                favorite = favorites.Contains(i.Id),
+                png = Convert.ToBase64String(lib.ReadPng(i.Id)),
+            }),
+        };
+    }
+
+    private object? LibraryGet(IdRequest req)
+    {
+        var lib = Library();
+        var icon = lib.Get(req.Id);
+        if (icon is null)
+        {
+            return null;
+        }
+
+        var source = lib.ReadSource(icon.Id);
+        return new
+        {
+            id = icon.Id,
+            name = icon.Name,
+            tags = icon.Tags,
+            png = Convert.ToBase64String(lib.ReadPng(icon.Id)),
+            source = source is null ? null : Convert.ToBase64String(source),
+            sourceName = icon.SourceName,
+            sourceContentType = icon.SourceContentType,
+            options = icon.Options,
+        };
+    }
+
+    private object LibrarySave(LibrarySaveRequest req)
+    {
+        var options = req.Options is { ValueKind: JsonValueKind.Object } o ? System.Text.Json.Nodes.JsonNode.Parse(o.GetRawText()) as System.Text.Json.Nodes.JsonObject : null;
+        var icon = Library().Add(req.Name, req.Tags ?? [], Convert.FromBase64String(req.Png),
+            string.IsNullOrEmpty(req.Source) ? null : Convert.FromBase64String(req.Source), req.SourceName, req.SourceContentType, options);
+        return new { id = icon.Id };
+    }
+
+    private object LibraryUpdate(LibraryUpdateRequest req) => Library().Update(req.Id, req.Name, req.Tags);
+
+    private object? LibraryDelete(IdRequest req)
+    {
+        Library().Delete(req.Id);
+        settings.Update(s => s with { IconFavorites = s.IconFavorites.Where(f => f != req.Id).ToList() });
+        return null;
+    }
+
+    private object? ChooseLibraryFolder()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "アイコンライブラリの場所（共有フォルダも選べます）",
+            UseDescriptionForTitle = true,
+            SelectedPath = Library().Root,
+        };
+        if (dialog.ShowDialog(owner) != DialogResult.OK)
+        {
+            return null;
+        }
+
+        settings.Update(s => s with { IconLibraryPath = dialog.SelectedPath });
+        return dialog.SelectedPath;
+    }
+
+    private object ToggleFavorite(IdRequest req)
+    {
+        var next = settings.Update(s => s with
+        {
+            IconFavorites = s.IconFavorites.Contains(req.Id) ? s.IconFavorites.Where(f => f != req.Id).ToList() : [.. s.IconFavorites, req.Id],
+        });
+        return next.IconFavorites.Contains(req.Id);
+    }
+
     // ---- レシピ ----
 
     private object? SaveRecipe(JsonElement? body)
@@ -225,7 +326,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     // ---- 設定 ----
 
     private static SettingsDto ToDto(AppSettings s) =>
-        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule);
+        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath);
 
     private SettingsDto SetSettings(SettingsDto patch) => ToDto(settings.Update(s => s with
     {
@@ -237,6 +338,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         CallbackShared = patch.CallbackShared ?? s.CallbackShared,
         CallbackSharedPattern = string.IsNullOrWhiteSpace(patch.CallbackSharedPattern) ? s.CallbackSharedPattern : patch.CallbackSharedPattern,
         CallbackModule = string.IsNullOrWhiteSpace(patch.CallbackModule) ? s.CallbackModule : patch.CallbackModule,
+        Language = patch.Language is "ja" or "en" ? patch.Language : s.Language,
     }));
 
     // ---- Excel ----
@@ -314,6 +416,10 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record IdRequest(string Id);
 
+    private sealed record LibrarySaveRequest(string Name, IReadOnlyList<string>? Tags, string Png, string? Source, string? SourceName, string? SourceContentType, JsonElement? Options);
+
+    private sealed record LibraryUpdateRequest(string Id, string? Name, IReadOnlyList<string>? Tags);
+
     private sealed record ExportRequest(string DefaultName, string Filter, string Content);
 
     private sealed record ImageDto(string Id, string Base64);
@@ -340,5 +446,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         string? CallbackPattern,
         bool? CallbackShared,
         string? CallbackSharedPattern,
-        string? CallbackModule);
+        string? CallbackModule,
+        string? Language,
+        string? IconLibraryPath);
 }

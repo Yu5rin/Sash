@@ -13,6 +13,7 @@ export interface InspectorHooks {
   pickIdMso(current: string, apply: (v: string) => void): void;
   pickImageMso(current: string, apply: (v: string) => void): void;
   editImage(existing?: ImageEntry): void;
+  pickFromLibrary(): void;
 }
 
 const CATEGORIES: readonly Category[] = ['基本', '表示', '動作', '詳細'];
@@ -268,6 +269,7 @@ function iconRow(el: Element): HTMLElement {
       ),
       img?.edit ? h('button', { type: 'button', class: 'small', title: '元画像と設定から加工し直す', onclick: () => hooks.editImage(img) }, '加工し直す') : null,
       h('button', { type: 'button', class: 'small', onclick: () => hooks.editImage() }, '新しく作る'),
+      h('button', { type: 'button', class: 'small', title: 'アイコンライブラリから選ぶ', onclick: () => hooks.pickFromLibrary() }, 'ライブラリ'),
     );
   } else if (mode === 'getImage') {
     detail = callbackEditor(el, 'getImage');

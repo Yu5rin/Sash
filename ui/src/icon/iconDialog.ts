@@ -5,6 +5,8 @@
 import { app } from '../app';
 import { invoke } from '../bridge';
 import { openCatalog } from '../dialogs/catalogDialog';
+import { detailToBlobs, openLibrary } from '../dialogs/libraryDialog';
+import type { LibraryIconDetail } from '../bridge';
 import { openModal } from '../dialogs/modal';
 import { h } from '../dom';
 import { elementAt, pathOf, setAttr, type Path } from '../model';
@@ -97,6 +99,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     h('button', { type: 'button', onclick: () => fileInput.click() }, 'ファイル'),
     h('button', { type: 'button', title: 'EXE / DLL に埋め込まれたアイコンから選ぶ', onclick: () => void fromExecutable() }, 'EXE / DLL'),
     app.info.excelInstalled ? h('button', { type: 'button', title: '組み込みアイコン（imageMso）を元にする', onclick: () => fromImageMso() }, '組み込みアイコン') : null,
+    h('button', { type: 'button', title: 'アイコンライブラリから選ぶ（元画像と設定があれば加工し直せます）', onclick: () => fromLibrary() }, 'ライブラリ'),
     h('button', { type: 'button', title: 'フォルダ内の画像を、今の加工設定でまとめて取り込む（コントロールには設定しません）', onclick: () => folderInput.click() }, 'フォルダを一括'),
     fileInput,
     folderInput,
@@ -111,6 +114,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const nameError = h('span', { class: 'field-error' });
   const okButton = h('button', { type: 'button', class: 'primary', disabled: true, onclick: () => confirm() }, target ? '設定する' : '追加する');
   const output = document.createElement('canvas');
+  const saveToLibrary = h('input', { type: 'checkbox' });
+  const libraryTags = h('input', { type: 'text', placeholder: 'カンマ区切り（例：社内, 集計）', spellcheck: false });
 
   // ---- 設定の入力欄 ----
 
@@ -153,6 +158,9 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       row('バッジ', select('badge', [['none', 'なし'], ['dot', '点'], ['plus', 'プラス'], ['check', 'チェック'], ['exclaim', '注意']]), color('badgeColor')),
       row('シャープ', ...range('sharpen', 0, 100))),
     section('画像名', row('名前', nameInput), nameError),
+    section('ライブラリ',
+      h('label', { class: 'check' }, saveToLibrary, 'アイコンライブラリにも保存する（別のブックで使い回せます）'),
+      row('タグ', libraryTags)),
   );
 
   const content = h('div', { class: 'icon-editor' }, h('div', { class: 'icon-left' }, drop, sourceView, sourceHint, icoList, exeList, h('h3', null, 'プレビュー（実寸）'), previews), h('div', { class: 'icon-right' }, controls));
@@ -292,6 +300,16 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     });
   }
 
+  /** ライブラリのアイコンを元にする。元画像と設定があれば、それを読み込んで加工し直せる状態で開き直す。 */
+  function fromLibrary(): void {
+    void openLibrary((d) => {
+      modal.close();
+      const { png, source } = detailToBlobs(d);
+      const edit = source ? { source, sourceName: d.sourceName ?? `${d.id}.png`, options: d.options ?? {} } : { source: dataUrlToBlob(png), sourceName: `${d.id}.png`, options: {} };
+      openIconDialog(target, undefined, { id: name, dataUrl: png, isNew: true, edit });
+    });
+  }
+
   /** フォルダの画像を、今の設定でまとめて取り込む（仕様書 §6.3）。 */
   async function bulkImport(files: File[]): Promise<void> {
     const images = files.filter((f) => IMAGE_FILE.test(f.name));
@@ -368,6 +386,20 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
 
   function confirm(): void {
     if (!source || !validateName()) return;
+    if (saveToLibrary.checked) {
+      const src = source;
+      void src.blob.arrayBuffer().then((buf) =>
+        invoke('library.save', {
+          name,
+          tags: libraryTags.value.split(/[,、]/).map((t) => t.trim()).filter(Boolean),
+          png: output.toDataURL('image/png').split(',')[1]!,
+          source: bytesToBase64(new Uint8Array(buf)),
+          sourceName: src.name,
+          sourceContentType: src.blob.type || 'application/octet-stream',
+          options: { ...opts },
+        }),
+      );
+    }
     const entry: ImageEntry = { id: name, dataUrl: output.toDataURL('image/png'), isNew: true, edit: { source: source.blob, sourceName: source.name, options: { ...opts } } };
     if (!target) {
       store!.addImage(entry);
@@ -523,4 +555,36 @@ function cropTo(c: HTMLCanvasElement, r: { x: number; y: number; width: number; 
   out.height = r.height;
   out.getContext('2d')!.drawImage(c, r.x, r.y, r.width, r.height, 0, 0, r.width, r.height);
   return out;
+}
+
+function dataUrlToBlob(url: string): Blob {
+  const [head, b64] = url.split(',');
+  const type = /data:([^;]+)/.exec(head ?? '')?.[1] ?? 'image/png';
+  return new Blob([Uint8Array.from(atob(b64 ?? ''), (c) => c.charCodeAt(0))], { type });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** ライブラリのアイコンを、そのままコントロールに設定する。 */
+export function applyLibraryIcon(target: Path, d: LibraryIconDetail): void {
+  const store = app.store;
+  if (!store) return;
+  const { png, source } = detailToBlobs(d);
+  const ascii = d.name.match(/[A-Za-z0-9]+/g)?.join('_');
+  const base = `img_${ascii ?? 'lib'}`;
+  let id = base;
+  for (let n = 2; store.images.has(id); n++) id = `${base}_${n}`;
+  const entry: ImageEntry = { id, dataUrl: png, isNew: true, edit: source ? { source, sourceName: d.sourceName ?? `${d.id}.png`, options: d.options ?? {} } : undefined };
+  store.addImageAndApply(entry, (doc) => {
+    const t = elementAt(doc, target);
+    if (!t) return undefined;
+    setAttr(t, 'imageMso', null);
+    setAttr(t, 'getImage', null);
+    setAttr(t, 'image', id);
+    return pathOf(t);
+  });
 }

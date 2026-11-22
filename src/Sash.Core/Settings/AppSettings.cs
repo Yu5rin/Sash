@@ -33,6 +33,15 @@ public sealed record AppSettings
     /// <summary>VBA の雛形を挿入する標準モジュール。</summary>
     public string CallbackModule { get; init; } = "modRibbon";
 
+    /// <summary>アイコンライブラリの場所。空なら %AppData%\Sash\icons。共有フォルダも指定できる。</summary>
+    public string? IconLibraryPath { get; init; }
+
+    /// <summary>お気に入りのアイコン（ライブラリの id）。共有フォルダを使っていても、お気に入りは人ごとに持つ。</summary>
+    public IReadOnlyList<string> IconFavorites { get; init; } = [];
+
+    /// <summary>画面の言語（ja / en）。</summary>
+    public string Language { get; init; } = "ja";
+
     /// <summary>最近使ったファイル（新しい順）。</summary>
     public IReadOnlyList<string> RecentFiles { get; init; } = [];
 }
