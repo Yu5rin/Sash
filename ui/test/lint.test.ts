@@ -85,3 +85,19 @@ describe('コンテキストメニュー', () => {
     expect(runCtx('<contextMenu idMso="ContextMenuCell"/>', 'office2007').some((m) => m.includes('2010以降の形式でのみ'))).toBe(true);
   });
 });
+
+describe('Backstage', () => {
+  const runBs = (body: string) => {
+    const r = parseXml(`<customUI xmlns="${NS}"><backstage>${body}</backstage></customUI>`);
+    if (!r.ok) throw new Error(r.message);
+    return lint(r.doc, ctx).map((p) => `${p.severity}:${p.message}`);
+  };
+
+  it('Backstage の構造をリボンと区別して検証する', () => {
+    expect(runBs('<tab id="t" label="T"><firstColumn><group id="g" label="G" style="warning" helperText="説明"><primaryItem><button id="p" label="P" isDefinitive="true"/></primaryItem><topItems><hyperlink id="h" label="H" target="https://example.com"/></topItems></group></firstColumn></tab><button id="fast" label="F" onAction="f"/>')).toEqual([]);
+  });
+
+  it('Backstage のタブにリボンのグループの中身は置けない', () => {
+    expect(runBs('<tab id="t"><group id="g"/></tab>')).toContain('error:<tab> の中に <group> は置けません');
+  });
+});

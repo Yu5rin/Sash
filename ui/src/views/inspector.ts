@@ -7,7 +7,7 @@ import { h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, setAttr, suggestId, usedIds } from '../model';
 import type { ImageEntry } from '../store';
-import { attributes, attrsOf, callbackSignature, elements, ID_PATTERN, type AttrDef, type Category } from '../schema';
+import { attributes, attrsOfEl, callbackSignature, defFor, ID_PATTERN, type AttrDef, type Category } from '../schema';
 
 export interface InspectorHooks {
   pickIdMso(current: string, apply: (v: string) => void): void;
@@ -55,7 +55,7 @@ function renderInspector(host: HTMLElement): void {
     host.replaceChildren(h('div', { class: 'insp-empty' }, store ? 'キャンバスかツリーで要素を選択してください' : ''));
     return;
   }
-  const def = elements.get(el.localName);
+  const def = defFor(el);
   const problems = app.problems.filter((p) => p.path.length === store.selection!.length && p.path.every((v, i) => v === store.selection![i]));
 
   const header = h(
@@ -78,7 +78,7 @@ function renderInspector(host: HTMLElement): void {
     return;
   }
 
-  const defs = attrsOf(el.localName);
+  const defs = attrsOfEl(el);
   const sections = CATEGORIES.map((cat) => {
     const rows = defs
       .filter((d) => d.category === cat || (cat === '表示' && d.name === 'image'))
@@ -207,7 +207,7 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
 /** 静的な値とコールバックを切り替えられる行。 */
 function row(el: Element, d: AttrDef): HTMLElement {
   const dyn = d.dynamic ? attributes.get(d.dynamic) : undefined;
-  const available = dyn && elements.get(el.localName)?.attrs.includes(dyn.name);
+  const available = dyn && defFor(el)?.attrs.includes(dyn.name);
   const useDynamic = available && el.hasAttribute(dyn.name);
   const editor = useDynamic ? callbackEditor(el, dyn.name) : valueEditor(el, d);
   const toggle = available
@@ -229,7 +229,7 @@ function row(el: Element, d: AttrDef): HTMLElement {
 function iconRow(el: Element): HTMLElement {
   const store = app.store!;
   const mode = el.hasAttribute('getImage') ? 'getImage' : el.hasAttribute('image') ? 'image' : el.hasAttribute('imageMso') ? 'imageMso' : '';
-  const canDynamic = elements.get(el.localName)?.attrs.includes('getImage');
+  const canDynamic = defFor(el)?.attrs.includes('getImage');
   const sel = h(
     'select',
     {

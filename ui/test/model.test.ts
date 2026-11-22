@@ -112,3 +112,22 @@ describe('コンテキストメニューの作成', () => {
     expect(el.children[0]!.localName).toBe('button');
   });
 });
+
+describe('Backstage の作成', () => {
+  it('Backstage は タブ・列・グループ・ボタンまで作る', () => {
+    const d = doc(`<customUI xmlns="${NS}" />`);
+    const el = createElement(d, 'backstage');
+    d.documentElement.append(el);
+    expect(serialize(d)).toContain('<firstColumn>');
+    expect(el.querySelector('topItems > button')).not.toBeNull();
+  });
+
+  it('同じ group でも Backstage の中なら Backstage の形で作る', () => {
+    const d = doc(`<customUI xmlns="${NS}"><backstage><tab id="t"><firstColumn/></tab></backstage></customUI>`);
+    const col = d.querySelector('firstColumn')!;
+    const g = createElement(d, 'group', col);
+    expect(g.querySelector('topItems')).not.toBeNull();
+    const ribbonGroup = createElement(d, 'group');
+    expect(ribbonGroup.children.length).toBe(0);
+  });
+});

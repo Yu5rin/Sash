@@ -2,8 +2,8 @@
 // dragover の間は dataTransfer の中身を読めないため、運んでいるものをここに持つ。
 
 import { app } from './app';
-import { createElement, elementAt, ensureContextMenus, ensureTabs, moveElement, pathOf, type Path } from './model';
-import { canContain } from './schema';
+import { createElement, elementAt, ensureBackstage, ensureContextMenus, ensureTabs, moveElement, pathOf, type Path } from './model';
+import { canContainEl } from './schema';
 
 export type DragPayload = { kind: 'new'; tag: string } | { kind: 'move'; path: Path };
 
@@ -33,7 +33,7 @@ export function draggedTag(doc: Document): string | null {
 /** parent の index 番目に置けるか。 */
 export function canDropInto(doc: Document, parent: Element): boolean {
   const tag = draggedTag(doc);
-  if (!tag || !canContain(parent.localName, tag)) return false;
+  if (!tag || !canContainEl(parent, tag)) return false;
   if (current?.kind === 'move') {
     const moving = elementAt(doc, current.path);
     if (!moving || moving === parent || moving.contains(parent)) return false;
@@ -45,17 +45,27 @@ export function canDropInto(doc: Document, parent: Element): boolean {
  * ドロップを確定する。parentPath が null ならタブ一覧（customUI > ribbon > tabs）、
  * 'contextMenus' ならコンテキストメニューの一覧を指す（なければ作る）。
  */
-export function drop(parentPath: Path | null | 'contextMenus', index: number, source: 'canvas' | 'tree'): void {
+export function drop(parentPath: Path | null | 'contextMenus' | 'backstage', index: number, source: 'canvas' | 'tree'): void {
   const store = app.store;
   const payload = current;
   current = null;
   if (!store || !payload) return;
   store.edit(source, (doc) => {
-    const parent = parentPath === null ? ensureTabs(doc) : parentPath === 'contextMenus' ? ensureContextMenus(doc) : elementAt(doc, parentPath);
+    const parent =
+      parentPath === null ? ensureTabs(doc)
+      : parentPath === 'contextMenus' ? ensureContextMenus(doc)
+      : parentPath === 'backstage' ? (payload.kind === 'new' && payload.tag === 'backstage' ? doc.documentElement : ensureBackstage(doc))
+      : elementAt(doc, parentPath);
     if (!parent) return undefined;
     if (payload.kind === 'new') {
-      const el = createElement(doc, payload.tag);
-      if (!canContain(parent.localName, el.localName)) return undefined;
+      if (!canContainEl(parent, payload.tag)) return undefined;
+      const el = createElement(doc, payload.tag, parent);
+      if (payload.tag === 'backstage') {
+        // customUI の中の順序（ribbon の後ろ、contextMenus の前）に合わせる
+        if (Array.from(parent.children).some((c) => c.localName === 'backstage')) return undefined;
+        parent.insertBefore(el, Array.from(parent.children).find((c) => c.localName === 'contextMenus') ?? null);
+        return pathOf(el);
+      }
       parent.insertBefore(el, parent.children[index] ?? null);
       return pathOf(el);
     }

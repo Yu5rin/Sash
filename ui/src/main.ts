@@ -16,7 +16,7 @@ import { mountLayout } from './layout';
 import { duplicateElement, elementAt, pathOf } from './model';
 import { enableMsoIcons } from './msoIcons';
 import type { ImageEntry } from './store';
-import { elements } from './schema';
+import { defFor, titleOf } from './schema';
 import { mountBottom, showBottomTab } from './views/bottom';
 import { mountCanvas } from './views/canvas';
 import { mountHome } from './views/home';
@@ -225,7 +225,7 @@ function openImageEditor(files?: FileList | File[], existing?: ImageEntry): void
   }
   if (!store.selection) return;
   const el = store.selectedElement;
-  if (!el || !elements.get(el.localName)?.attrs.includes('image')) {
+  if (!el || !defFor(el)?.attrs.includes('image')) {
     toast('この要素にはアイコンを設定できません');
     return;
   }
@@ -285,7 +285,7 @@ function buildCommands(): Command[] {
     { id: 'edit.delete', group: '編集', title: '選択中の要素を削除', shortcut: 'Delete', enabled: hasSel, run: deleteSelection },
     { id: 'edit.format', group: '編集', title: 'XMLを整形', shortcut: 'Shift+Alt+F', enabled: has, run: () => app.store?.format() },
     { id: 'edit.icon', group: '編集', title: '選択中のコントロールのアイコンを作る', keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
-    ...PALETTE_ITEMS.map((tag): Command => ({ id: `insert.${tag}`, group: '追加', title: `${elements.get(tag)?.title ?? tag}を追加`, keywords: tag, enabled: has, run: () => insertNearSelection(tag) })),
+    ...PALETTE_ITEMS.map((tag): Command => ({ id: `insert.${tag}`, group: '追加', title: `${titleOf(tag)}を追加`, keywords: tag, enabled: has, run: () => insertNearSelection(tag) })),
     ...builtinRecipes.map((r): Command => ({ id: `recipe.${r.id}`, group: 'レシピ', title: r.title, keywords: 'recipe template', enabled: has, run: () => run(applyRecipe(r)) })),
     { id: 'recipe.open', group: 'レシピ', title: 'レシピの一覧を開く', keywords: 'recipe', enabled: has, run: () => void openRecipes(toast) },
     { id: 'recipe.save', group: 'レシピ', title: '選択中のタブ・グループをレシピとして保存', keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(toast) },
@@ -361,7 +361,7 @@ $('btn-recipes').addEventListener('click', () => void openRecipes(toast));
 $('btn-command').addEventListener('click', () => openCommandPalette(buildCommands));
 $('btn-catalog').addEventListener('click', () => {
   const el = app.store?.selectedElement;
-  const canIcon = el && elements.get(el.localName)?.attrs.includes('imageMso');
+  const canIcon = el && defFor(el)?.attrs.includes('imageMso');
   openCatalog('imageMso', el?.getAttribute('imageMso') ?? '', (v) => {
     if (!canIcon || !app.store) {
       void navigator.clipboard.writeText(v).then(() => toast(`${v} をコピーしました`));

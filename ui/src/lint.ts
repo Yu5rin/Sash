@@ -1,7 +1,7 @@
 // 検証（Lint）。スキーマ定義に基づく構造チェックと、仕様書 §5.6 の独自ルールを行う。
 
 import { allElements, pathOf, type Path } from './model';
-import { attributes, elements, ID_PATTERN } from './schema';
+import { attributes, defFor, ID_PATTERN } from './schema';
 
 export type Severity = 'error' | 'warning' | 'info';
 
@@ -51,7 +51,7 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
   const builtInContainers = new Map<string, Element[]>();
 
   const visit = (el: Element, opaque: boolean) => {
-    const def = elements.get(el.localName);
+    const def = defFor(el);
     if (opaque) return;
     if (!def) {
       add('error', el, `不明な要素 <${el.localName}> です`);
@@ -61,7 +61,7 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
 
     const parent = el.parentElement;
     if (parent) {
-      const pdef = elements.get(parent.localName);
+      const pdef = defFor(parent);
       if (pdef && !pdef.opaque && !pdef.children.includes(el.localName)) {
         add('error', el, `<${parent.localName}> の中に <${el.localName}> は置けません`);
       }
