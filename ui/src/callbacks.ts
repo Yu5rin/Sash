@@ -3,6 +3,7 @@
 import { app } from './app';
 import { invoke, type VbaReadStatus } from './bridge';
 import { ask } from './dialogs/modal';
+import { t } from './i18n';
 import { allElements, elementAt, type Path } from './model';
 import {
   callbackName, generateStub, matchCallbacks, parseProcedures, renameDeclaration,
@@ -40,15 +41,15 @@ class VbaState {
   statusMessage(): string {
     switch (this.status) {
       case 'ok':
-        return 'VBAと照合しています';
+        return t('VBAと照合しています');
       case 'notOpen':
-        return 'ブックがExcelで開かれていないため、VBAと照合できません。Excelで開いてから再読み込みしてください';
+        return t('ブックがExcelで開かれていないため、VBAと照合できません。Excelで開いてから再読み込みしてください');
       case 'trustDenied':
-        return 'Excelの［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにすると、VBAと照合できます';
+        return t('Excelの［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにすると、VBAと照合できます');
       case 'locked':
-        return 'VBAプロジェクトがパスワードで保護されているため、照合できません';
+        return t('VBAプロジェクトがパスワードで保護されているため、照合できません');
       case 'noExcel':
-        return 'Excelが見つからないため、VBAとは照合できません。雛形のコピーは使えます';
+        return t('Excelが見つからないため、VBAとは照合できません。雛形のコピーは使えます');
       default:
         return '';
     }
@@ -82,15 +83,17 @@ export function defaultCallbackName(el: Element, attr: string): string {
 /** 未実装のコールバックの雛形を、まとめてモジュールに挿入する。onLoad があれば共通コードも入れる。 */
 export async function insertStubs(statuses: CallbackStatus[]): Promise<string> {
   const s = app.session;
-  if (!s || !vba.canWrite) throw new Error(vba.statusMessage() || 'VBAに書き込めません');
+  if (!s || !vba.canWrite) throw new Error(vba.statusMessage() || t('VBAに書き込めません'));
   const missing = statuses.filter((x) => x.state === 'missing' && x.uses.length > 0);
-  if (missing.length === 0) return '挿入するものはありません';
+  if (missing.length === 0) return t('挿入するものはありません');
   const needsCore = missing.some((x) => x.uses.some((u) => u.attr === 'onLoad')) && !vba.modules!.some((m) => m.name === RIBBON_HOLDER_MODULE_NAME);
   if (needsCore) await invoke('vba.insert', { path: s.path, module: RIBBON_HOLDER_MODULE_NAME, code: RIBBON_HOLDER_MODULE, documentModule: false });
   const code = missing.map((x) => generateStub({ ...x, name: x.name.replace(/^.*[.!]/, '') })).join('\r\n');
   await invoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
   await vba.refresh();
-  return `${missing.length} 件の雛形を ${app.settings.callbackModule} に追加しました${needsCore ? `（共通コード ${RIBBON_HOLDER_MODULE_NAME} も追加）` : ''}。Excelでブックを保存してください`;
+  return needsCore
+    ? t('{n} 件の雛形を {module} に追加しました（共通コード {core} も追加）。Excelでブックを保存してください', { n: missing.length, module: app.settings.callbackModule, core: RIBBON_HOLDER_MODULE_NAME })
+    : t('{n} 件の雛形を {module} に追加しました。Excelでブックを保存してください', { n: missing.length, module: app.settings.callbackModule });
 }
 
 /**
@@ -115,10 +118,10 @@ export async function renameCallback(path: Path, attr: string, oldName: string, 
     apply(false);
     return;
   }
-  const r = await ask('VBAのSub名も変えますか？', `VBAの ${proc.module} に ${proc.name} があります。宣言行の名前も ${newName} に変えますか？（Subの中身や、ほかの場所からの呼び出しは書き換えません）`, [
-    { value: 'both', label: 'VBAも変える', primary: true },
-    { value: 'xml', label: 'XMLだけ変える' },
-    { value: 'cancel', label: 'キャンセル' },
+  const r = await ask(t('VBAのSub名も変えますか？'), t('VBAの {module} に {name} があります。宣言行の名前も {newName} に変えますか？（Subの中身や、ほかの場所からの呼び出しは書き換えません）', { module: proc.module, name: proc.name, newName }), [
+    { value: 'both', label: t('VBAも変える'), primary: true },
+    { value: 'xml', label: t('XMLだけ変える') },
+    { value: 'cancel', label: t('キャンセル') },
   ]);
   if (r === 'cancel' || r === null) return;
   if (r === 'both') {
@@ -142,7 +145,7 @@ export async function setupRibbonHolder(): Promise<string> {
   }
   if (!vba.canWrite) {
     await navigator.clipboard.writeText(RIBBON_HOLDER_MODULE);
-    return 'customUI に onLoad を設定し、共通コードをクリップボードにコピーしました（Excelで開いていればモジュールに直接挿入できます）';
+    return t('customUI に onLoad を設定し、共通コードをクリップボードにコピーしました（Excelで開いていればモジュールに直接挿入できます）');
   }
   return insertStubs(vba.statuses());
 }
@@ -154,7 +157,7 @@ app.problemProviders.push(() => {
     st.state === 'missing' || st.state === 'mismatch'
       ? st.uses.map((u) => ({
           severity: 'warning' as const,
-          message: st.state === 'missing' ? `コールバック ${st.name} がVBAにありません` : `コールバック ${st.name} の引数が合いません：${st.reason}`,
+          message: st.state === 'missing' ? t('コールバック {name} がVBAにありません', { name: st.name }) : t('コールバック {name} の引数が合いません：{reason}', { name: st.name, reason: st.reason ?? '' }),
           path: u.path,
           attr: u.attr,
         }))

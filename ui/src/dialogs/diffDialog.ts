@@ -3,6 +3,7 @@
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { app } from '../app';
 import { h } from '../dom';
+import { t } from '../i18n';
 import { openModal } from './modal';
 
 export function openDiff(): void {
@@ -24,15 +25,15 @@ export function openDiff(): void {
   const show = () => {
     const { added, removed } = current.imageChanges();
     const same = current.savedXml === current.text && added.length === 0 && removed.length === 0;
-    summary.replaceChildren(h('span', null, same ? '保存済みの状態から変更はありません' : '赤：保存済みから消えた行　緑：追加・変更した行'));
-    if (added.length) summary.append(h('span', { class: 'tag' }, `追加する画像：${added.join('、')}`));
-    if (removed.length) summary.append(h('span', { class: 'tag removed' }, `削除する画像：${removed.join('、')}`));
+    summary.replaceChildren(h('span', null, same ? t('保存済みの状態から変更はありません') : t('赤：保存済みから消えた行　緑：追加・変更した行')));
+    if (added.length) summary.append(h('span', { class: 'tag' }, t('追加する画像：{list}', { list: added.join(t('、')) })));
+    if (removed.length) summary.append(h('span', { class: 'tag removed' }, t('削除する画像：{list}', { list: removed.join(t('、')) })));
     for (const m of models) m.dispose();
     models = [monaco.editor.createModel(current.savedXml, 'xml'), monaco.editor.createModel(current.text, 'xml')];
     editor?.setModel({ original: models[0]!, modified: models[1]! });
   };
 
-  const modal = openModal('保存済みとの差分', h('div', { class: 'diff' }, h('div', { class: 'diff-bar' }, summary, select), host), {
+  const modal = openModal(t('保存済みとの差分'), h('div', { class: 'diff' }, h('div', { class: 'diff-bar' }, summary, select), host), {
     wide: true,
     onClose: () => {
       editor?.dispose();

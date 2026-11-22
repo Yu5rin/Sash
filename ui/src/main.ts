@@ -12,6 +12,7 @@ import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
 import { builtinRecipes } from './recipes';
 import { ask, openModal } from './dialogs/modal';
 import { $, h, svg } from './dom';
+import { lang, storeLang, t, translateDocument, type Lang } from './i18n';
 import { applyLibraryIcon, openIconDialog } from './icon/iconDialog';
 import { openLibrary } from './dialogs/libraryDialog';
 import { uiIcons } from './icons';
@@ -42,10 +43,12 @@ function toast(message: string, kind: 'info' | 'error' = 'info'): void {
 
 // ---- ツールバー ----
 
+translateDocument();
+for (const el of Array.from(document.querySelectorAll<HTMLElement>('[aria-label]'))) el.setAttribute('aria-label', t(el.getAttribute('aria-label')!));
 const iconText = (id: string, icon: string, text: string) => $(id).replaceChildren(svg(icon), h('span', null, text));
-iconText('btn-open', uiIcons.open, '開く');
-iconText('btn-save', uiIcons.save, '保存');
-iconText('btn-apply', uiIcons.apply, '反映 F5');
+iconText('btn-open', uiIcons.open, t('開く'));
+iconText('btn-save', uiIcons.save, t('保存'));
+iconText('btn-apply', uiIcons.apply, t('反映 F5'));
 $('btn-undo').replaceChildren(svg(uiIcons.undo));
 $('btn-redo').replaceChildren(svg(uiIcons.redo));
 $('btn-format').replaceChildren(svg(uiIcons.format));
@@ -59,11 +62,11 @@ function updateToolbar(): void {
   const s = app.session;
   const store = app.store;
   const dirty = app.dirty;
-  $('file-name').textContent = s ? `${s.path}${dirty ? '（未保存）' : ''}` : '';
+  $('file-name').textContent = s ? `${s.path}${dirty ? t('（未保存）') : ''}` : '';
   document.title = s ? `${dirty ? '* ' : ''}${s.path.split(/[\\/]/).pop()} - Sash` : 'Sash';
   $<HTMLButtonElement>('btn-save').disabled = !s;
   $<HTMLButtonElement>('btn-apply').disabled = !s;
-  $<HTMLButtonElement>('btn-apply').title = app.info.excelInstalled ? 'Excelへ反映 (F5)' : 'Excelが見つからないため、ファイルへの書き込みだけを行います (F5)';
+  $<HTMLButtonElement>('btn-apply').title = app.info.excelInstalled ? t('Excelへ反映 (F5)') : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)');
   $<HTMLButtonElement>('btn-undo').disabled = !store?.canUndo;
   $<HTMLButtonElement>('btn-redo').disabled = !store?.canRedo;
   $<HTMLButtonElement>('btn-format').disabled = !store || store.syncError !== null;
@@ -75,7 +78,7 @@ function updateToolbar(): void {
   sw.hidden = !s || s.parts.size < 2;
   if (s && s.parts.size >= 2) {
     sw.replaceChildren(
-      ...[...s.parts.keys()].map((v) => h('option', { value: v, selected: s.active.version === v }, v === 'office2010' ? 'customUI14.xml（2010以降）' : 'customUI.xml（2007）')),
+      ...[...s.parts.keys()].map((v) => h('option', { value: v, selected: s.active.version === v }, v === 'office2010' ? t('customUI14.xml（2010以降）') : t('customUI.xml（2007）'))),
     );
   }
 }
@@ -84,10 +87,10 @@ function updateToolbar(): void {
 
 async function confirmDiscard(): Promise<boolean> {
   if (!app.dirty) return true;
-  const r = await ask('未保存の変更があります', '変更を保存しますか？', [
-    { value: 'save', label: '保存する', primary: true },
-    { value: 'discard', label: '保存しない' },
-    { value: 'cancel', label: 'キャンセル' },
+  const r = await ask(t('未保存の変更があります'), t('変更を保存しますか？'), [
+    { value: 'save', label: t('保存する'), primary: true },
+    { value: 'discard', label: t('保存しない') },
+    { value: 'cancel', label: t('キャンセル') },
   ]);
   if (r === 'save') return save();
   return r === 'discard';
@@ -100,8 +103,8 @@ async function open(path?: string): Promise<void> {
     if (!doc) return;
     app.open(doc);
     const s = app.session!;
-    if (s.created) toast('このブックにはリボン定義がないので、customUI14 を新しく作りました');
-    else if (s.parts.size >= 2) toast('customUI と customUI14 の両方があります。2010以降のExcelは customUI14 を優先します');
+    if (s.created) toast(t('このブックにはリボン定義がないので、customUI14 を新しく作りました'));
+    else if (s.parts.size >= 2) toast(t('customUI と customUI14 の両方があります。2010以降のExcelは customUI14 を優先します'));
   } catch (e) {
     toast((e as Error).message, 'error');
   }
@@ -120,13 +123,15 @@ function partsToSave(): PartToSave[] {
 }
 
 /** 構文エラーや Lint のエラーがあるときは、本当に書き込むかを確認する。 */
-async function confirmErrors(action: string): Promise<boolean> {
+async function confirmErrors(action: '保存' | '反映'): Promise<boolean> {
   const s = app.session!;
   const broken = [...s.parts.values()].some((p) => p.syncError);
   const errors = app.problems.filter((p) => p.severity === 'error').length;
   if (!broken && errors === 0) return true;
-  const msg = broken ? 'XMLの構文が壊れています。このまま書き込むと、Excelでリボンが表示されません。' : `エラーが ${errors} 件あります。このまま書き込むと、Excelでリボンが表示されない可能性があります。`;
-  return (await ask(`${action}の前に確認`, msg, [{ value: 'go', label: `${action}する` }, { value: 'cancel', label: 'キャンセル', primary: true }])) === 'go';
+  const msg = broken ? t('XMLの構文が壊れています。このまま書き込むと、Excelでリボンが表示されません。') : t('エラーが {n} 件あります。このまま書き込むと、Excelでリボンが表示されない可能性があります。', { n: errors });
+  const title = action === '保存' ? t('保存の前に確認') : t('反映の前に確認');
+  const go = action === '保存' ? t('保存する') : t('反映する');
+  return (await ask(title, msg, [{ value: 'go', label: go }, { value: 'cancel', label: t('キャンセル'), primary: true }])) === 'go';
 }
 
 async function save(): Promise<boolean> {
@@ -135,17 +140,17 @@ async function save(): Promise<boolean> {
   if (!(await confirmErrors('保存'))) return false;
   const parts = partsToSave();
   if (parts.length === 0) {
-    toast('変更はありません');
+    toast(t('変更はありません'));
     return true;
   }
   try {
     const res = await invoke('file.save', { path: s.path, parts });
     for (const p of s.parts.values()) p.markSaved();
     s.created = false;
-    toast(`保存しました（バックアップ：${res.backup}）`);
+    toast(t('保存しました（バックアップ：{backup}）', { backup: res.backup }));
     return true;
   } catch (e) {
-    toast(`保存できませんでした：${(e as Error).message}`, 'error');
+    toast(t('保存できませんでした：{message}', { message: (e as Error).message }), 'error');
     return false;
   }
 }
@@ -156,27 +161,27 @@ async function applyToExcel(): Promise<void> {
   if (!(await confirmErrors('反映'))) return;
   if (app.info.excelInstalled && !app.settings.ribbonErrorsHintShown) {
     await ask(
-      'リボンのエラーを表示する設定',
-      'リボンのXMLに誤りがあると、Excelは何も言わずにリボンを表示しません。原因を確認できるよう、Excelの［ファイル］→［オプション］→［詳細設定］→［全般］にある「アドインのユーザー インターフェイス エラーを表示する」をオンにすることをおすすめします（Sashはこの設定を変更しません）。',
-      [{ value: 'ok', label: 'わかりました', primary: true }],
+      t('リボンのエラーを表示する設定'),
+      t('リボンのXMLに誤りがあると、Excelは何も言わずにリボンを表示しません。原因を確認できるよう、Excelの［ファイル］→［オプション］→［詳細設定］→［全般］にある「アドインのユーザー インターフェイス エラーを表示する」をオンにすることをおすすめします（Sashはこの設定を変更しません）。'),
+      [{ value: 'ok', label: t('わかりました'), primary: true }],
     );
     app.settings = await invoke('settings.set', { ribbonErrorsHintShown: true });
   }
 
   const run = async (saveIfDirty: boolean) => {
     const parts = partsToSave();
-    toast('反映しています…');
+    toast(t('反映しています…'));
     return invoke('excel.apply', { path: s.path, parts, saveIfDirty });
   };
   try {
     let res = await run(false);
     if (res.status === 'needsSave') {
-      const r = await ask('Excel側に未保存の変更があります', `${s.path.split(/[\\/]/).pop()} はExcelで開かれていて、未保存の変更があります。Excelで保存してから反映しますか？`, [
-        { value: 'go', label: '保存して反映', primary: true },
-        { value: 'cancel', label: '中止' },
+      const r = await ask(t('Excel側に未保存の変更があります'), t('{file} はExcelで開かれていて、未保存の変更があります。Excelで保存してから反映しますか？', { file: s.path.split(/[\\/]/).pop()! }), [
+        { value: 'go', label: t('保存して反映'), primary: true },
+        { value: 'cancel', label: t('中止') },
       ]);
       if (r !== 'go') {
-        toast('反映を中止しました');
+        toast(t('反映を中止しました'));
         return;
       }
       res = await run(true);
@@ -187,7 +192,7 @@ async function applyToExcel(): Promise<void> {
     }
     toast(res.message, res.status === 'blocked' ? 'error' : 'info');
   } catch (e) {
-    toast(`反映できませんでした：${(e as Error).message}`, 'error');
+    toast(t('反映できませんでした：{message}', { message: (e as Error).message }), 'error');
   }
 }
 
@@ -231,10 +236,50 @@ function openImageEditor(files?: FileList | File[], existing?: ImageEntry): void
   if (!store.selection) return;
   const el = store.selectedElement;
   if (!el || !defFor(el)?.attrs.includes('image')) {
-    toast('この要素にはアイコンを設定できません');
+    toast(t('この要素にはアイコンを設定できません'));
     return;
   }
   openIconDialog(store.selection, files, existing);
+}
+
+// ---- 言語 ----
+
+const REOPEN_KEY = 'sash.reopen';
+const LANG_SYNC_KEY = 'sash.langSynced';
+
+function sessionGet(key: string): string | null {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function sessionSet(key: string, value: string | null): void {
+  try {
+    if (value === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, value);
+  } catch {
+    // 保存できない環境では何もしない
+  }
+}
+
+/** 言語を切り替えて読み込み直す。未保存の変更があるときは切り替えない（false を返す）。 */
+async function changeLanguage(next: Lang): Promise<boolean> {
+  if (next === lang) return true;
+  if (app.dirty) {
+    toast(t('言語を切り替える前に、変更を保存してください'), 'error');
+    return false;
+  }
+  storeLang(next);
+  try {
+    app.settings = await invoke('settings.set', { language: next });
+  } catch (e) {
+    toast((e as Error).message, 'error');
+  }
+  if (app.session) sessionSet(REOPEN_KEY, app.session.path);
+  location.reload();
+  return true;
 }
 
 function openSettings(): void {
@@ -247,28 +292,31 @@ function openSettings(): void {
   const content = h(
     'div',
     { class: 'settings' },
-    h('label', null, 'テーマ', h('select', { onchange: (e: Event) => void update({ theme: (e.target as HTMLSelectElement).value as Settings['theme'] }) },
-      h('option', { value: 'system', selected: s.theme === 'system' }, 'システムに合わせる'),
-      h('option', { value: 'light', selected: s.theme === 'light' }, 'ライト'),
-      h('option', { value: 'dark', selected: s.theme === 'dark' }, 'ダーク'))),
-    h('label', null, 'レイアウト', h('select', { onchange: (e: Event) => void update({ xmlOnTop: (e.target as HTMLSelectElement).value === 'xml' }) },
-      h('option', { value: 'canvas', selected: !s.xmlOnTop }, 'キャンバスを上に'),
-      h('option', { value: 'xml', selected: s.xmlOnTop }, 'XMLエディタを上に'))),
-    h('label', null, 'アイコンの出力サイズ', h('select', { onchange: (e: Event) => void update({ iconSize: Number((e.target as HTMLSelectElement).value) as 32 | 64 }) },
+    h('label', null, t('テーマ'), h('select', { onchange: (e: Event) => void update({ theme: (e.target as HTMLSelectElement).value as Settings['theme'] }) },
+      h('option', { value: 'system', selected: s.theme === 'system' }, t('システムに合わせる')),
+      h('option', { value: 'light', selected: s.theme === 'light' }, t('ライト')),
+      h('option', { value: 'dark', selected: s.theme === 'dark' }, t('ダーク')))),
+    h('label', null, t('レイアウト'), h('select', { onchange: (e: Event) => void update({ xmlOnTop: (e.target as HTMLSelectElement).value === 'xml' }) },
+      h('option', { value: 'canvas', selected: !s.xmlOnTop }, t('キャンバスを上に')),
+      h('option', { value: 'xml', selected: s.xmlOnTop }, t('XMLエディタを上に')))),
+    h('label', null, t('言語'), h('select', { onchange: (e: Event) => { const sel = e.target as HTMLSelectElement; void changeLanguage(sel.value as Lang).then((ok) => { if (!ok) sel.value = lang; }); } },
+      h('option', { value: 'ja', selected: lang === 'ja' }, '日本語'),
+      h('option', { value: 'en', selected: lang === 'en' }, 'English'))),
+    h('label', null, t('アイコンの出力サイズ'), h('select', { onchange: (e: Event) => void update({ iconSize: Number((e.target as HTMLSelectElement).value) as 32 | 64 }) },
       h('option', { value: '32', selected: s.iconSize === 32 }, '32 × 32'),
-      h('option', { value: '64', selected: s.iconSize === 64 }, '64 × 64（高DPI）'))),
-    h('h3', null, 'アイコンライブラリ'),
-    h('label', null, '保存先', h('div', { class: 'insp-inline' }, h('span', { class: 'muted path-text', title: s.iconLibraryPath }, s.iconLibraryPath), h('button', { type: 'button', class: 'small', onclick: async () => { const p = await invoke('library.chooseFolder'); if (p) { app.settings = await invoke('settings.get'); modal.close(); openSettings(); } } }, '変更'))),
-    h('h3', null, 'コールバック'),
-    h('label', null, '名前の規則', h('input', { type: 'text', value: s.callbackPattern, spellcheck: false, title: '{id} と {attr} が置き換わります', onchange: (e: Event) => void update({ callbackPattern: (e.target as HTMLInputElement).value.trim() }) })),
-    h('label', null, 'Subの共有', h('select', { onchange: (e: Event) => void update({ callbackShared: (e.target as HTMLSelectElement).value === 'shared' }) },
-      h('option', { value: 'each', selected: !s.callbackShared }, 'コントロールごとに分ける'),
-      h('option', { value: 'shared', selected: s.callbackShared }, '1つのSubを共有し control.Id で振り分ける'))),
-    h('label', null, '共有するときの名前', h('input', { type: 'text', value: s.callbackSharedPattern, spellcheck: false, title: '{attr} が置き換わります', onchange: (e: Event) => void update({ callbackSharedPattern: (e.target as HTMLInputElement).value.trim() }) })),
-    h('label', null, '挿入先のモジュール', h('input', { type: 'text', value: s.callbackModule, spellcheck: false, onchange: (e: Event) => void update({ callbackModule: (e.target as HTMLInputElement).value.trim() }) })),
-    h('p', { class: 'muted' }, `Sash ${app.info.version} ・ Excel ${app.info.excelInstalled ? 'あり' : 'なし（ファイル編集のみ）'}`),
+      h('option', { value: '64', selected: s.iconSize === 64 }, t('64 × 64（高DPI）')))),
+    h('h3', null, t('アイコンライブラリ')),
+    h('label', null, t('保存先'), h('div', { class: 'insp-inline' }, h('span', { class: 'muted path-text', title: s.iconLibraryPath }, s.iconLibraryPath), h('button', { type: 'button', class: 'small', onclick: async () => { const p = await invoke('library.chooseFolder'); if (p) { app.settings = await invoke('settings.get'); modal.close(); openSettings(); } } }, t('変更')))),
+    h('h3', null, t('コールバック')),
+    h('label', null, t('名前の規則'), h('input', { type: 'text', value: s.callbackPattern, spellcheck: false, title: t('{id} と {attr} が置き換わります'), onchange: (e: Event) => void update({ callbackPattern: (e.target as HTMLInputElement).value.trim() }) })),
+    h('label', null, t('Subの共有'), h('select', { onchange: (e: Event) => void update({ callbackShared: (e.target as HTMLSelectElement).value === 'shared' }) },
+      h('option', { value: 'each', selected: !s.callbackShared }, t('コントロールごとに分ける')),
+      h('option', { value: 'shared', selected: s.callbackShared }, t('1つのSubを共有し control.Id で振り分ける')))),
+    h('label', null, t('共有するときの名前'), h('input', { type: 'text', value: s.callbackSharedPattern, spellcheck: false, title: t('{attr} が置き換わります'), onchange: (e: Event) => void update({ callbackSharedPattern: (e.target as HTMLInputElement).value.trim() }) })),
+    h('label', null, t('挿入先のモジュール'), h('input', { type: 'text', value: s.callbackModule, spellcheck: false, onchange: (e: Event) => void update({ callbackModule: (e.target as HTMLInputElement).value.trim() }) })),
+    h('p', { class: 'muted' }, t('Sash {version} ・ Excel {excel}', { version: app.info.version, excel: app.info.excelInstalled ? t('あり') : t('なし（ファイル編集のみ）') })),
   );
-  const modal = openModal('設定', content);
+  const modal = openModal(t('設定'), content);
 }
 
 // ---- .sash.json の書き出し・読み込み ----
@@ -278,8 +326,8 @@ async function exportSashFile(): Promise<void> {
   if (!s) return;
   const base = s.path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '');
   try {
-    const saved = await invoke('file.exportText', { defaultName: `${base}.sash.json`, filter: 'Sash のリボン定義 (*.sash.json)|*.sash.json', content: exportSash([...s.parts.values()], s.path.split(/[\\/]/).pop()) });
-    if (saved) toast(`リボン定義を書き出しました：${saved}`);
+    const saved = await invoke('file.exportText', { defaultName: `${base}.sash.json`, filter: `${t('Sash のリボン定義 (*.sash.json)')}|*.sash.json`, content: exportSash([...s.parts.values()], s.path.split(/[\\/]/).pop()) });
+    if (saved) toast(t('リボン定義を書き出しました：{path}', { path: saved }));
   } catch (e) {
     toast((e as Error).message, 'error');
   }
@@ -300,13 +348,13 @@ async function applySash(text: string): Promise<void> {
   const data = parseSash(text);
   const target = s.active;
   const part = data.parts.find((p) => p.version === target.version) ?? data.parts[0]!;
-  const r = await ask('リボン定義を読み込む', `編集中の ${target.version === 'office2010' ? 'customUI14' : 'customUI'} を、${data.source ?? 'ファイル'} のリボン定義（画像 ${part.images.length} 個を含む）で置き換えます。元に戻す（Ctrl+Z）で取り消せます。`, [
-    { value: 'ok', label: '置き換える', primary: true },
-    { value: 'cancel', label: 'キャンセル' },
+  const r = await ask(t('リボン定義を読み込む'), t('編集中の {part} を、{source} のリボン定義（画像 {n} 個を含む）で置き換えます。元に戻す（Ctrl+Z）で取り消せます。', { part: target.version === 'office2010' ? 'customUI14' : 'customUI', source: data.source ?? t('ファイル'), n: part.images.length }), [
+    { value: 'ok', label: t('置き換える'), primary: true },
+    { value: 'cancel', label: t('キャンセル') },
   ]);
   if (r !== 'ok') return;
   target.replaceAll(partXml(part), part.images.map((i) => ({ id: i.id, dataUrl: `data:${i.contentType};base64,${i.base64}`, isNew: true })));
-  toast(part.version !== target.version ? '形式（2007 / 2010以降）が違うリボン定義を読み込みました。名前空間を確認してください' : 'リボン定義を読み込みました');
+  toast(part.version !== target.version ? t('形式（2007 / 2010以降）が違うリボン定義を読み込みました。名前空間を確認してください') : t('リボン定義を読み込みました'));
 }
 
 // ---- コマンドパレット ----
@@ -321,39 +369,40 @@ function buildCommands(): Command[] {
   const run = (p: Promise<string>) => void p.then((m) => m && toast(m)).catch((e: Error) => toast(e.message, 'error'));
   const setTheme = (theme: Settings['theme']) => void invoke('settings.set', { theme }).then((st) => { app.settings = st; applyTheme(); });
   return [
-    { id: 'file.open', group: 'ファイル', title: 'ファイルを開く', shortcut: 'Ctrl+O', run: () => void open() },
-    { id: 'file.save', group: 'ファイル', title: '保存', shortcut: 'Ctrl+S', enabled: has, run: () => void save() },
-    { id: 'file.diff', group: 'ファイル', title: '保存済みとの差分を表示', keywords: 'diff compare', enabled: has, run: openDiff },
-    { id: 'file.export', group: 'ファイル', title: 'リボン定義を書き出す（.sash.json）', keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
-    { id: 'file.import', group: 'ファイル', title: 'リボン定義を読み込む（.sash.json）', keywords: 'import json', enabled: has, run: importSashFile },
-    { id: 'file.apply', group: 'ファイル', title: 'Excelへ反映', shortcut: 'F5', keywords: 'apply reload', enabled: has, run: () => void applyToExcel() },
-    { id: 'edit.undo', group: '編集', title: '元に戻す', shortcut: 'Ctrl+Z', enabled: () => app.store?.canUndo === true, run: undo },
-    { id: 'edit.redo', group: '編集', title: 'やり直し', shortcut: 'Ctrl+Y', enabled: () => app.store?.canRedo === true, run: redo },
-    { id: 'edit.duplicate', group: '編集', title: '選択中の要素を複製', shortcut: 'Ctrl+D', enabled: hasSel, run: duplicateSelection },
-    { id: 'edit.delete', group: '編集', title: '選択中の要素を削除', shortcut: 'Delete', enabled: hasSel, run: deleteSelection },
-    { id: 'edit.format', group: '編集', title: 'XMLを整形', shortcut: 'Shift+Alt+F', enabled: has, run: () => app.store?.format() },
-    { id: 'edit.icon', group: '編集', title: '選択中のコントロールのアイコンを作る', keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
-    ...PALETTE_ITEMS.map((tag): Command => ({ id: `insert.${tag}`, group: '追加', title: `${titleOf(tag)}を追加`, keywords: tag, enabled: has, run: () => insertNearSelection(tag) })),
-    ...builtinRecipes.map((r): Command => ({ id: `recipe.${r.id}`, group: 'レシピ', title: r.title, keywords: 'recipe template', enabled: has, run: () => run(applyRecipe(r)) })),
-    { id: 'recipe.open', group: 'レシピ', title: 'レシピの一覧を開く', keywords: 'recipe', enabled: has, run: () => void openRecipes(toast) },
-    { id: 'recipe.save', group: 'レシピ', title: '選択中のタブ・グループをレシピとして保存', keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(toast) },
-    { id: 'vba.refresh', group: 'VBA', title: 'VBAを再読み込みして照合', keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
-    { id: 'vba.insert', group: 'VBA', title: '未実装のコールバックをモジュールに挿入', keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => run(insertStubs(vba.statuses())) },
-    { id: 'vba.holder', group: 'VBA', title: 'onLoad と Invalidate の雛形を入れる', keywords: 'ribbon invalidate onload', enabled: has, run: () => run(setupRibbonHolder()) },
-    { id: 'view.library', group: '表示', title: 'アイコンライブラリを開く', keywords: 'icon library', run: () => void openLibrary(undefined, toast) },
-    { id: 'view.catalog', group: '表示', title: 'imageMso カタログを開く', keywords: 'icon catalog', enabled: has, run: openImageMsoCatalog },
-    { id: 'view.idmso', group: '表示', title: 'idMso カタログを開く（IDをコピー）', keywords: 'idmso catalog', enabled: has, run: () => openCatalog('idMso', '', (v) => void navigator.clipboard.writeText(v).then(() => toast(`${v} をコピーしました`))) },
-    { id: 'view.problems', group: '表示', title: '問題の一覧を表示', enabled: has, run: () => showBottomTab('problems') },
-    { id: 'view.callbacks', group: '表示', title: 'コールバックの一覧を表示', enabled: has, run: () => showBottomTab('callbacks') },
-    { id: 'view.images', group: '表示', title: 'アイコンの一覧を表示', enabled: has, run: () => showBottomTab('images') },
-    { id: 'view.canvas', group: '表示', title: 'キャンバスに移動', shortcut: 'Ctrl+1', run: () => $('canvas').focus() },
-    { id: 'view.tree', group: '表示', title: 'ツリーに移動', shortcut: 'Ctrl+2', run: () => $('tree').focus() },
-    { id: 'view.xml', group: '表示', title: 'XMLエディタに移動', shortcut: 'Ctrl+3', run: () => xmlHandle.focus() },
-    { id: 'view.theme.light', group: '表示', title: 'ライトテーマにする', keywords: 'theme light', run: () => setTheme('light') },
-    { id: 'view.theme.dark', group: '表示', title: 'ダークテーマにする', keywords: 'theme dark', run: () => setTheme('dark') },
-    { id: 'view.theme.system', group: '表示', title: 'テーマをシステムに合わせる', keywords: 'theme system', run: () => setTheme('system') },
-    { id: 'view.layout', group: '表示', title: 'キャンバスとXMLの上下を入れ替える', keywords: 'layout swap', run: () => void invoke('settings.set', { xmlOnTop: !app.settings.xmlOnTop }).then((st) => { app.settings = st; applyTheme(); }) },
-    { id: 'app.settings', group: '設定', title: '設定を開く', run: openSettings },
+    { id: 'file.open', group: t('ファイル'), title: t('ファイルを開く'), shortcut: 'Ctrl+O', run: () => void open() },
+    { id: 'file.save', group: t('ファイル'), title: t('保存'), shortcut: 'Ctrl+S', enabled: has, run: () => void save() },
+    { id: 'file.diff', group: t('ファイル'), title: t('保存済みとの差分を表示'), keywords: 'diff compare', enabled: has, run: openDiff },
+    { id: 'file.export', group: t('ファイル'), title: t('リボン定義を書き出す（.sash.json）'), keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
+    { id: 'file.import', group: t('ファイル'), title: t('リボン定義を読み込む（.sash.json）'), keywords: 'import json', enabled: has, run: importSashFile },
+    { id: 'file.apply', group: t('ファイル'), title: t('Excelへ反映'), shortcut: 'F5', keywords: 'apply reload', enabled: has, run: () => void applyToExcel() },
+    { id: 'edit.undo', group: t('編集'), title: t('元に戻す'), shortcut: 'Ctrl+Z', enabled: () => app.store?.canUndo === true, run: undo },
+    { id: 'edit.redo', group: t('編集'), title: t('やり直し'), shortcut: 'Ctrl+Y', enabled: () => app.store?.canRedo === true, run: redo },
+    { id: 'edit.duplicate', group: t('編集'), title: t('選択中の要素を複製'), shortcut: 'Ctrl+D', enabled: hasSel, run: duplicateSelection },
+    { id: 'edit.delete', group: t('編集'), title: t('選択中の要素を削除'), shortcut: 'Delete', enabled: hasSel, run: deleteSelection },
+    { id: 'edit.format', group: t('編集'), title: t('XMLを整形'), shortcut: 'Shift+Alt+F', enabled: has, run: () => app.store?.format() },
+    { id: 'edit.icon', group: t('編集'), title: t('選択中のコントロールのアイコンを作る'), keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
+    ...PALETTE_ITEMS.map((tag): Command => ({ id: `insert.${tag}`, group: t('追加'), title: t('{name}を追加', { name: titleOf(tag) }), keywords: tag, enabled: has, run: () => insertNearSelection(tag) })),
+    ...builtinRecipes.map((r): Command => ({ id: `recipe.${r.id}`, group: t('レシピ'), title: t(r.title), keywords: 'recipe template', enabled: has, run: () => run(applyRecipe(r)) })),
+    { id: 'recipe.open', group: t('レシピ'), title: t('レシピの一覧を開く'), keywords: 'recipe', enabled: has, run: () => void openRecipes(toast) },
+    { id: 'recipe.save', group: t('レシピ'), title: t('選択中のタブ・グループをレシピとして保存'), keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(toast) },
+    { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
+    { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => run(insertStubs(vba.statuses())) },
+    { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => run(setupRibbonHolder()) },
+    { id: 'view.library', group: t('表示'), title: t('アイコンライブラリを開く'), keywords: 'icon library', run: () => void openLibrary(undefined, toast) },
+    { id: 'view.catalog', group: t('表示'), title: t('imageMso カタログを開く'), keywords: 'icon catalog', enabled: has, run: openImageMsoCatalog },
+    { id: 'view.idmso', group: t('表示'), title: t('idMso カタログを開く（IDをコピー）'), keywords: 'idmso catalog', enabled: has, run: () => openCatalog('idMso', '', (v) => void navigator.clipboard.writeText(v).then(() => toast(t('{value} をコピーしました', { value: v })))) },
+    { id: 'view.problems', group: t('表示'), title: t('問題の一覧を表示'), enabled: has, run: () => showBottomTab('problems') },
+    { id: 'view.callbacks', group: t('表示'), title: t('コールバックの一覧を表示'), enabled: has, run: () => showBottomTab('callbacks') },
+    { id: 'view.images', group: t('表示'), title: t('アイコンの一覧を表示'), enabled: has, run: () => showBottomTab('images') },
+    { id: 'view.canvas', group: t('表示'), title: t('キャンバスに移動'), shortcut: 'Ctrl+1', run: () => $('canvas').focus() },
+    { id: 'view.tree', group: t('表示'), title: t('ツリーに移動'), shortcut: 'Ctrl+2', run: () => $('tree').focus() },
+    { id: 'view.xml', group: t('表示'), title: t('XMLエディタに移動'), shortcut: 'Ctrl+3', run: () => xmlHandle.focus() },
+    { id: 'view.theme.light', group: t('表示'), title: t('ライトテーマにする'), keywords: 'theme light', run: () => setTheme('light') },
+    { id: 'view.theme.dark', group: t('表示'), title: t('ダークテーマにする'), keywords: 'theme dark', run: () => setTheme('dark') },
+    { id: 'view.theme.system', group: t('表示'), title: t('テーマをシステムに合わせる'), keywords: 'theme system', run: () => setTheme('system') },
+    { id: 'view.layout', group: t('表示'), title: t('キャンバスとXMLの上下を入れ替える'), keywords: 'layout swap', run: () => void invoke('settings.set', { xmlOnTop: !app.settings.xmlOnTop }).then((st) => { app.settings = st; applyTheme(); }) },
+    { id: 'app.settings', group: t('設定'), title: t('設定を開く'), run: openSettings },
+    { id: 'app.language', group: t('設定'), title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
   ];
 }
 
@@ -418,7 +467,7 @@ $('btn-catalog').addEventListener('click', () => {
   const canIcon = el && defFor(el)?.attrs.includes('imageMso');
   openCatalog('imageMso', el?.getAttribute('imageMso') ?? '', (v) => {
     if (!canIcon || !app.store) {
-      void navigator.clipboard.writeText(v).then(() => toast(`${v} をコピーしました`));
+      void navigator.clipboard.writeText(v).then(() => toast(t('{value} をコピーしました', { value: v })));
       return;
     }
     app.store.edit('inspector', (doc) => {
@@ -486,7 +535,7 @@ window.addEventListener('drop', (e) => {
   if (!files?.length) return;
   e.preventDefault();
   if (!/\.(xlsm|xlam)$/i.test(files[0]!.name)) {
-    toast('.xlsm か .xlam のファイルをドロップしてください', 'error');
+    toast(t('.xlsm か .xlam のファイルをドロップしてください'), 'error');
     return;
   }
   if (isHosted) sendDroppedFiles(files);
@@ -507,8 +556,20 @@ onHostEvent((e) => {
 const [ready, info, settings] = await Promise.all([invoke('app.ready'), invoke('app.info'), invoke('settings.get')]);
 app.info = info;
 app.settings = settings;
-enableMsoIcons(info.excelInstalled);
-applyTheme();
-updateToolbar();
-if (ready.initialFile) await open(ready.initialFile);
-else if (!isHosted && new URLSearchParams(location.search).has('sample')) await open();
+if (settings.language && settings.language !== lang && sessionGet(LANG_SYNC_KEY) === null) {
+  // ホストの設定を優先する（読み込み直しは1回だけ）
+  sessionSet(LANG_SYNC_KEY, '1');
+  if (ready.initialFile && sessionGet(REOPEN_KEY) === null) sessionSet(REOPEN_KEY, ready.initialFile);
+  storeLang(settings.language);
+  location.reload();
+} else {
+  if (settings.language === lang) sessionSet(LANG_SYNC_KEY, null);
+  enableMsoIcons(info.excelInstalled);
+  applyTheme();
+  updateToolbar();
+  const reopen = sessionGet(REOPEN_KEY);
+  if (reopen !== null) sessionSet(REOPEN_KEY, null);
+  const initialFile = reopen ?? ready.initialFile;
+  if (initialFile) await open(initialFile);
+  else if (!isHosted && new URLSearchParams(location.search).has('sample')) await open();
+}

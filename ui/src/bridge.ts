@@ -1,5 +1,7 @@
 // ホスト（C#）とのメッセージ交換。src/Sash.App/MessageRouter.cs と対応させる。
 
+import { lang, t } from './i18n';
+
 export type CustomUIVersion = 'office2007' | 'office2010';
 
 export interface AppInfo {
@@ -177,7 +179,7 @@ webview?.addEventListener('message', (e) => {
   if (!p) return;
   pending.delete(data.id);
   if (data.ok) p.resolve(data.payload);
-  else p.reject(new Error(data.error ?? '不明なエラー'));
+  else p.reject(new Error(data.error ?? t('不明なエラー')));
 });
 
 export function onHostEvent(listener: (e: HostEvent) => void): void {
@@ -231,7 +233,7 @@ const sampleXml = `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/
 `;
 
 const mock = {
-  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: 'ja', iconLibraryPath: '(ブラウザ実行中)' } as Settings,
+  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)') } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
     const r = (v: unknown) => Promise.resolve(v as HostApi[K]['res']);
     switch (type) {
@@ -242,7 +244,7 @@ const mock = {
       case 'file.open':
         return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }] });
       case 'file.save':
-        return r({ backup: '(ブラウザ実行中のため保存しません)' });
+        return r({ backup: t('(ブラウザ実行中のため保存しません)') });
       case 'file.exportText': {
         // ブラウザ実行中はダウンロードで代用する
         const p = payload as { defaultName: string; content: string };
@@ -262,14 +264,14 @@ const mock = {
       case 'excel.openWorkbooks':
         return r([]);
       case 'excel.apply':
-        return r({ status: 'written', message: 'ブラウザ実行中のため反映しません' });
+        return r({ status: 'written', message: t('ブラウザ実行中のため反映しません') });
       case 'excel.imageMso':
       case 'excel.labels':
         return r({});
       case 'recipes.list':
         return r([]);
       case 'library.list':
-        return r({ root: '(ブラウザ実行中)', icons: [] });
+        return r({ root: t('(ブラウザ実行中)'), icons: [] });
       case 'vba.read':
         return r({ status: 'noExcel', modules: [] });
       default:
