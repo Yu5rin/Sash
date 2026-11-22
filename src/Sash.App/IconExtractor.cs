@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Sash.Core.Imaging;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.App;
 
@@ -22,7 +23,7 @@ internal static partial class IconExtractor
         var module = LoadLibraryEx(path, IntPtr.Zero, LoadLibraryAsDatafile | LoadLibraryAsImageResource);
         if (module == IntPtr.Zero)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "アイコンを読み出せないファイルです。");
+            throw new Win32Exception(Marshal.GetLastWin32Error(), L("アイコンを読み出せないファイルです。", "Icons cannot be read from this file."));
         }
 
         try

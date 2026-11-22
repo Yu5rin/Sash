@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.Core.Library;
 
@@ -105,7 +106,7 @@ public sealed partial class IconLibrary(string root)
 
     public LibraryIcon Update(string id, string? name, IReadOnlyList<string>? tags)
     {
-        var icon = Get(id) ?? throw new FileNotFoundException($"アイコン {id} が見つかりません。");
+        var icon = Get(id) ?? throw new FileNotFoundException(L($"アイコン {id} が見つかりません。", $"Icon {id} was not found."));
         var next = icon with
         {
             Name = string.IsNullOrWhiteSpace(name) ? icon.Name : name.Trim(),
