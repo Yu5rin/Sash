@@ -336,7 +336,7 @@ xmlHandle = mountXmlEditor($('xml-editor'), $('xml-status'), { undo, redo });
 mountInspector($('inspector'), {
   pickIdMso: (cur, apply) => {
     const tag = app.store?.selectedElement?.localName ?? '';
-    openCatalog('idMso', cur, apply, tag === 'tab' || tag === 'group' ? tag : '');
+    openCatalog('idMso', cur, apply, tag === 'tab' || tag === 'group' || tag === 'contextMenu' ? tag : '');
   },
   pickImageMso: (cur, apply) => openCatalog('imageMso', cur, apply),
   editImage: (existing) => openImageEditor(undefined, existing),

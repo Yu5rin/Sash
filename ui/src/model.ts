@@ -174,7 +174,12 @@ export function createElement(doc: Document, tag: string): Element {
   };
 
   const el = make(tag);
-  if (tag === 'splitButton') {
+  if (tag === 'contextMenu') {
+    // コンテキストメニューは組み込みのメニュー（idMso）に項目を足すもの。既定はセルの右クリックメニュー
+    el.removeAttribute('id');
+    el.setAttribute('idMso', 'ContextMenuCell');
+    el.append(make('button'));
+  } else if (tag === 'splitButton') {
     el.append(make('button'), make('menu'));
     el.children[1]!.append(make('button'));
   } else if (tag === 'menu') {
@@ -205,6 +210,17 @@ export function ensureTabs(doc: Document): Element {
     ribbon.insertBefore(tabs, ctx ?? null);
   }
   return tabs;
+}
+
+/** customUI > contextMenus を必要なら作って返す（backstage の後ろ、末尾に置く）。 */
+export function ensureContextMenus(doc: Document): Element {
+  const root = doc.documentElement;
+  let cm = childElements(root).find((c) => c.localName === 'contextMenus');
+  if (!cm) {
+    cm = doc.createElementNS(root.namespaceURI, 'contextMenus');
+    root.append(cm);
+  }
+  return cm;
 }
 
 export function insertAt(parent: Element, child: Element, index: number): void {

@@ -62,3 +62,26 @@ describe('lint', () => {
     expect(run('', { version: 'office2007' }).some((m) => m.startsWith('error:名前空間'))).toBe(true);
   });
 });
+
+describe('コンテキストメニュー', () => {
+  const runCtx = (body: string, version: 'office2007' | 'office2010' = 'office2010') => {
+    const ns = version === 'office2010' ? NS : 'http://schemas.microsoft.com/office/2006/01/customui';
+    const r = parseXml(`<customUI xmlns="${ns}"><contextMenus>${body}</contextMenus></customUI>`);
+    if (!r.ok) throw new Error(r.message);
+    return lint(r.doc, { ...ctx, version, knownIdMso: new Set(['ContextMenuCell']) }).map((p) => `${p.severity}:${p.message}`);
+  };
+
+  it('正しい定義では何も出ない', () => {
+    expect(runCtx('<contextMenu idMso="ContextMenuCell"><button id="b" label="B" onAction="f"/><menuSeparator id="s"/></contextMenu>')).toEqual([]);
+  });
+
+  it('idMso がなければエラー、置けない要素もエラー', () => {
+    const r = runCtx('<contextMenu><group id="g"/></contextMenu>');
+    expect(r).toContain('error:<contextMenu> には id（または idMso / idQ）が必要です');
+    expect(r).toContain('error:<contextMenu> の中に <group> は置けません');
+  });
+
+  it('2007形式では使えない', () => {
+    expect(runCtx('<contextMenu idMso="ContextMenuCell"/>', 'office2007').some((m) => m.includes('2010以降の形式でのみ'))).toBe(true);
+  });
+});

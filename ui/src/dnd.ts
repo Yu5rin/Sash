@@ -2,7 +2,7 @@
 // dragover の間は dataTransfer の中身を読めないため、運んでいるものをここに持つ。
 
 import { app } from './app';
-import { createElement, elementAt, ensureTabs, moveElement, pathOf, type Path } from './model';
+import { createElement, elementAt, ensureContextMenus, ensureTabs, moveElement, pathOf, type Path } from './model';
 import { canContain } from './schema';
 
 export type DragPayload = { kind: 'new'; tag: string } | { kind: 'move'; path: Path };
@@ -41,14 +41,17 @@ export function canDropInto(doc: Document, parent: Element): boolean {
   return true;
 }
 
-/** ドロップを確定する。parentPath が null ならタブ一覧（customUI > ribbon > tabs）を指す。 */
-export function drop(parentPath: Path | null, index: number, source: 'canvas' | 'tree'): void {
+/**
+ * ドロップを確定する。parentPath が null ならタブ一覧（customUI > ribbon > tabs）、
+ * 'contextMenus' ならコンテキストメニューの一覧を指す（なければ作る）。
+ */
+export function drop(parentPath: Path | null | 'contextMenus', index: number, source: 'canvas' | 'tree'): void {
   const store = app.store;
   const payload = current;
   current = null;
   if (!store || !payload) return;
   store.edit(source, (doc) => {
-    const parent = parentPath === null ? ensureTabs(doc) : elementAt(doc, parentPath);
+    const parent = parentPath === null ? ensureTabs(doc) : parentPath === 'contextMenus' ? ensureContextMenus(doc) : elementAt(doc, parentPath);
     if (!parent) return undefined;
     if (payload.kind === 'new') {
       const el = createElement(doc, payload.tag);
