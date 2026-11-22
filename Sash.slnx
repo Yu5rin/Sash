@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sash.App/Sash.App.csproj" />
+    <Project Path="src/Sash.Core/Sash.Core.csproj" />
+    <Project Path="src/Sash.Excel/Sash.Excel.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Sash.Core.Tests/Sash.Core.Tests.csproj" />
+  </Folder>
+</Solution>
