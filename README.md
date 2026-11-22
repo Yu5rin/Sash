@@ -27,7 +27,7 @@ Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam）のカス�
 
 ## ステータス
 
-第1弾の実装に着手したところです。仕様は [docs/SPEC.md](docs/SPEC.md) を参照してください。
+第1弾（編集の強化）を実装しました。Windows 実機での動作確認はこれからです。仕様は [docs/SPEC.md](docs/SPEC.md)、実装状況は同じく §12 を参照してください。
 
 ## 開発
 
@@ -40,6 +40,7 @@ Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam）のカス�
 | `src/Sash.App` | ホスト。WinFormsの外枠とWebView2。UIは埋め込みリソースとして配信する（net10.0-windows） |
 | `ui` | UI本体。TypeScript、Vite、Monaco Editor。ビルド結果は `src/Sash.App/wwwroot` に出力される |
 | `tests/Sash.Core.Tests` | Coreの単体テスト（xUnit） |
+| `ui/test` | UIのモデル・Lint・アイコン加工の単体テスト（Vitest） |
 
 ### 必要なもの
 
@@ -64,10 +65,14 @@ dotnet test Sash.slnx
 ```
 
 ```bash
+cd ui && npm test
+```
+
+```bash
 dotnet run --project src/Sash.App
 ```
 
-UIを編集しながら確認するときは、`ui` で `npm run dev` を起動し、環境変数 `SASH_UI_DEV_URL=http://localhost:5173` を設定してアプリを起動します。ホットリロードが効きます。ブラウザで `http://localhost:5173` を直接開くと、サンプルのリボンでUIだけを確認できます。
+UIを編集しながら確認するときは、`ui` で `npm run dev` を起動し、環境変数 `SASH_UI_DEV_URL=http://localhost:5173` を設定してアプリを起動します。ホットリロードが効きます。ブラウザで `http://localhost:5173/?sample` を開くと、サンプルのリボンでUIだけを確認できます（保存とExcel連携は動きません）。
 
 ### 配布用の単一exe
 
@@ -80,3 +85,5 @@ dotnet publish src/Sash.App -p:PublishProfile=win-x64
 ## ライセンス
 
 未定
+
+idMso の一覧（`ui/src/catalog/excelControls.json`）は、Microsoft の [office-fluent-ui-command-identifiers](https://github.com/OfficeDev/office-fluent-ui-command-identifiers)（MIT License）の Excel 分から作成しています。ライセンス文は `ui/src/catalog/` に同梱しています。

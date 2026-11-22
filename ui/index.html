@@ -11,49 +11,61 @@
     <div id="app">
       <header class="titlebar">
         <span class="brand">Sash</span>
-        <span id="file-name" class="file-name">ファイルが開かれていません</span>
+        <span id="file-name" class="file-name"></span>
+        <select id="part-switch" hidden title="編集するパーツ（2010以降のExcelは customUI14 を優先します）"></select>
         <span class="spacer"></span>
-        <button id="btn-open" type="button">開く</button>
-        <button id="btn-save" type="button" disabled>保存</button>
-        <button id="btn-apply" type="button" class="primary" disabled title="Excelへ反映 (F5)">反映 F5</button>
+        <div class="toolbar" role="toolbar" aria-label="ツールバー">
+          <button id="btn-open" type="button" class="icon-text" title="開く (Ctrl+O)"></button>
+          <button id="btn-save" type="button" class="icon-text" title="保存 (Ctrl+S)" disabled></button>
+          <span class="sep"></span>
+          <button id="btn-undo" type="button" class="icon-button" title="元に戻す (Ctrl+Z)" disabled></button>
+          <button id="btn-redo" type="button" class="icon-button" title="やり直し (Ctrl+Y)" disabled></button>
+          <button id="btn-format" type="button" class="icon-button" title="XMLを整形 (Shift+Alt+F)" disabled></button>
+          <button id="btn-catalog" type="button" class="icon-button" title="idMso / imageMso カタログ" disabled></button>
+          <button id="btn-settings" type="button" class="icon-button" title="設定"></button>
+          <span class="sep"></span>
+          <button id="btn-apply" type="button" class="primary icon-text" title="Excelへ反映 (F5)" disabled></button>
+        </div>
       </header>
 
-      <aside class="pane left">
+      <aside class="pane left" aria-label="パレットとツリー">
         <section class="palette">
           <h2>パレット</h2>
           <ul id="palette-list"></ul>
         </section>
-        <section class="tree">
+        <section class="tree-pane">
           <h2>ツリー</h2>
-          <ul id="tree"></ul>
+          <div id="tree" role="tree" aria-label="ツリー"></div>
         </section>
       </aside>
+      <div class="splitter v" data-splitter="left" style="grid-area: sl" title="ドラッグで幅を変更、ダブルクリックで畳む"></div>
 
       <main class="pane center">
-        <section class="canvas">
+        <section class="canvas-pane" aria-label="キャンバス">
           <div id="canvas"></div>
         </section>
-        <section class="xml">
-          <div class="xml-status" id="xml-status" hidden>同期停止中：XMLの構文を直すと再開します</div>
+        <div class="splitter h" data-splitter="top" title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
+        <section class="xml-pane" aria-label="XMLエディタ">
+          <div class="xml-status" id="xml-status" hidden></div>
           <div id="xml-editor"></div>
         </section>
       </main>
 
-      <aside class="pane right">
+      <div class="splitter v" data-splitter="right" style="grid-area: sr" title="ドラッグで幅を変更、ダブルクリックで畳む"></div>
+      <aside class="pane right" aria-label="インスペクタ">
         <h2>インスペクタ</h2>
-        <div id="inspector" class="empty">要素を選択してください</div>
+        <div id="inspector"></div>
       </aside>
 
+      <div class="splitter h" data-splitter="bottom" style="grid-area: sb" title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
       <footer class="bottom">
-        <span id="status-problems">問題 0</span>
-        <span>・</span>
-        <span id="status-callbacks">コールバック 0</span>
-        <span>・</span>
-        <span id="status-images">アイコン 0</span>
-        <span class="spacer"></span>
-        <span id="status-message"></span>
+        <div id="bottom-tabs" class="bottom-tabs" role="tablist"></div>
+        <div id="bottom-body" class="bottom-body"></div>
       </footer>
+
+      <div id="home" class="home"></div>
     </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
