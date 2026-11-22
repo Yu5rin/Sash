@@ -53,6 +53,8 @@ public sealed class ExcelService : IDisposable
 {
     private const int MsoAutomationSecurityByUI = 2;
 
+    private static readonly string[] MacroExtensions = [".xlsm", ".xlam", ".xltm", ".xlsb"];
+
     private readonly ComThread _com = new();
     private readonly string _iconCacheDir;
     private dynamic? _helperApp;
@@ -99,7 +101,7 @@ public sealed class ExcelService : IDisposable
     private static void AddIfMacroBook(List<OpenWorkbookInfo> list, dynamic wb, bool isAddIn)
     {
         string? full = Safe(() => (string)wb.FullName);
-        if (full is null || !(full.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase) || full.EndsWith(".xlam", StringComparison.OrdinalIgnoreCase)))
+        if (full is null || !MacroExtensions.Any(e => full.EndsWith(e, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }
@@ -176,7 +178,7 @@ public sealed class ExcelService : IDisposable
     /// ブックを閉じて書き込み、開き直す。開いていなければ書き込むだけ。
     /// write は COM スレッドで呼ばれ、バックアップと書き込みを行う。
     /// </summary>
-    public Task<ApplyResult> ApplyAsync(string fullPath, bool saveIfDirty, Action write) => _com.InvokeAsync(() =>
+    public Task<ApplyResult> ApplyAsync(string fullPath, bool saveIfDirty, Action write, string? activateTabId = null) => _com.InvokeAsync(() =>
     {
         var found = FindWorkbook(fullPath);
         if (found is null)
@@ -261,8 +263,33 @@ public sealed class ExcelService : IDisposable
             return new ApplyResult(ApplyStatus.Blocked, L("反映しましたが、ブックの再読み込みが確認できません。Excelの画面を確認してください", "Applied, but reopening the workbook could not be confirmed. Please check Excel"));
         }
 
+        // 作ったタブを前面に出す（仕様書 §7.1 の 6）。外からは IRibbonUI を触れないので、
+        // Sash が入れた共通コード（modRibbonCore）の SashActivateTab をブックの中で呼ぶ。なければ何もしない
+        if (!string.IsNullOrEmpty(activateTabId))
+        {
+            TryActivateTab(app, fullPath, activateTabId);
+        }
+
         return new ApplyResult(ApplyStatus.Applied, isAddIn ? L("アドインを読み込み直して反映しました", "Reloaded the add-in and applied the changes") : L("ブックを開き直して反映しました", "Reopened the workbook and applied the changes"));
     });
+
+    private static void TryActivateTab(dynamic app, string fullPath, string tabId)
+    {
+        var macro = $"'{Path.GetFileName(fullPath).Replace("'", "''", StringComparison.Ordinal)}'!SashActivateTab";
+        // 開き直した直後は onLoad がまだ呼ばれていないことがあるので、少し待って何度か試す
+        for (var i = 0; i < 5; i++)
+        {
+            try
+            {
+                app.Run(macro, tabId);
+                return;
+            }
+            catch (COMException)
+            {
+                Thread.Sleep(200);
+            }
+        }
+    }
 
     /// <summary>
     /// 自動化で開くと既定ではマクロが無条件に有効になるため、一時的に Excel の UI と同じ判定に合わせて開く。

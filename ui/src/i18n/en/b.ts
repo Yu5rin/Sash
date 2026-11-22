@@ -137,7 +137,7 @@ export const en: Readonly<Record<string, string>> = {
   'テーマをシステムに合わせる': 'Follow System Theme',
   'キャンバスとXMLの上下を入れ替える': 'Swap Canvas and XML Editor',
   '設定を開く': 'Open Settings',
-  '.xlsm か .xlam のファイルをドロップしてください': 'Drop an .xlsm or .xlam file',
+  '.xlsm / .xlam / .xltm / .xlsb のファイルをドロップしてください': 'Drop an .xlsm, .xlam, .xltm, or .xlsb file',
 
   // callbacks.ts
   'VBAと照合しています': 'Checking against VBA',

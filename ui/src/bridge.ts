@@ -117,7 +117,7 @@ export interface HostApi {
   'settings.get': { req: undefined; res: Settings };
   'settings.set': { req: Partial<Settings>; res: Settings };
   'excel.openWorkbooks': { req: undefined; res: OpenWorkbook[] };
-  'excel.apply': { req: { path: string; parts: PartToSave[]; saveIfDirty: boolean }; res: ApplyResult };
+  'excel.apply': { req: { path: string; parts: PartToSave[]; saveIfDirty: boolean; activateTab?: string }; res: ApplyResult };
   'excel.imageMso': { req: { names: string[]; size: number }; res: Record<string, string | null> };
   'excel.labels': { req: { ids: string[] }; res: Record<string, string> };
   'library.list': { req: undefined; res: { root: string; icons: LibraryIconDto[] } };

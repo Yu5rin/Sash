@@ -105,7 +105,8 @@ public class RibbonPackageTests
     [InlineData("a.xlsm", true)]
     [InlineData("a.XLAM", true)]
     [InlineData("a.xlsx", false)]
-    [InlineData("a.xlsb", false)]
+    [InlineData("a.xlsb", true)]
+    [InlineData("a.xltm", true)]
     public void 対応する拡張子を判定する(string path, bool expected) =>
         Assert.Equal(expected, RibbonPackage.IsSupported(path));
 }

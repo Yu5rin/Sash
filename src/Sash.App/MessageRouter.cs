@@ -83,7 +83,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         {
             using var dialog = new OpenFileDialog
             {
-                Filter = L("Excel マクロブック / アドイン (*.xlsm;*.xlam)|*.xlsm;*.xlam", "Excel macro workbooks / add-ins (*.xlsm;*.xlam)|*.xlsm;*.xlam"),
+                Filter = L("Excel マクロブック / アドイン / テンプレート (*.xlsm;*.xlam;*.xltm;*.xlsb)|*.xlsm;*.xlam;*.xltm;*.xlsb", "Excel macro workbooks / add-ins / templates (*.xlsm;*.xlam;*.xltm;*.xlsb)|*.xlsm;*.xlam;*.xltm;*.xlsb"),
                 Title = L("リボンを編集するブックを開く", "Open a workbook to edit its ribbon"),
             };
             if (dialog.ShowDialog(owner) != DialogResult.OK)
@@ -101,7 +101,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         if (!RibbonPackage.IsSupported(path))
         {
-            throw new InvalidOperationException(L(".xlsm / .xlam のみ開けます。", "Only .xlsm / .xlam files can be opened."));
+            throw new InvalidOperationException(L(".xlsm / .xlam / .xltm / .xlsb のみ開けます。", "Only .xlsm / .xlam / .xltm / .xlsb files can be opened."));
         }
 
         if (!File.Exists(path))
@@ -356,7 +356,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             return new { status = "written", message = L("Excelが見つからないため、ファイルに書き込みました", "Excel was not found, so the changes were written to the file"), backup };
         }
 
-        var result = await excel.Value.ApplyAsync(req.Path, req.SaveIfDirty, Write);
+        var result = await excel.Value.ApplyAsync(req.Path, req.SaveIfDirty, Write, req.ActivateTab);
         return new
         {
             status = result.Status switch
@@ -430,7 +430,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record SaveRequest(string Path, IReadOnlyList<PartDto> Parts);
 
-    private sealed record ApplyRequest(string Path, IReadOnlyList<PartDto> Parts, bool SaveIfDirty);
+    private sealed record ApplyRequest(string Path, IReadOnlyList<PartDto> Parts, bool SaveIfDirty, string? ActivateTab = null);
 
     private sealed record ImageMsoRequest(IReadOnlyList<string> Names, int Size);
 

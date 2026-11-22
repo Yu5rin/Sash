@@ -5,12 +5,12 @@ using Sash.Core.CustomUI;
 namespace Sash.Core.Packaging;
 
 /// <summary>
-/// .xlsm / .xlam の customUI パーツを読み書きする。
+/// .xlsm / .xlam / .xltm / .xlsb の customUI パーツを読み書きする（どれも OPC 形式で、customUI は同じ場所に入る）。
 /// customUI と、それが参照する画像以外のパーツ（シート、VBA プロジェクトなど）には触れない。
 /// </summary>
 public static class RibbonPackage
 {
-    private static readonly string[] SupportedExtensions = [".xlsm", ".xlam"];
+    private static readonly string[] SupportedExtensions = [".xlsm", ".xlam", ".xltm", ".xlsb"];
 
     public static bool IsSupported(string path) =>
         SupportedExtensions.Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);

@@ -1,12 +1,12 @@
 # Sash
 
-A modern visual ribbon editor for Excel macro workbooks and add-ins (.xlsm / .xlam).
+A modern visual ribbon editor for Excel macro workbooks and add-ins (.xlsm / .xlam / .xltm / .xlsb).
 
 Excelのxlsm／xlamのリボンを、見たまま作って直せるモダンなリボンエディタです。
 
 ## 概要
 
-Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam）のカスタムリボン（customUI）を、ドラッグ操作で組み立てられるデスクトップツールです。XMLを手書きする必要はありません。編集した内容はワンクリックでExcelに反映でき、VBAのコールバックとの整合性も自動でチェックします。画像やicoファイルからリボン用のアイコンを作って、そのまま設定することもできます。
+Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam、ほかに .xltm / .xlsb）のカスタムリボン（customUI）を、ドラッグ操作で組み立てられるデスクトップツールです。XMLを手書きする必要はありません。編集した内容はワンクリックでExcelに反映でき、VBAのコールバックとの整合性も自動でチェックします。画像やicoファイルからリボン用のアイコンを作って、そのまま設定することもできます。
 
 ## 主な機能
 
@@ -33,7 +33,7 @@ Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam）のカス�
 
 ## ステータス
 
-第1弾から第3弾まで（編集、VBAとの連携、Backstage・差分・アイコンライブラリ・英語UI）を実装しました。Windows 実機での動作確認はこれからです。仕様は [docs/SPEC.md](docs/SPEC.md)、実装状況は同じく §12〜§14 を参照してください。
+第1弾から第3弾まで（編集、VBAとの連携、Backstage・差分・アイコンライブラリ・英語UI）を実装しました。Windows 実機での動作確認はこれからです。仕様は [docs/SPEC.md](docs/SPEC.md)、実装状況は同じく §12〜§15 を参照してください。
 
 ## 開発
 

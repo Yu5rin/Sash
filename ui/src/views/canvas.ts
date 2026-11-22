@@ -687,3 +687,18 @@ function onDrop(e: DragEvent, host: HTMLElement): void {
   e.preventDefault();
   drop(spot.parentPath, spot.index, 'canvas');
 }
+
+/**
+ * 反映後に前面に出すタブの id。キャンバスで表示中の自作タブ、なければ最初の自作タブ。
+ * 組み込みタブ（idMso）は ActivateTabMso が要るので、ここでは扱わない。
+ */
+export function tabIdToActivate(): string | null {
+  const store = app.store;
+  if (!store) return null;
+  if (activeTab?.kind === 'path') {
+    const id = elementAt(store.doc, activeTab.path)?.getAttribute('id');
+    if (id) return id;
+  }
+  const tabs = store.doc.documentElement.querySelector(':scope > ribbon > tabs');
+  return tabs ? childElements(tabs).find((t) => t.localName === 'tab' && t.hasAttribute('id'))?.getAttribute('id') ?? null : null;
+}
