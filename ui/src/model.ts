@@ -3,6 +3,7 @@
 // 要素の位置は「ルートからの子要素の番号の並び」（パス）で表し、XML を読み直しても選択を保てるようにする。
 
 import { backstageElements, canContainEl, elements, ID_PATTERN, ID_PREFIX, inBackstage } from './schema';
+import { t as tr } from './i18n';
 
 export type Path = readonly number[];
 
@@ -15,9 +16,9 @@ export function parseXml(xml: string): ParseResult {
     // Chromium のエラー文（"error on line 3 at column 5: ..."）から、行・列・内容だけを取り出す
     const text = (error.textContent ?? '').replace(/\s+/g, ' ');
     const m = /line (\d+) at column (\d+):\s*(.*?)(?:\s*Below is a rendering.*)?$/i.exec(text);
-    if (m) return { ok: false, message: `${m[1]}行目 ${m[2]}列：${m[3]}`, line: Number(m[1]) };
+    if (m) return { ok: false, message: tr('{line}行目 {column}列：{message}', { line: m[1]!, column: m[2]!, message: m[3]! }), line: Number(m[1]) };
     const line = /line (\d+)/i.exec(text);
-    return { ok: false, message: text.trim() || 'XMLの構文エラー', line: line ? Number(line[1]) : undefined };
+    return { ok: false, message: text.trim() || tr('XMLの構文エラー'), line: line ? Number(line[1]) : undefined };
   }
   return { ok: true, doc };
 }
@@ -169,7 +170,7 @@ export function createElement(doc: Document, tag: string, parent: Element | null
   const make = (t: string): Element => {
     const el = doc.createElementNS(ns, t);
     const def = bs ? backstageElements.get(t) : elements.get(t);
-    const label = DEFAULT_LABEL[t] ?? null;
+    const label = DEFAULT_LABEL[t] !== undefined ? tr(DEFAULT_LABEL[t]) : null;
     if (def?.idRequired || t === 'separator' || t === 'box' || t === 'buttonGroup') {
       const id = suggestId(t, null, used);
       used.add(id);

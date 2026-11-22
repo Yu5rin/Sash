@@ -3,6 +3,7 @@
 
 import type { CustomUIVersion } from './bridge';
 import type { PartStore } from './store';
+import { t } from './i18n';
 
 export const SASH_FORMAT = 'sash-ribbon';
 export const SASH_FORMAT_VERSION = 1;
@@ -52,18 +53,18 @@ export function parseSash(text: string): SashFile {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error('JSONとして読み込めません');
+    throw new Error(t('JSONとして読み込めません'));
   }
   const f = data as Partial<SashFile>;
-  if (f.format !== SASH_FORMAT) throw new Error('Sash のリボン定義ファイル（.sash.json）ではありません');
-  if (typeof f.formatVersion !== 'number' || f.formatVersion > SASH_FORMAT_VERSION) throw new Error('新しいバージョンの Sash で書き出されたファイルです。Sash を更新してください');
-  if (!Array.isArray(f.parts) || f.parts.length === 0) throw new Error('リボン定義が含まれていません');
+  if (f.format !== SASH_FORMAT) throw new Error(t('Sash のリボン定義ファイル（.sash.json）ではありません'));
+  if (typeof f.formatVersion !== 'number' || f.formatVersion > SASH_FORMAT_VERSION) throw new Error(t('新しいバージョンの Sash で書き出されたファイルです。Sash を更新してください'));
+  if (!Array.isArray(f.parts) || f.parts.length === 0) throw new Error(t('リボン定義が含まれていません'));
   return {
     format: SASH_FORMAT,
     formatVersion: f.formatVersion,
     source: f.source,
     parts: f.parts.map((p) => {
-      if (p.version !== 'office2007' && p.version !== 'office2010') throw new Error(`不明な形式です：${String(p.version)}`);
+      if (p.version !== 'office2007' && p.version !== 'office2010') throw new Error(t('不明な形式です：{version}', { version: String(p.version) }));
       const xml = Array.isArray(p.xml) ? p.xml.join('\n') : String(p.xml ?? '');
       return { version: p.version, xml: xml.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n'), images: (p.images ?? []).filter((i) => i && typeof i.id === 'string' && typeof i.base64 === 'string') };
     }),

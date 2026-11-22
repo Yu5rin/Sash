@@ -2,6 +2,8 @@
 // インスペクタの入力欄、Lint の構造チェック、XML エディタの補完の三つが、この定義を共有する。
 // 対象はリボン、QAT、commands、コンテキストメニュー、Backstage。
 
+import { t } from './i18n';
+
 export type AttrKind =
   | 'id'
   | 'string'
@@ -324,5 +326,6 @@ export const ID_PREFIX: Readonly<Record<string, string>> = {
 
 /** パレットやコマンドに出す、要素の日本語名。 */
 export function titleOf(tag: string): string {
-  return elements.get(tag)?.title ?? backstageElements.get(tag)?.title ?? tag;
+  const title = elements.get(tag)?.title ?? backstageElements.get(tag)?.title;
+  return title !== undefined ? t(title) : tag;
 }

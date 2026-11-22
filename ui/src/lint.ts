@@ -2,6 +2,7 @@
 
 import { allElements, pathOf, type Path } from './model';
 import { attributes, defFor, ID_PATTERN } from './schema';
+import { t } from './i18n';
 
 export type Severity = 'error' | 'warning' | 'info';
 
@@ -38,12 +39,12 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
 
   const root = doc.documentElement;
   if (root.localName !== 'customUI') {
-    add('error', root, 'ルート要素は customUI にしてください');
+    add('error', root, t('ルート要素は customUI にしてください'));
     return problems;
   }
   const expectedNs = NAMESPACES[ctx.version];
   if (root.namespaceURI !== expectedNs) {
-    add('error', root, `名前空間が ${ctx.version === 'office2010' ? 'customUI14（2010以降）' : 'customUI（2007）'} 用ではありません。xmlns="${expectedNs}" にしてください`, 'xmlns');
+    add('error', root, t('名前空間が {format} 用ではありません。xmlns="{ns}" にしてください', { format: ctx.version === 'office2010' ? t('customUI14（2010以降）') : t('customUI（2007）'), ns: expectedNs }), 'xmlns');
   }
 
   const ids = new Map<string, Element[]>();
@@ -54,16 +55,16 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
     const def = defFor(el);
     if (opaque) return;
     if (!def) {
-      add('error', el, `不明な要素 <${el.localName}> です`);
+      add('error', el, t('不明な要素 <{tag}> です', { tag: el.localName }));
       return;
     }
-    if (def.since2010 && ctx.version === 'office2007') add('error', el, `<${el.localName}> は2010以降の形式でのみ使えます`);
+    if (def.since2010 && ctx.version === 'office2007') add('error', el, t('<{tag}> は2010以降の形式でのみ使えます', { tag: el.localName }));
 
     const parent = el.parentElement;
     if (parent) {
       const pdef = defFor(parent);
       if (pdef && !pdef.opaque && !pdef.children.includes(el.localName)) {
-        add('error', el, `<${parent.localName}> の中に <${el.localName}> は置けません`);
+        add('error', el, t('<{parent}> の中に <{child}> は置けません', { parent: parent.localName, child: el.localName }));
       }
     }
 
@@ -73,35 +74,35 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
       if (name === 'xmlns' || name.startsWith('xmlns:')) continue;
       const adef = attributes.get(name);
       if (!adef || !def.attrs.includes(name)) {
-        add('error', el, `<${el.localName}> に ${name} 属性は使えません`, name);
+        add('error', el, t('<{tag}> に {attr} 属性は使えません', { tag: el.localName, attr: name }), name);
         continue;
       }
-      if (adef.since2010 && ctx.version === 'office2007') add('error', el, `${name} は2010以降の形式でのみ使えます`, name);
+      if (adef.since2010 && ctx.version === 'office2007') add('error', el, t('{attr} は2010以降の形式でのみ使えます', { attr: name }), name);
       const v = at.value;
       switch (adef.kind) {
         case 'bool':
-          if (!/^(true|false|1|0)$/.test(v)) add('error', el, `${name} は true か false で指定してください`, name);
+          if (!/^(true|false|1|0)$/.test(v)) add('error', el, t('{attr} は true か false で指定してください', { attr: name }), name);
           break;
         case 'enum':
-          if (!adef.values!.includes(v)) add('error', el, `${name} は ${adef.values!.join(' / ')} のいずれかです`, name);
+          if (!adef.values!.includes(v)) add('error', el, t('{attr} は {values} のいずれかです', { attr: name, values: adef.values!.join(' / ') }), name);
           break;
         case 'int':
-          if (!/^\d+$/.test(v)) add('error', el, `${name} は整数で指定してください`, name);
+          if (!/^\d+$/.test(v)) add('error', el, t('{attr} は整数で指定してください', { attr: name }), name);
           break;
         case 'id':
-          if (!ID_PATTERN.test(v)) add('error', el, `id「${v}」は英字かアンダースコアで始め、英数字と _ . - だけを使ってください`, name);
+          if (!ID_PATTERN.test(v)) add('error', el, t('id「{value}」は英字かアンダースコアで始め、英数字と _ . - だけを使ってください', { value: v }), name);
           break;
         case 'callback':
-          if (!/^[A-Za-z_][A-Za-z0-9_.!]*$/.test(v)) add('error', el, `コールバック名「${v}」はVBAのSub名として使えません`, name);
+          if (!/^[A-Za-z_][A-Za-z0-9_.!]*$/.test(v)) add('error', el, t('コールバック名「{value}」はVBAのSub名として使えません', { value: v }), name);
           break;
         case 'idMso':
-          if (ctx.knownIdMso.size > 0 && v && !ctx.knownIdMso.has(v)) add('warning', el, `idMso「${v}」はExcelのコマンド一覧にありません`, name);
+          if (ctx.knownIdMso.size > 0 && v && !ctx.knownIdMso.has(v)) add('warning', el, t('idMso「{value}」はExcelのコマンド一覧にありません', { value: v }), name);
           break;
         case 'imageMso':
-          if (ctx.missingImageMso.has(v)) add('warning', el, `imageMso「${v}」はExcelに存在しません`, name);
+          if (ctx.missingImageMso.has(v)) add('warning', el, t('imageMso「{value}」はExcelに存在しません', { value: v }), name);
           break;
         case 'image':
-          if (!ctx.imageIds.has(v)) add('error', el, `画像「${v}」がファイル内にありません`, name);
+          if (!ctx.imageIds.has(v)) add('error', el, t('画像「{value}」がファイル内にありません', { value: v }), name);
           break;
         case 'string':
           break;
@@ -111,9 +112,9 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
     // 識別子
     const idAttrs = ['id', 'idMso', 'idQ'].filter((n) => el.hasAttribute(n));
     if (def.idRequired && idAttrs.length === 0 && def.attrs.some((n) => n === 'id' || n === 'idMso')) {
-      add('error', el, `<${el.localName}> には id（または idMso / idQ）が必要です`);
+      add('error', el, t('<{tag}> には id（または idMso / idQ）が必要です', { tag: el.localName }));
     }
-    if (idAttrs.length > 1) add('error', el, `${idAttrs.join(' と ')} は同時に指定できません`, idAttrs[1]);
+    if (idAttrs.length > 1) add('error', el, t('{attrs} は同時に指定できません', { attrs: idAttrs.join(t(' と ')) }), idAttrs[1]);
     const id = el.getAttribute('id');
     if (id) ids.set(id, [...(ids.get(id) ?? []), el]);
     const idQ = el.getAttribute('idQ');
@@ -128,15 +129,15 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
     for (const at of Array.from(el.attributes)) {
       const adef = attributes.get(at.name);
       if (adef?.dynamic && el.hasAttribute(adef.dynamic) && at.name !== 'imageMso') {
-        add('error', el, `${at.name} と ${adef.dynamic} は同時に指定できません`, adef.dynamic);
+        add('error', el, t('{a} と {b} は同時に指定できません', { a: at.name, b: adef.dynamic }), adef.dynamic);
       }
     }
-    if (el.hasAttribute('image') && el.hasAttribute('imageMso')) add('error', el, 'image と imageMso は同時に指定できません', 'imageMso');
-    if (el.hasAttribute('imageMso') && el.hasAttribute('getImage')) add('error', el, 'imageMso と getImage は同時に指定できません', 'getImage');
+    if (el.hasAttribute('image') && el.hasAttribute('imageMso')) add('error', el, t('{a} と {b} は同時に指定できません', { a: 'image', b: 'imageMso' }), 'imageMso');
+    if (el.hasAttribute('imageMso') && el.hasAttribute('getImage')) add('error', el, t('{a} と {b} は同時に指定できません', { a: 'imageMso', b: 'getImage' }), 'getImage');
 
     // グループ内のコントロール数
     if (el.localName === 'group' && el.children.length > MANY_CONTROLS) {
-      add('info', el, `コントロールが ${el.children.length} 個あります。狭い画面ではグループが畳まれます`);
+      add('info', el, t('コントロールが {n} 個あります。狭い画面ではグループが畳まれます', { n: el.children.length }));
     }
 
     for (const c of Array.from(el.children)) visit(c, def.opaque === true);
@@ -146,7 +147,7 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
   const dup = (map: Map<string, Element[]>, attr: string, label: string) => {
     for (const [value, els] of map) {
       if (els.length < 2) continue;
-      for (const el of els) add('error', el, `${label}「${value}」が ${els.length} か所で重複しています`, attr);
+      for (const el of els) add('error', el, t('{label}「{value}」が {n} か所で重複しています', { label, value, n: els.length }), attr);
     }
   };
   dup(ids, 'id', 'id');
@@ -168,7 +169,7 @@ function lintKeytips(doc: Document, add: (s: Severity, el: Element, m: string, a
       if (k) seen.set(k, [...(seen.get(k) ?? []), el]);
     }
     for (const [k, list] of seen) {
-      if (list.length > 1) for (const el of list) add('warning', el, `keytip「${k}」が重複しています`, 'keytip');
+      if (list.length > 1) for (const el of list) add('warning', el, t('keytip「{value}」が重複しています', { value: k }), 'keytip');
     }
   };
   const tabs = allElements(doc).filter((el) => el.localName === 'tab');

@@ -3,6 +3,7 @@
 
 import { childElements, ensureTabs, parseXml, pathOf, suggestId, usedIds, type Path } from './model';
 import { NAMESPACES } from './lint';
+import { t } from './i18n';
 
 export interface Recipe {
   id: string;
@@ -227,7 +228,7 @@ export function instantiate(recipe: Recipe, doc: Document, existingVbaNames: Rea
   const ns = doc.documentElement.namespaceURI ?? NAMESPACES.office2010;
   const used = usedIds(doc);
   const parsed = parseXml(`<customUI xmlns="${ns}">${recipe.xml}</customUI>`);
-  if (!parsed.ok) throw new Error(`レシピのXMLが壊れています：${parsed.message}`);
+  if (!parsed.ok) throw new Error(t('レシピのXMLが壊れています：{message}', { message: parsed.message }));
 
   const renamed = new Map<string, string>();
   let xml = recipe.xml;
@@ -286,7 +287,7 @@ export function insertInstance(doc: Document, inst: Instance, selection: Path | 
   if (!tab) {
     tab = doc.createElementNS(doc.documentElement.namespaceURI, 'tab');
     tab.setAttribute('id', suggestId('tab', null, usedIds(doc)));
-    tab.setAttribute('label', '新しいタブ');
+    tab.setAttribute('label', t('新しいタブ'));
     tabs.append(tab);
   }
   tab.insertBefore(el, after?.nextElementSibling ?? null);

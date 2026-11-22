@@ -3,6 +3,7 @@
 
 import { allElements, pathOf, type Path } from './model';
 import { attributes, callbackSignature } from './schema';
+import { t } from './i18n';
 
 export interface VbaModule {
   name: string;
@@ -99,17 +100,17 @@ export function parseParams(params: string): Param[] {
 export function compareSignature(expected: string, actual: string): string | null {
   const e = parseParams(expected);
   const a = parseParams(actual).filter((p) => !p.optional);
-  if (e.length !== a.length) return `引数の数が違います（必要：${e.length}、実際：${a.length}）`;
+  if (e.length !== a.length) return t('引数の数が違います（必要：{expected}、実際：{actual}）', { expected: e.length, actual: a.length });
   for (let i = 0; i < e.length; i++) {
     const ep = e[i]!;
     const ap = a[i]!;
     // 型を書いていない（Variant）引数は、どの型でも受け取れるので一致とみなす
     if (ep.type !== 'variant' && ap.type !== 'variant' && ep.type !== ap.type) {
-      return `${i + 1}番目の引数の型が違います（必要：${ep.type}、実際：${ap.type}）`;
+      return t('{n}番目の引数の型が違います（必要：{expected}、実際：{actual}）', { n: i + 1, expected: ep.type, actual: ap.type });
     }
     // 値を返す引数（ByRef returnedVal など）を ByVal にすると、値が Excel に戻らない
     if (expected.split(',')[i]!.includes('ByRef') && ap.byVal) {
-      return `${i + 1}番目の引数は ByRef にしてください（ByVal だと値が返りません）`;
+      return t('{n}番目の引数は ByRef にしてください（ByVal だと値が返りません）', { n: i + 1 });
     }
   }
   return null;
@@ -164,7 +165,7 @@ export function matchCallbacks(doc: Document, modules: VbaModule[] | null): Call
       result.push({ name, state: 'missing', uses: list, expected });
       continue;
     }
-    const reason = compareSignature(expected, proc.params) ?? (proc.isPrivate ? 'Private の Sub はリボンから呼べません' : null);
+    const reason = compareSignature(expected, proc.params) ?? (proc.isPrivate ? t('Private の Sub はリボンから呼べません') : null);
     result.push({ name, state: reason ? 'mismatch' : 'implemented', uses: list, expected, procedure: proc, reason: reason ?? undefined });
   }
 
