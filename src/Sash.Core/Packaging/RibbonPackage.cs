@@ -50,16 +50,49 @@ public static class RibbonPackage
 
     /// <summary>
     /// customUI の XML を書き込む。パーツとパッケージ直下のリレーションがなければ作る。
-    /// 画像の書き込みはここでは行わない（第 1 弾のアイコン設定で追加する）。
     /// </summary>
-    public static void SaveCustomUI(string path, CustomUIVersion version, string xml)
+    public static void SaveCustomUI(string path, CustomUIVersion version, string xml) =>
+        Save(path, [new CustomUIPartChange(version, xml, [], [])]);
+
+    /// <summary>
+    /// customUI パーツと画像をまとめて書き込む。1回の Open / Close で済ませ、途中で失敗したら何も書き込まない。
+    /// </summary>
+    public static void Save(string path, IReadOnlyList<CustomUIPartChange> changes)
     {
-        ArgumentNullException.ThrowIfNull(xml);
-        using var package = Package.Open(System.IO.Path.GetFullPath(path), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        WriteCustomUI(package, version, xml);
+        ArgumentNullException.ThrowIfNull(changes);
+        var fullPath = System.IO.Path.GetFullPath(path);
+
+        // System.IO.Packaging は書き込み途中の失敗でファイルを壊しうるので、一時ファイルで作ってから置き換える
+        var temp = fullPath + ".sash-tmp";
+        File.Copy(fullPath, temp, overwrite: true);
+        try
+        {
+            using (var package = Package.Open(temp, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                foreach (var change in changes)
+                {
+                    var part = WriteCustomUI(package, change.Version, change.Xml);
+                    foreach (var id in change.RemoveImages)
+                    {
+                        RemoveImage(package, part, id);
+                    }
+
+                    foreach (var image in change.AddImages)
+                    {
+                        WriteImage(package, part, image);
+                    }
+                }
+            }
+
+            File.Copy(temp, fullPath, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temp);
+        }
     }
 
-    internal static void WriteCustomUI(Package package, CustomUIVersion version, string xml)
+    internal static PackagePart WriteCustomUI(Package package, CustomUIVersion version, string xml)
     {
         var relType = CustomUIConstants.RelationshipTypeOf(version);
         var rel = package.GetRelationshipsByType(relType).FirstOrDefault();
@@ -85,6 +118,83 @@ public static class RibbonPackage
         // Office が書き出す customUI と同じく BOM なしの UTF-8 にする
         var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(xml);
         stream.Write(bytes);
+        return part;
+    }
+
+    /// <summary>画像を書き込む。同じ Id のリレーションがあれば中身を差し替え、なければ customUI/images に作る。</summary>
+    private static void WriteImage(Package package, PackagePart customUIPart, NewImage image)
+    {
+        PackagePart imagePart;
+        if (customUIPart.RelationshipExists(image.Id))
+        {
+            var rel = customUIPart.GetRelationship(image.Id);
+            var uri = PackUriHelper.ResolvePartUri(customUIPart.Uri, rel.TargetUri);
+            if (package.PartExists(uri))
+            {
+                package.DeletePart(uri);
+            }
+
+            imagePart = package.CreatePart(uri, image.ContentType, CompressionOption.NotCompressed);
+        }
+        else
+        {
+            var uri = UniqueImageUri(package, image.Id);
+            imagePart = package.CreatePart(uri, image.ContentType, CompressionOption.NotCompressed);
+            // customUI パーツからの相対パス（images/xxx.png）で登録する
+            customUIPart.CreateRelationship(PackUriHelper.GetRelativeUri(customUIPart.Uri, uri), TargetMode.Internal,
+                CustomUIConstants.ImageRelationshipType, image.Id);
+        }
+
+        using var stream = imagePart.GetStream(FileMode.Create, FileAccess.Write);
+        stream.Write(image.Data);
+    }
+
+    private static Uri UniqueImageUri(Package package, string id)
+    {
+        var safe = string.Concat(id.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' ? c : '_'));
+        for (var n = 0; ; n++)
+        {
+            var name = n == 0 ? safe : $"{safe}_{n}";
+            var uri = PackUriHelper.CreatePartUri(new Uri($"/customUI/images/{name}.png", UriKind.Relative));
+            if (!package.PartExists(uri))
+            {
+                return uri;
+            }
+        }
+    }
+
+    /// <summary>画像を消す。ほかの customUI パーツからも参照されている画像パーツは残す。</summary>
+    private static void RemoveImage(Package package, PackagePart customUIPart, string id)
+    {
+        if (!customUIPart.RelationshipExists(id))
+        {
+            return;
+        }
+
+        var rel = customUIPart.GetRelationship(id);
+        var uri = PackUriHelper.ResolvePartUri(customUIPart.Uri, rel.TargetUri);
+        customUIPart.DeleteRelationship(id);
+
+        var stillUsed = package.GetParts()
+            .Where(p => p.Uri != uri && !p.Uri.OriginalString.EndsWith(".rels", StringComparison.OrdinalIgnoreCase))
+            .Any(p => SafeRelationships(p).Any(r => r.TargetMode == TargetMode.Internal &&
+                                                   PackUriHelper.ResolvePartUri(p.Uri, r.TargetUri) == uri));
+        if (!stillUsed && package.PartExists(uri))
+        {
+            package.DeletePart(uri);
+        }
+    }
+
+    private static IEnumerable<PackageRelationship> SafeRelationships(PackagePart part)
+    {
+        try
+        {
+            return part.GetRelationships().ToList();
+        }
+        catch (InvalidOperationException)
+        {
+            return [];
+        }
     }
 
     private static string ReadText(PackagePart part)
