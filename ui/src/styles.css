@@ -449,3 +449,27 @@ input.invalid { border-color: var(--error); }
 .panel-list .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .panel-list .small { font-size: 12px; }
 .settings h3 { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+
+/* ---- コマンドパレット ---- */
+
+.palette-backdrop { position: fixed; inset: 0; z-index: 150; display: flex; justify-content: center; align-items: flex-start; padding-top: 72px; background: rgba(0, 0, 0, 0.15); }
+.command-palette { width: min(640px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+.command-palette input { width: 100%; border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 14px; font-size: 14px; outline: none; background: var(--surface); }
+.palette-results { list-style: none; margin: 0; padding: 4px 0; max-height: 420px; overflow: auto; }
+.palette-results li { display: flex; align-items: center; gap: 10px; padding: 6px 14px; cursor: pointer; }
+.palette-results li.active { background: var(--select-soft); }
+.cmd-group { font-size: 11px; color: var(--text-muted); width: 64px; flex-shrink: 0; }
+.cmd-title { flex: 1; }
+kbd { font-family: inherit; font-size: 11px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+
+/* ---- レシピ ---- */
+
+.recipes { display: grid; grid-template-columns: 260px 1fr; gap: 16px; height: 100%; }
+.recipe-list { display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+.recipe-item { justify-content: space-between; text-align: left; background: transparent; border-color: transparent; white-space: normal; padding: 6px 8px; }
+.recipe-item.active { background: var(--select-soft); border-color: var(--select); }
+.recipe-preview { overflow: auto; }
+.recipe-preview p { margin: 0 0 8px; line-height: 1.6; }
+.recipe-preview h3 { font-size: 12px; color: var(--text-muted); margin: 12px 0 4px; }
+.recipe-preview pre { margin: 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; overflow: auto; white-space: pre; }
+.modal footer .left { margin-right: auto; }

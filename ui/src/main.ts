@@ -3,7 +3,11 @@
 import './styles.css';
 import { app } from './app';
 import { invoke, isHosted, onHostEvent, sendDroppedFiles, type PartToSave, type Settings } from './bridge';
+import { insertStubs, setupRibbonHolder, vba } from './callbacks';
 import { openCatalog } from './dialogs/catalogDialog';
+import { openCommandPalette, type Command } from './dialogs/commandPalette';
+import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
+import { builtinRecipes } from './recipes';
 import { ask, openModal } from './dialogs/modal';
 import { $, h, svg } from './dom';
 import { openIconDialog } from './icon/iconDialog';
@@ -12,11 +16,11 @@ import { mountLayout } from './layout';
 import { duplicateElement, elementAt, pathOf } from './model';
 import { enableMsoIcons } from './msoIcons';
 import { elements } from './schema';
-import { mountBottom } from './views/bottom';
+import { mountBottom, showBottomTab } from './views/bottom';
 import { mountCanvas } from './views/canvas';
 import { mountHome } from './views/home';
 import { mountInspector } from './views/inspector';
-import { mountPalette } from './views/palette';
+import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
 import { mountTree } from './views/tree';
 import { mountXmlEditor } from './views/xmlEditor';
 
@@ -43,6 +47,8 @@ $('btn-redo').replaceChildren(svg(uiIcons.redo));
 $('btn-format').replaceChildren(svg(uiIcons.format));
 $('btn-catalog').replaceChildren(svg(uiIcons.catalog));
 $('btn-settings').replaceChildren(svg(uiIcons.settings));
+$('btn-recipes').replaceChildren(svg(uiIcons.recipe));
+$('btn-command').replaceChildren(svg(uiIcons.command));
 
 function updateToolbar(): void {
   const s = app.session;
@@ -57,6 +63,7 @@ function updateToolbar(): void {
   $<HTMLButtonElement>('btn-redo').disabled = !store?.canRedo;
   $<HTMLButtonElement>('btn-format').disabled = !store || store.syncError !== null;
   $<HTMLButtonElement>('btn-catalog').disabled = !s;
+  $<HTMLButtonElement>('btn-recipes').disabled = !s;
 
   const sw = $<HTMLSelectElement>('part-switch');
   sw.hidden = !s || s.parts.size < 2;
@@ -251,6 +258,50 @@ function openSettings(): void {
   openModal('設定', content);
 }
 
+// ---- コマンドパレット ----
+
+function openImageMsoCatalog(): void {
+  $('btn-catalog').click();
+}
+
+function buildCommands(): Command[] {
+  const has = () => app.session !== null;
+  const hasSel = () => app.store?.selectedElement !== null && app.store?.selectedElement !== undefined;
+  const run = (p: Promise<string>) => void p.then((m) => m && toast(m)).catch((e: Error) => toast(e.message, 'error'));
+  const setTheme = (theme: Settings['theme']) => void invoke('settings.set', { theme }).then((st) => { app.settings = st; applyTheme(); });
+  return [
+    { id: 'file.open', group: 'ファイル', title: 'ファイルを開く', shortcut: 'Ctrl+O', run: () => void open() },
+    { id: 'file.save', group: 'ファイル', title: '保存', shortcut: 'Ctrl+S', enabled: has, run: () => void save() },
+    { id: 'file.apply', group: 'ファイル', title: 'Excelへ反映', shortcut: 'F5', keywords: 'apply reload', enabled: has, run: () => void applyToExcel() },
+    { id: 'edit.undo', group: '編集', title: '元に戻す', shortcut: 'Ctrl+Z', enabled: () => app.store?.canUndo === true, run: undo },
+    { id: 'edit.redo', group: '編集', title: 'やり直し', shortcut: 'Ctrl+Y', enabled: () => app.store?.canRedo === true, run: redo },
+    { id: 'edit.duplicate', group: '編集', title: '選択中の要素を複製', shortcut: 'Ctrl+D', enabled: hasSel, run: duplicateSelection },
+    { id: 'edit.delete', group: '編集', title: '選択中の要素を削除', shortcut: 'Delete', enabled: hasSel, run: deleteSelection },
+    { id: 'edit.format', group: '編集', title: 'XMLを整形', shortcut: 'Shift+Alt+F', enabled: has, run: () => app.store?.format() },
+    { id: 'edit.icon', group: '編集', title: '選択中のコントロールのアイコンを作る', keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
+    ...PALETTE_ITEMS.map((tag): Command => ({ id: `insert.${tag}`, group: '追加', title: `${elements.get(tag)?.title ?? tag}を追加`, keywords: tag, enabled: has, run: () => insertNearSelection(tag) })),
+    ...builtinRecipes.map((r): Command => ({ id: `recipe.${r.id}`, group: 'レシピ', title: r.title, keywords: 'recipe template', enabled: has, run: () => run(applyRecipe(r)) })),
+    { id: 'recipe.open', group: 'レシピ', title: 'レシピの一覧を開く', keywords: 'recipe', enabled: has, run: () => void openRecipes(toast) },
+    { id: 'recipe.save', group: 'レシピ', title: '選択中のタブ・グループをレシピとして保存', keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(toast) },
+    { id: 'vba.refresh', group: 'VBA', title: 'VBAを再読み込みして照合', keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
+    { id: 'vba.insert', group: 'VBA', title: '未実装のコールバックをモジュールに挿入', keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => run(insertStubs(vba.statuses())) },
+    { id: 'vba.holder', group: 'VBA', title: 'onLoad と Invalidate の雛形を入れる', keywords: 'ribbon invalidate onload', enabled: has, run: () => run(setupRibbonHolder()) },
+    { id: 'view.catalog', group: '表示', title: 'imageMso カタログを開く', keywords: 'icon catalog', enabled: has, run: openImageMsoCatalog },
+    { id: 'view.idmso', group: '表示', title: 'idMso カタログを開く（IDをコピー）', keywords: 'idmso catalog', enabled: has, run: () => openCatalog('idMso', '', (v) => void navigator.clipboard.writeText(v).then(() => toast(`${v} をコピーしました`))) },
+    { id: 'view.problems', group: '表示', title: '問題の一覧を表示', enabled: has, run: () => showBottomTab('problems') },
+    { id: 'view.callbacks', group: '表示', title: 'コールバックの一覧を表示', enabled: has, run: () => showBottomTab('callbacks') },
+    { id: 'view.images', group: '表示', title: 'アイコンの一覧を表示', enabled: has, run: () => showBottomTab('images') },
+    { id: 'view.canvas', group: '表示', title: 'キャンバスに移動', shortcut: 'Ctrl+1', run: () => $('canvas').focus() },
+    { id: 'view.tree', group: '表示', title: 'ツリーに移動', shortcut: 'Ctrl+2', run: () => $('tree').focus() },
+    { id: 'view.xml', group: '表示', title: 'XMLエディタに移動', shortcut: 'Ctrl+3', run: () => xmlHandle.focus() },
+    { id: 'view.theme.light', group: '表示', title: 'ライトテーマにする', keywords: 'theme light', run: () => setTheme('light') },
+    { id: 'view.theme.dark', group: '表示', title: 'ダークテーマにする', keywords: 'theme dark', run: () => setTheme('dark') },
+    { id: 'view.theme.system', group: '表示', title: 'テーマをシステムに合わせる', keywords: 'theme system', run: () => setTheme('system') },
+    { id: 'view.layout', group: '表示', title: 'キャンバスとXMLの上下を入れ替える', keywords: 'layout swap', run: () => void invoke('settings.set', { xmlOnTop: !app.settings.xmlOnTop }).then((st) => { app.settings = st; applyTheme(); }) },
+    { id: 'app.settings', group: '設定', title: '設定を開く', run: openSettings },
+  ];
+}
+
 // ---- テーマ ----
 
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -297,6 +348,8 @@ $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
 $('btn-format').addEventListener('click', () => app.store?.format());
 $('btn-settings').addEventListener('click', openSettings);
+$('btn-recipes').addEventListener('click', () => void openRecipes(toast));
+$('btn-command').addEventListener('click', () => openCommandPalette(buildCommands));
 $('btn-catalog').addEventListener('click', () => {
   const el = app.store?.selectedElement;
   const canIcon = el && elements.get(el.localName)?.attrs.includes('imageMso');
@@ -335,6 +388,9 @@ window.addEventListener('keydown', (e) => {
   } else if (ctrl && k === 'o') {
     e.preventDefault();
     void open();
+  } else if (ctrl && k === 'k') {
+    e.preventDefault();
+    openCommandPalette(buildCommands);
   } else if (ctrl && (k === '1' || k === '2' || k === '3')) {
     e.preventDefault();
     if (k === '1') $('canvas').focus();

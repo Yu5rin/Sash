@@ -325,3 +325,14 @@ export function callbacksAt(doc: Document, path: Path): { attr: string; name: st
     .filter((a) => attributes.get(a.name)?.kind === 'callback')
     .map((a) => ({ attr: a.name, name: a.value }));
 }
+
+/** モジュールから、指定の Sub / Function の本体（宣言から End まで）を取り出す。 */
+export function procedureCode(module: VbaModule, proc: VbaProcedure): string {
+  const lines = module.code.split(/\r?\n/);
+  const out: string[] = [];
+  for (let i = proc.line - 1; i < lines.length; i++) {
+    out.push(lines[i]!);
+    if (/^\s*End\s+(Sub|Function)\b/i.test(lines[i]!)) break;
+  }
+  return out.join('\r\n') + '\r\n';
+}

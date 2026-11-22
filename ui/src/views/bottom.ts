@@ -68,7 +68,7 @@ function renderCallbacks(store: PartStore, toast: (msg: string, kind?: 'info' | 
           h(
             'li',
             { class: 'callback', onclick: () => x.uses[0] && store.select(x.uses[0].path, 'other') },
-            h('span', { class: `cb-state ${x.state}`, title: x.reason ?? '' }, vba.status === 'ok' || x.state === 'unused' ? STATE_LABEL[x.state] : '照合なし'),
+            h('span', { class: `cb-state ${vba.status === 'ok' || x.state === 'unused' ? x.state : 'none'}`, title: x.reason ?? '' }, vba.status === 'ok' || x.state === 'unused' ? STATE_LABEL[x.state] : '照合なし'),
             h('code', null, x.name),
             x.reason ? h('span', { class: 'muted small' }, x.reason) : null,
             h('span', { class: 'where' }, x.uses.length ? x.uses.map((u) => `${u.id}.${u.attr}`).join(', ') : x.procedure ? `${x.procedure.module} ${x.procedure.line}行目` : ''),

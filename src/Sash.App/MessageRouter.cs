@@ -9,7 +9,7 @@ namespace Sash.App;
 
 /// <summary>UI からの要求を種類ごとに処理する。要求と応答の型は ui/src/bridge.ts と対応させる。</summary>
 [SupportedOSPlatform("windows")]
-internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, Lazy<ExcelService> excel, Action closeWindow)
+internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, RecipeStore recipes, Lazy<ExcelService> excel, Action closeWindow)
 {
     private static readonly bool ExcelInstalled = ExcelService.IsInstalled;
 
@@ -31,6 +31,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.openWorkbooks" => ExcelInstalled ? await excel.Value.ListOpenWorkbooksAsync() : [],
                 "excel.apply" => await ApplyAsync(Read<ApplyRequest>(body)),
                 "excel.imageMso" => await ImageMsoAsync(Read<ImageMsoRequest>(body)),
+                "recipes.list" => recipes.List(),
+                "recipes.save" => SaveRecipe(body),
+                "recipes.delete" => DeleteRecipe(Read<IdRequest>(body)),
                 "vba.read" => await ReadVbaAsync(Read<PathRequest>(body)),
                 "vba.insert" => await InsertVbaAsync(Read<VbaInsertRequest>(body)),
                 "vba.replaceLine" => await ReplaceLineAsync(Read<VbaReplaceRequest>(body)),
@@ -158,6 +161,25 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         return null;
     }
 
+    // ---- レシピ ----
+
+    private object? SaveRecipe(JsonElement? body)
+    {
+        if (body is not { ValueKind: JsonValueKind.Object } b || System.Text.Json.Nodes.JsonNode.Parse(b.GetRawText()) is not System.Text.Json.Nodes.JsonObject obj)
+        {
+            throw new InvalidOperationException("レシピの内容が不正です。");
+        }
+
+        recipes.Save(obj);
+        return null;
+    }
+
+    private object? DeleteRecipe(IdRequest req)
+    {
+        recipes.Delete(req.Id);
+        return null;
+    }
+
     // ---- 設定 ----
 
     private static SettingsDto ToDto(AppSettings s) =>
@@ -247,6 +269,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     // ---- 要求の型 ----
 
     private sealed record PathRequest(string Path);
+
+    private sealed record IdRequest(string Id);
 
     private sealed record ImageDto(string Id, string Base64);
 

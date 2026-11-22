@@ -7,7 +7,7 @@ import { kindIcon } from '../icons';
 import { createElement, elementAt, ensureTabs, pathOf } from '../model';
 import { canContain, elements } from '../schema';
 
-const ITEMS: readonly string[] = [
+export const PALETTE_ITEMS: readonly string[] = [
   'tab', 'group', 'button', 'toggleButton', 'checkBox', 'splitButton', 'menu', 'dynamicMenu', 'gallery',
   'dropDown', 'comboBox', 'editBox', 'labelControl', 'separator', 'box', 'buttonGroup', 'dialogBoxLauncher',
   'menuSeparator', 'item',
@@ -15,7 +15,7 @@ const ITEMS: readonly string[] = [
 
 export function mountPalette(host: HTMLElement): void {
   host.replaceChildren(
-    ...ITEMS.map((tag) =>
+    ...PALETTE_ITEMS.map((tag) =>
       h(
         'li',
         {

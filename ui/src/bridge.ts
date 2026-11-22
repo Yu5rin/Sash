@@ -92,6 +92,9 @@ export interface HostApi {
   'excel.apply': { req: { path: string; parts: PartToSave[]; saveIfDirty: boolean }; res: ApplyResult };
   'excel.imageMso': { req: { names: string[]; size: number }; res: Record<string, string | null> };
   'excel.labels': { req: { ids: string[] }; res: Record<string, string> };
+  'recipes.list': { req: undefined; res: unknown[] };
+  'recipes.save': { req: Record<string, unknown>; res: null };
+  'recipes.delete': { req: { id: string }; res: null };
   'vba.read': { req: { path: string }; res: { status: VbaReadStatus; modules: VbaModuleDto[] } };
   'vba.insert': { req: { path: string; module: string; code: string; documentModule: boolean }; res: boolean };
   'vba.replaceLine': { req: { path: string; module: string; line: number; expected: string; replacement: string }; res: boolean };
@@ -220,6 +223,8 @@ const mock = {
       case 'excel.imageMso':
       case 'excel.labels':
         return r({});
+      case 'recipes.list':
+        return r([]);
       case 'vba.read':
         return r({ status: 'noExcel', modules: [] });
       default:
