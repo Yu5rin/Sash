@@ -1,6 +1,9 @@
+using System.Runtime.Versioning;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Sash.Core.Settings;
+using Sash.Excel;
 
 namespace Sash.App;
 
@@ -8,16 +11,24 @@ namespace Sash.App;
 /// メインウィンドウ。WinForms は外枠だけを持ち、画面はすべて WebView2 で描く（仕様書 §3）。
 /// 環境変数 SASH_UI_DEV_URL を設定すると、埋め込み UI の代わりに Vite の開発サーバーを表示する。
 /// </summary>
+[SupportedOSPlatform("windows")]
 internal sealed class MainForm : Form
 {
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
     private readonly MessageRouter _router;
+    private readonly Lazy<ExcelService> _excel = new(() => new ExcelService(AppPaths.ImageMsoCache));
     private readonly string? _initialFile;
+    private bool _closeConfirmed;
+    private bool _uiReady;
 
     public MainForm(string? initialFile)
     {
         _initialFile = initialFile;
-        _router = new MessageRouter(this);
+        _router = new MessageRouter(this, new SettingsStore(AppPaths.Settings), _excel, () => BeginInvoke(() =>
+        {
+            _closeConfirmed = true;
+            Close();
+        }));
 
         Text = "Sash";
         ClientSize = new Size(1440, 900);
@@ -26,6 +37,26 @@ internal sealed class MainForm : Form
         Controls.Add(_webView);
 
         Load += async (_, _) => await InitializeWebViewAsync();
+        FormClosing += OnFormClosing;
+        FormClosed += (_, _) =>
+        {
+            if (_excel.IsValueCreated)
+            {
+                _excel.Value.Dispose();
+            }
+        };
+    }
+
+    /// <summary>未保存の変更があるかは UI が知っているので、閉じる前に UI に確認させる。</summary>
+    private void OnFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (_closeConfirmed || !_uiReady || _webView.CoreWebView2 is null)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        PostEvent(new { @event = "closeRequested" });
     }
 
     private async Task InitializeWebViewAsync()
@@ -39,6 +70,7 @@ internal sealed class MainForm : Form
         {
             MessageBox.Show(this, "WebView2 ランタイムが見つかりません。Microsoft Edge WebView2 ランタイムをインストールしてください。",
                 "Sash", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _closeConfirmed = true;
             Close();
             return;
         }
@@ -47,7 +79,9 @@ internal sealed class MainForm : Form
         core.Settings.AreDevToolsEnabled = IsDevelopment;
         core.Settings.AreDefaultContextMenusEnabled = IsDevelopment;
         core.Settings.IsStatusBarEnabled = false;
+        core.Settings.AreBrowserAcceleratorKeysEnabled = false; // F5 の再読み込みなどを無効にし、アプリのショートカットに使う
         core.WebMessageReceived += OnWebMessageReceived;
+        core.NewWindowRequested += (_, e) => e.Handled = true;
 
         var devUrl = Environment.GetEnvironmentVariable("SASH_UI_DEV_URL");
         if (!string.IsNullOrEmpty(devUrl))
@@ -78,6 +112,9 @@ internal sealed class MainForm : Form
             : env.CreateWebResourceResponse(stream, 200, "OK", $"Content-Type: {UiAssets.ContentTypeOf(path)}");
     }
 
+    private void PostEvent(object message) =>
+        _webView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(message, HostJson.Options));
+
     private async void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         HostRequest? request;
@@ -95,15 +132,25 @@ internal sealed class MainForm : Form
             return;
         }
 
-        // 起動時に引数で渡されたファイルがあれば、最初の file.open で使う
-        if (request.Type == "app.ready")
+        switch (request.Type)
         {
-            _webView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(
-                new HostResponse(request.Id, true, new { initialFile = _initialFile }, null), HostJson.Options));
-            return;
+            case "app.ready":
+                // 起動時に引数で渡されたファイルがあれば、UI に開かせる
+                _uiReady = true;
+                PostEvent(new HostResponse(request.Id, true, new { initialFile = _initialFile }, null));
+                return;
+
+            case "file.drop":
+                // ドロップされたファイルのフルパスは、WebView2 の追加オブジェクトからしか取れない
+                if (e.AdditionalObjects?.FirstOrDefault() is CoreWebView2File file)
+                {
+                    PostEvent(new { @event = "fileDropped", path = file.Path });
+                }
+
+                return;
         }
 
         var response = await _router.HandleAsync(request);
-        _webView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(response, HostJson.Options));
+        PostEvent(response);
     }
 }

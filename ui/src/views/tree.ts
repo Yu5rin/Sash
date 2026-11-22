@@ -4,7 +4,7 @@ import { app } from '../app';
 import { canDropInto, drop, endDrag, startDrag } from '../dnd';
 import { h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
-import { displayName, elementAt, isAncestorPath, pathOf, samePath, type Path } from '../model';
+import { displayName, pathOf, samePath, type Path } from '../model';
 
 const collapsed = new Set<string>();
 
@@ -172,11 +172,3 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
   }
   e.preventDefault();
 }
-
-/** 選択中の要素が、指定のパスの子孫か（キャンバスでの表示判定に使う）。 */
-export function selectionWithin(path: Path): boolean {
-  const sel = app.store?.selection;
-  return sel !== null && sel !== undefined && (samePath(sel, path) || isAncestorPath(path, sel));
-}
-
-export { elementAt };
