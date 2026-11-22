@@ -6,6 +6,7 @@ import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { openModal } from './modal';
+import { t } from '../i18n';
 
 export type CatalogMode = 'idMso' | 'imageMso';
 
@@ -23,7 +24,7 @@ const TYPE_FILTERS: readonly [string, string][] = [
 
 export function openCatalog(mode: CatalogMode, current: string, apply: (value: string) => void, preferType = ''): void {
   let type = preferType;
-  const input = h('input', { type: 'search', placeholder: mode === 'idMso' ? 'idMso を検索（例：TabHome、sum、貼り付け）' : 'imageMso を検索（例：AutoSum、save）', value: current, spellcheck: false });
+  const input = h('input', { type: 'search', placeholder: mode === 'idMso' ? t('idMso を検索（例：TabHome、sum、貼り付け）') : t('imageMso を検索（例：AutoSum、save）'), value: current, spellcheck: false });
   const filters = h('div', { class: 'segmented wrap' });
   const results = h('div', { class: mode === 'imageMso' ? 'catalog-grid' : 'catalog-list' });
   const status = h('div', { class: 'catalog-status' });
@@ -40,7 +41,7 @@ export function openCatalog(mode: CatalogMode, current: string, apply: (value: s
     const fav = favorites.has(c.id);
     return h(
       'div',
-      { class: `catalog-item${c.id === current ? ' selected' : ''}`, tabIndex: 0, title: [c.id, label, c.tab && `タブ：${c.tab}`, c.group && `グループ：${c.group}`].filter(Boolean).join('\n'), onclick: () => choose(c.id), onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && choose(c.id) },
+      { class: `catalog-item${c.id === current ? ' selected' : ''}`, tabIndex: 0, title: [c.id, label, c.tab && t('タブ：{tab}', { tab: c.tab }), c.group && t('グループ：{group}', { group: c.group })].filter(Boolean).join('\n'), onclick: () => choose(c.id), onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && choose(c.id) },
       mode === 'imageMso' || icon ? (icon ? h('img', { src: icon, width: 32, height: 32, alt: '' }) : h('span', { class: 'rb-icon placeholder', style: 'width:32px;height:32px' }, c.id.slice(0, 1))) : null,
       h('span', { class: 'catalog-id' }, c.id),
       label ? h('span', { class: 'catalog-label' }, label) : null,
@@ -48,7 +49,7 @@ export function openCatalog(mode: CatalogMode, current: string, apply: (value: s
       h('button', {
         type: 'button',
         class: `icon-button fav${fav ? ' on' : ''}`,
-        title: fav ? 'お気に入りから外す' : 'お気に入りに追加',
+        title: fav ? t('お気に入りから外す') : t('お気に入りに追加'),
         onclick: (e: MouseEvent) => {
           e.stopPropagation();
           favorites.toggle(c.id);
@@ -70,7 +71,7 @@ export function openCatalog(mode: CatalogMode, current: string, apply: (value: s
       list = [...head, ...list.filter((c) => !head.includes(c))];
     }
     results.replaceChildren(...list.map(item));
-    status.textContent = `${list.length} 件${list.length >= 240 ? '（上位のみ表示）' : ''}${labels.size === 0 ? ' ・ 日本語名はExcelがある環境で取得します' : ''}`;
+    status.textContent = t('{n} 件', { n: list.length }) + (list.length >= 240 ? t('（上位のみ表示）') : '') + (labels.size === 0 ? t(' ・ 日本語名はExcelがある環境で取得します') : '');
   };
 
   if (mode === 'idMso') {
@@ -84,7 +85,7 @@ export function openCatalog(mode: CatalogMode, current: string, apply: (value: s
           (e.currentTarget as HTMLElement).classList.add('active');
           render();
         },
-      }, text));
+      }, t(text)));
     }
   }
 
@@ -95,7 +96,7 @@ export function openCatalog(mode: CatalogMode, current: string, apply: (value: s
   });
 
   const content = h('div', { class: 'catalog' }, input, mode === 'idMso' ? filters : null, results, status);
-  const modal = openModal(mode === 'idMso' ? 'idMso を選ぶ' : 'imageMso を選ぶ', content, { wide: true });
+  const modal = openModal(mode === 'idMso' ? t('idMso を選ぶ') : t('imageMso を選ぶ'), content, { wide: true });
   input.select();
   render();
   onMsoIconsLoaded(() => {

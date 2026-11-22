@@ -5,6 +5,7 @@ import { canDropInto, drop, endDrag, startDrag } from '../dnd';
 import { h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { displayName, pathOf, samePath, type Path } from '../model';
+import { t } from '../i18n';
 
 const collapsed = new Set<string>();
 
@@ -86,8 +87,8 @@ function renderTree(host: HTMLElement): void {
       h('span', { class: 'kind-icon', title: el.localName }, svg(kindIcon(el.localName))),
       h('span', { class: 'tree-label' }, name && name !== id ? name : el.localName),
       id ? h('span', { class: 'tree-id' }, id) : null,
-      c && c.error > 0 ? h('span', { class: 'badge error', title: `エラー ${c.error}` }, String(c.error)) : null,
-      c && c.error === 0 && c.warning > 0 ? h('span', { class: 'badge warning', title: `警告 ${c.warning}` }, String(c.warning)) : null,
+      c && c.error > 0 ? h('span', { class: 'badge error', title: t('エラー {n}', { n: c.error }) }, String(c.error)) : null,
+      c && c.error === 0 && c.warning > 0 ? h('span', { class: 'badge warning', title: t('警告 {n}', { n: c.warning }) }, String(c.warning)) : null,
     );
     rows.push(row);
     if (hasKids && !isCollapsed) for (const child of Array.from(el.children)) walk(child, depth + 1);

@@ -125,7 +125,6 @@ export const en: Readonly<Record<string, string>> = {
   'レイアウト': 'Layout',
   'メニューのグループ': 'Menu group',
   '基本': 'Basic',
-  '表示': 'Appearance',
   '動作': 'Behavior',
   '詳細': 'Advanced',
   '独自タブ＋グループ＋ボタン3つ': 'Custom tab + group + 3 buttons',

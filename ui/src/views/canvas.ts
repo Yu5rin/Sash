@@ -9,19 +9,25 @@ import { childElements, elementAt, pathOf, samePath, isAncestorPath, type Path }
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
 import { defFor } from '../schema';
+import { lang, t as tr } from '../i18n';
 
 /** 表示する組み込みタブ（Excel の既定の並び）。 */
-const BUILTIN_TABS: readonly [string, string][] = [
-  ['TabHome', 'ホーム'],
-  ['TabInsert', '挿入'],
-  ['TabPageLayoutExcel', 'ページ レイアウト'],
-  ['TabFormulas', '数式'],
-  ['TabData', 'データ'],
-  ['TabReview', '校閲'],
-  ['TabView', '表示'],
-  ['TabDeveloper', '開発'],
-  ['HelpTab', 'ヘルプ'],
+const BUILTIN_TABS: readonly [string, string, string][] = [
+  ['TabHome', 'ホーム', 'Home'],
+  ['TabInsert', '挿入', 'Insert'],
+  ['TabPageLayoutExcel', 'ページ レイアウト', 'Page Layout'],
+  ['TabFormulas', '数式', 'Formulas'],
+  ['TabData', 'データ', 'Data'],
+  ['TabReview', '校閲', 'Review'],
+  ['TabView', '表示', 'View'],
+  ['TabDeveloper', '開発', 'Developer'],
+  ['HelpTab', 'ヘルプ', 'Help'],
 ];
+
+/** 組み込みタブの表示名。「表示」は属性の分類名と同じ文言なので、辞書ではなくここで英語にする。 */
+function tabName(ja: string, en: string): string {
+  return lang === 'en' ? en : ja;
+}
 
 /** 表示中のタブ。自作タブはパス、組み込みタブは idMso で表す。 */
 let activeTab: { kind: 'path'; path: Path } | { kind: 'builtin'; idMso: string } | { kind: 'backstage' } | null = null;
@@ -75,7 +81,8 @@ function isBuiltinTab(idMso: string): boolean {
 }
 
 function builtinTabLabel(idMso: string): string {
-  return BUILTIN_TABS.find(([id]) => id === idMso)?.[1] ?? labels.get(idMso) ?? idMso;
+  const builtin = BUILTIN_TABS.find(([id]) => id === idMso);
+  return builtin ? tabName(builtin[1], builtin[2]) : labels.get(idMso) ?? idMso;
 }
 
 // ---- 描画 ----
@@ -99,7 +106,7 @@ function collectTabs(doc: Document): TabEntry[] {
   const tabEls = childElements(findChild(ribbon, 'tabs') ?? doc.createElement('x')).filter((t) => t.localName === 'tab');
   const entries: TabEntry[] = fromScratch
     ? []
-    : BUILTIN_TABS.map(([idMso, label]) => ({ key: `builtin:${idMso}`, label, builtin: true, el: null, idMso }));
+    : BUILTIN_TABS.map(([idMso, ja, en]) => ({ key: `builtin:${idMso}`, label: tabName(ja, en), builtin: true, el: null, idMso }));
 
   for (const t of tabEls) {
     const idMso = t.getAttribute('idMso');
@@ -156,13 +163,13 @@ function renderCanvas(host: HTMLElement): void {
     h('span', {
       class: `rb-tab file${activeTab?.kind === 'backstage' ? ' active' : ''}`,
       role: 'tab',
-      title: 'Backstage（ファイル タブ）を表示',
+      title: tr('Backstage（ファイル タブ）を表示'),
       onclick: (e: MouseEvent) => {
         e.stopPropagation();
         activeTab = { kind: 'backstage' };
         renderCanvas(host);
       },
-    }, 'ファイル'),
+    }, tr('ファイル')),
     tabs.map((t) =>
       h(
         'span',
@@ -185,7 +192,7 @@ function renderCanvas(host: HTMLElement): void {
             hideIndicator(host);
           },
         },
-        t.label || '(ラベルなし)',
+        t.label || tr('(ラベルなし)'),
       ),
     ),
   );
@@ -214,7 +221,7 @@ function renderCanvas(host: HTMLElement): void {
     }
     if (active.el) body.dataset['path'] = pathOf(active.el).join('.');
     if (groups.length === 0 && !active.builtin) {
-      body.append(h('div', { class: 'rb-empty' }, 'パレットから「グループ」をここにドラッグしてください'));
+      body.append(h('div', { class: 'rb-empty' }, tr('パレットから「グループ」をここにドラッグしてください')));
     }
   }
 
@@ -267,14 +274,14 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
         },
       },
       h('div', { class: 'ctx-title', title: idMso }, labels.get(idMso) ?? idMso),
-      h('div', { class: 'ctx-builtin' }, '（組み込みの項目）'),
-      h('div', { class: 'ctx-items', dataset: { container: mp.join('.') } }, m.children.length ? childElements(m).flatMap((c) => item(c, 0)) : h('div', { class: 'rb-menu-item muted' }, 'ここに項目をドラッグ')),
+      h('div', { class: 'ctx-builtin' }, tr('（組み込みの項目）')),
+      h('div', { class: 'ctx-items', dataset: { container: mp.join('.') } }, m.children.length ? childElements(m).flatMap((c) => item(c, 0)) : h('div', { class: 'rb-menu-item muted' }, tr('ここに項目をドラッグ'))),
     );
   });
   if (!cms && menus.length === 0) {
-    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } }, h('h3', null, 'コンテキストメニュー（右クリック）'), h('div', { class: 'muted' }, 'パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます'));
+    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } }, h('h3', null, tr('コンテキストメニュー（右クリック）')), h('div', { class: 'muted' }, tr('パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます')));
   }
-  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, 'コンテキストメニュー（右クリック）'), h('div', { class: 'ctx-cards' }, cards));
+  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, tr('コンテキストメニュー（右クリック）')), h('div', { class: 'ctx-cards' }, cards));
 }
 
 function isSelected(el: Element): boolean {
@@ -285,7 +292,7 @@ function renderQat(doc: Document, errorPaths: Set<string>): HTMLElement | null {
   const qat = findChild(findChild(doc.documentElement, 'ribbon'), 'qat');
   if (!qat) return null;
   const items = childElements(qat).flatMap((c) => childElements(c));
-  return h('div', { class: 'rb-qat', dataset: { path: pathOf(qat).join('.') } }, h('span', { class: 'rb-qat-label' }, 'クイック アクセス'), items.map((c) => renderControl(c, 'small', errorPaths)));
+  return h('div', { class: 'rb-qat', dataset: { path: pathOf(qat).join('.') } }, h('span', { class: 'rb-qat-label' }, tr('クイック アクセス')), items.map((c) => renderControl(c, 'small', errorPaths)));
 }
 
 function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
@@ -319,7 +326,7 @@ function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
       launcher
         ? h('span', {
             class: `rb-launcher${isSelected(launcher) ? ' selected' : ''}`,
-            title: 'ダイアログ起動ツール',
+            title: tr('ダイアログ起動ツール'),
             dataset: { path: pathOf(launcher).join('.') },
             onclick: (e: MouseEvent) => {
               e.stopPropagation();
@@ -487,7 +494,7 @@ function menuPopup(el: Element): HTMLElement | null {
     }
   };
   walk(el, 0);
-  if (items.length === 0) items.push(h('div', { class: 'rb-menu-item muted' }, el.localName === 'dynamicMenu' ? '中身は getContent で作られます' : '（空）'));
+  if (items.length === 0) items.push(h('div', { class: 'rb-menu-item muted' }, el.localName === 'dynamicMenu' ? tr('中身は getContent で作られます') : tr('（空）')));
   return h('div', { class: 'rb-menu-popup', dataset: { container: path.join('.') } }, items);
 }
 

@@ -8,6 +8,7 @@ import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, setAttr, suggestId, usedIds } from '../model';
 import type { ImageEntry } from '../store';
 import { attributes, attrsOfEl, callbackSignature, defFor, ID_PATTERN, type AttrDef, type Category } from '../schema';
+import { lang, t } from '../i18n';
 
 export interface InspectorHooks {
   pickIdMso(current: string, apply: (v: string) => void): void;
@@ -17,6 +18,11 @@ export interface InspectorHooks {
 }
 
 const CATEGORIES: readonly Category[] = ['基本', '表示', '動作', '詳細'];
+
+/** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
+function categoryName(cat: string): string {
+  return lang === 'en' && cat === '表示' ? 'Appearance' : t(cat);
+}
 
 let hooks: InspectorHooks;
 
@@ -53,7 +59,7 @@ function renderInspector(host: HTMLElement): void {
   const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement.dataset['attr'] : undefined;
 
   if (!store || !el) {
-    host.replaceChildren(h('div', { class: 'insp-empty' }, store ? 'キャンバスかツリーで要素を選択してください' : ''));
+    host.replaceChildren(h('div', { class: 'insp-empty' }, store ? t('キャンバスかツリーで要素を選択してください') : ''));
     return;
   }
   const def = defFor(el);
@@ -63,7 +69,7 @@ function renderInspector(host: HTMLElement): void {
     'div',
     { class: 'insp-header' },
     h('span', { class: 'kind-icon' }, svg(kindIcon(el.localName))),
-    h('div', null, h('div', { class: 'insp-title' }, def?.title ?? el.localName), h('div', { class: 'insp-sub' }, `<${el.localName}>${identifierOf(el) ? ` ${identifierOf(el)}` : ''}`)),
+    h('div', null, h('div', { class: 'insp-title' }, def ? t(def.title) : el.localName), h('div', { class: 'insp-sub' }, `<${el.localName}>${identifierOf(el) ? ` ${identifierOf(el)}` : ''}`)),
   );
 
   const problemList = problems.length
@@ -75,7 +81,7 @@ function renderInspector(host: HTMLElement): void {
     : null;
 
   if (!def || def.opaque) {
-    host.replaceChildren(header, h('div', { class: 'insp-empty' }, 'この要素の属性はXMLエディタで編集してください'));
+    host.replaceChildren(header, h('div', { class: 'insp-empty' }, t('この要素の属性はXMLエディタで編集してください')));
     return;
   }
 
@@ -86,7 +92,7 @@ function renderInspector(host: HTMLElement): void {
       .filter((d) => !d.staticOf && d.name !== 'imageMso' && d.name !== 'getImage' && !(cat !== '表示' && d.name === 'image'))
       .map((d) => (d.name === 'image' ? iconRow(el) : row(el, d)));
     // 静的な値を持たないコールバック（onAction など）は「動作」に出す
-    return rows.length ? h('section', { class: 'insp-section' }, h('h3', null, cat), rows) : null;
+    return rows.length ? h('section', { class: 'insp-section' }, h('h3', null, categoryName(cat)), rows) : null;
   });
 
   host.replaceChildren(header, ...[problemList, ...sections].filter((x): x is HTMLElement => x !== null));
@@ -95,9 +101,9 @@ function renderInspector(host: HTMLElement): void {
 }
 
 function labelCell(d: AttrDef, tag: string): HTMLElement {
-  const tips = [d.desc];
-  if (d.example) tips.push(`例：${d.name}="${d.example}"`);
-  if (d.kind === 'callback') tips.push(`Sub 名前(${callbackSignature(d.name, tag)})`);
+  const tips = [t(d.desc)];
+  if (d.example) tips.push(`${t('例：')}${d.name}="${t(d.example)}"`);
+  if (d.kind === 'callback') tips.push(t('Sub 名前({signature})', { signature: callbackSignature(d.name, tag) }));
   return h('label', { class: 'insp-label', title: tips.join('\n') }, d.name);
 }
 
@@ -129,40 +135,40 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
   switch (d.kind) {
     case 'bool': {
       const seg = h('div', { class: 'segmented', role: 'radiogroup', dataset: { attr: d.name }, tabIndex: 0 });
-      for (const [v, text] of [['', '未指定'], ['true', 'オン'], ['false', 'オフ']] as const) {
+      for (const [v, text] of [['', t('未指定')], ['true', t('オン')], ['false', t('オフ')]] as const) {
         const active = (value === '1' ? 'true' : value === '0' ? 'false' : value) === v;
         seg.append(h('button', { type: 'button', class: active ? 'active' : '', role: 'radio', 'aria-checked': String(active), onclick: () => commit(d.name, v || null) }, text));
       }
       return seg;
     }
     case 'enum': {
-      const sel = h('select', { dataset: { attr: d.name }, onchange: (e: Event) => commit(d.name, (e.target as HTMLSelectElement).value || null) }, h('option', { value: '' }, '未指定'), (d.values ?? []).map((v) => h('option', { value: v, selected: v === value }, v)));
+      const sel = h('select', { dataset: { attr: d.name }, onchange: (e: Event) => commit(d.name, (e.target as HTMLSelectElement).value || null) }, h('option', { value: '' }, t('未指定')), (d.values ?? []).map((v) => h('option', { value: v, selected: v === value }, v)));
       return sel;
     }
     case 'int':
-      return textInput(d.name, value, { type: 'number', validate: (v) => (/^\d+$/.test(v) ? null : '整数で入力してください') });
+      return textInput(d.name, value, { type: 'number', validate: (v) => (/^\d+$/.test(v) ? null : t('整数で入力してください')) });
     case 'id':
       return h(
         'div',
         { class: 'insp-inline' },
-        textInput(d.name, value, { validate: (v) => (ID_PATTERN.test(v) ? null : '英字か _ で始め、英数字と _ . - だけを使ってください') }),
+        textInput(d.name, value, { validate: (v) => (ID_PATTERN.test(v) ? null : t('英字か _ で始め、英数字と _ . - だけを使ってください')) }),
         h('button', {
           type: 'button',
           class: 'small',
-          title: '種類と連番からidを提案する',
+          title: t('種類と連番からidを提案する'),
           onclick: () => {
             const used = usedIds(el.ownerDocument);
             used.delete(value);
             commit('id', suggestId(el.localName, el.getAttribute('label'), used), { idMso: null, idQ: null });
           },
-        }, '提案'),
+        }, t('提案')),
       );
     case 'idMso':
       return h(
         'div',
         { class: 'insp-inline' },
         textInput(d.name, value),
-        h('button', { type: 'button', class: 'small', onclick: () => hooks.pickIdMso(value, (v) => commit(d.name, v, d.name === 'idMso' ? { id: null, idQ: null } : {})) }, '選ぶ'),
+        h('button', { type: 'button', class: 'small', onclick: () => hooks.pickIdMso(value, (v) => commit(d.name, v, d.name === 'idMso' ? { id: null, idQ: null } : {})) }, t('選ぶ')),
       );
     case 'callback':
       return callbackEditor(el, d.name);
@@ -178,7 +184,7 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
     const v = input.value.trim();
     const ok = !v || /^[A-Za-z_][A-Za-z0-9_.!]*$/.test(v);
     input.classList.toggle('invalid', !ok);
-    input.title = ok ? '' : 'VBAのSub名として使えない文字があります';
+    input.title = ok ? '' : t('VBAのSub名として使えない文字があります');
     if (!ok || v === value) return;
     // 名前を変えたときは、VBA 側の Sub 名も変えるかを確認する
     if (value && v) void renameCallback(app.store!.selection!, attr, value, v);
@@ -190,7 +196,7 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
     if (e.key === 'Escape') input.value = value;
   });
   const status = value ? vba.statuses().find((x) => x.name === value) : undefined;
-  const stateText = status && vba.status === 'ok' ? { implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: '' }[status.state] : '';
+  const stateText = status && vba.status === 'ok' ? t({ implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: '' }[status.state]) : '';
   return h(
     'div',
     { class: 'insp-callback' },
@@ -198,7 +204,7 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
       'div',
       { class: 'insp-inline' },
       input,
-      value ? null : h('button', { type: 'button', class: 'small', onclick: () => commit(attr, defaultCallbackName(el, attr)) }, '追加'),
+      value ? null : h('button', { type: 'button', class: 'small', onclick: () => commit(attr, defaultCallbackName(el, attr)) }, lang === 'en' ? 'Add' : '追加'),
     ),
     value ? h('code', { class: 'insp-signature' }, `Sub ${value}(${callbackSignature(attr, el.localName)})`) : null,
     stateText ? h('span', { class: `cb-state ${status!.state}`, title: status!.reason ?? '' }, stateText) : null,
@@ -217,7 +223,7 @@ function row(el: Element, d: AttrDef): HTMLElement {
         {
           type: 'button',
           class: `mode-switch${useDynamic ? ' on' : ''}`,
-          title: useDynamic ? `固定の値（${d.name}）に戻す` : `VBAで動的に返す（${dyn.name}）に切り替える`,
+          title: useDynamic ? t('固定の値（{name}）に戻す', { name: d.name }) : t('VBAで動的に返す（{name}）に切り替える', { name: dyn.name }),
           onclick: () => (useDynamic ? commit(dyn.name, null) : commit(dyn.name, defaultCallbackName(el, dyn.name), { [d.name]: null })),
         },
         'VBA',
@@ -244,16 +250,16 @@ function iconRow(el: Element): HTMLElement {
         else commit('image', null, clear);
       },
     },
-    h('option', { value: '', selected: mode === '' }, 'なし'),
-    h('option', { value: 'imageMso', selected: mode === 'imageMso' }, '組み込みアイコン'),
-    h('option', { value: 'image', selected: mode === 'image' }, '画像ファイル'),
-    canDynamic ? h('option', { value: 'getImage', selected: mode === 'getImage' }, 'VBAで返す') : null,
+    h('option', { value: '', selected: mode === '' }, t('なし')),
+    h('option', { value: 'imageMso', selected: mode === 'imageMso' }, t('組み込みアイコン')),
+    h('option', { value: 'image', selected: mode === 'image' }, t('画像ファイル')),
+    canDynamic ? h('option', { value: 'getImage', selected: mode === 'getImage' }, t('VBAで返す')) : null,
   );
 
   let detail: HTMLElement | null = null;
   if (mode === 'imageMso') {
     const v = el.getAttribute('imageMso') ?? '';
-    detail = h('div', { class: 'insp-inline' }, textInput('imageMso', v), h('button', { type: 'button', class: 'small', onclick: () => hooks.pickImageMso(v, (x) => commit('imageMso', x)) }, '選ぶ'));
+    detail = h('div', { class: 'insp-inline' }, textInput('imageMso', v), h('button', { type: 'button', class: 'small', onclick: () => hooks.pickImageMso(v, (x) => commit('imageMso', x)) }, t('選ぶ')));
   } else if (mode === 'image') {
     const id = el.getAttribute('image') ?? '';
     const img = store.images.get(id);
@@ -265,15 +271,15 @@ function iconRow(el: Element): HTMLElement {
         'select',
         { dataset: { attr: 'image' }, onchange: (e: Event) => commit('image', (e.target as HTMLSelectElement).value || null) },
         [...store.images.keys()].map((k) => h('option', { value: k, selected: k === id }, k)),
-        img ? null : h('option', { value: id, selected: true }, id ? `${id}（見つかりません）` : '選択してください'),
+        img ? null : h('option', { value: id, selected: true }, id ? t('{id}（見つかりません）', { id }) : t('選択してください')),
       ),
-      img?.edit ? h('button', { type: 'button', class: 'small', title: '元画像と設定から加工し直す', onclick: () => hooks.editImage(img) }, '加工し直す') : null,
-      h('button', { type: 'button', class: 'small', onclick: () => hooks.editImage() }, '新しく作る'),
-      h('button', { type: 'button', class: 'small', title: 'アイコンライブラリから選ぶ', onclick: () => hooks.pickFromLibrary() }, 'ライブラリ'),
+      img?.edit ? h('button', { type: 'button', class: 'small', title: t('元画像と設定から加工し直す'), onclick: () => hooks.editImage(img) }, t('加工し直す')) : null,
+      h('button', { type: 'button', class: 'small', onclick: () => hooks.editImage() }, t('新しく作る')),
+      h('button', { type: 'button', class: 'small', title: t('アイコンライブラリから選ぶ'), onclick: () => hooks.pickFromLibrary() }, t('ライブラリ')),
     );
   } else if (mode === 'getImage') {
     detail = callbackEditor(el, 'getImage');
   }
   const d = attributes.get('image')!;
-  return h('div', { class: 'insp-row wide' }, h('label', { class: 'insp-label', title: d.desc }, 'アイコン'), h('div', { class: 'insp-value' }, sel, detail));
+  return h('div', { class: 'insp-row wide' }, h('label', { class: 'insp-label', title: t(d.desc) }, t('アイコン')), h('div', { class: 'insp-value' }, sel, detail));
 }

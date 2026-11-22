@@ -6,6 +6,7 @@ import { endDrag, startDrag } from '../dnd';
 import { h } from '../dom';
 import { childElements, elementAt, pathOf, samePath, type Path } from '../model';
 import { msoIcon } from '../msoIcons';
+import { t as tr } from '../i18n';
 
 /** 組み込みの Backstage のメニュー（表示だけ）。 */
 const BUILTIN_NAV = ['ホーム', '新規', '開く', '情報', '上書き保存', '名前を付けて保存', '印刷', '共有', 'エクスポート', '閉じる'];
@@ -97,9 +98,9 @@ function item(el: Element, ctx: Ctx): HTMLElement {
     case 'imageControl':
       return h('div', c('bs-image'), icon(el, 48));
     case 'groupBox':
-      return h('div', c('bs-groupbox'), h('div', { class: 'bs-groupbox-label' }, label), list(el, '', ctx, 'ここに項目をドラッグ'));
+      return h('div', c('bs-groupbox'), h('div', { class: 'bs-groupbox-label' }, label), list(el, '', ctx, tr('ここに項目をドラッグ')));
     case 'layoutContainer':
-      return h('div', c(`bs-layout ${el.getAttribute('layoutChildren') === 'horizontal' ? 'horizontal' : 'vertical'}`), list(el, '', ctx, 'ここに項目をドラッグ'));
+      return h('div', c(`bs-layout ${el.getAttribute('layoutChildren') === 'horizontal' ? 'horizontal' : 'vertical'}`), list(el, '', ctx, tr('ここに項目をドラッグ')));
     default:
       return h('div', c('bs-label'), `<${el.localName}> ${label}`);
   }
@@ -126,7 +127,7 @@ function group(el: Element, ctx: Ctx): HTMLElement {
     common(el, `bs-group ${el.getAttribute('style') ?? ''}`, ctx),
     el.getAttribute('showLabel') === 'false' ? null : h('div', { class: 'bs-group-title' }, labelOf(el)),
     el.getAttribute('helperText') ? h('div', { class: 'bs-helper' }, el.getAttribute('helperText')) : null,
-    h('div', { class: 'bs-group-body' }, list(find('primaryItem'), 'primary', ctx, '主な項目'), h('div', { class: 'bs-group-items' }, list(find('topItems'), 'top', ctx, 'ここに項目をドラッグ'), list(find('bottomItems'), 'bottom', ctx, ''))),
+    h('div', { class: 'bs-group-body' }, list(find('primaryItem'), 'primary', ctx, tr('主な項目')), h('div', { class: 'bs-group-items' }, list(find('topItems'), 'top', ctx, tr('ここに項目をドラッグ')), list(find('bottomItems'), 'bottom', ctx, ''))),
   );
 }
 
@@ -134,11 +135,11 @@ function group(el: Element, ctx: Ctx): HTMLElement {
 export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement {
   const store = app.store!;
   if (store.version === 'office2007') {
-    return h('div', { class: 'bs-view empty' }, h('p', { class: 'muted' }, 'Backstage は customUI14（2010以降）の形式でのみ編集できます'));
+    return h('div', { class: 'bs-view empty' }, h('p', { class: 'muted' }, tr('Backstage は customUI14（2010以降）の形式でのみ編集できます')));
   }
   const bs = childElements(doc.documentElement).find((c) => c.localName === 'backstage');
   if (!bs) {
-    return h('div', { class: 'bs-view empty', dataset: { bsNew: '1' } }, h('p', null, '［ファイル］タブ（Backstage）に、自分のタブやボタンを足せます。'), h('p', { class: 'muted' }, 'パレットの「Backstage」をここにドラッグするか、ダブルクリックしてください。'));
+    return h('div', { class: 'bs-view empty', dataset: { bsNew: '1' } }, h('p', null, tr('［ファイル］タブ（Backstage）に、自分のタブやボタンを足せます。')), h('p', { class: 'muted' }, tr('パレットの「Backstage」をここにドラッグするか、ダブルクリックしてください。')));
   }
   const ctx: Ctx = { sel: store.selection, errors };
   const tabs = childElements(bs).filter((c) => c.localName === 'tab');
@@ -149,7 +150,7 @@ export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement
     'nav',
     { class: 'bs-nav', dataset: { container: pathOf(bs).join('.') } },
     h('div', { class: 'bs-back' }, '←'),
-    BUILTIN_NAV.map((n) => h('div', { class: 'bs-nav-builtin' }, n)),
+    BUILTIN_NAV.map((n) => h('div', { class: 'bs-nav-builtin' }, tr(n))),
     h('div', { class: 'bs-nav-sep' }),
     childElements(bs).map((c) =>
       c.localName === 'tab'
@@ -160,11 +161,11 @@ export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement
 
   let content: HTMLElement;
   if (!tab) {
-    content = h('div', { class: 'bs-content' }, h('p', { class: 'muted' }, 'パレットの「タブ」を左のメニューにドラッグすると、Backstage にタブを足せます'));
+    content = h('div', { class: 'bs-content' }, h('p', { class: 'muted' }, tr('パレットの「タブ」を左のメニューにドラッグすると、Backstage にタブを足せます')));
   } else {
     const col = (name: string) => childElements(tab!).find((c) => c.localName === name);
     const column = (el: Element | undefined) =>
-      el ? h('div', { ...common(el, 'bs-column', ctx), draggable: false, dataset: { path: pathOf(el).join('.'), container: pathOf(el).join('.') } }, el.children.length ? childElements(el).map((g) => group(g, ctx)) : h('div', { class: 'bs-empty' }, 'グループをドラッグ')) : null;
+      el ? h('div', { ...common(el, 'bs-column', ctx), draggable: false, dataset: { path: pathOf(el).join('.'), container: pathOf(el).join('.') } }, el.children.length ? childElements(el).map((g) => group(g, ctx)) : h('div', { class: 'bs-empty' }, tr('グループをドラッグ'))) : null;
     content = h('div', { class: 'bs-content' }, h('h2', { class: 'bs-title' }, tab.getAttribute('title') ?? labelOf(tab)), h('div', { class: 'bs-columns', dataset: { container: pathOf(tab).join('.') } }, column(col('firstColumn')), column(col('secondColumn'))));
   }
   return h('div', { class: 'bs-view' }, nav, content);

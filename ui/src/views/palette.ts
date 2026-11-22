@@ -6,6 +6,7 @@ import { h, svg } from '../dom';
 import { kindIcon } from '../icons';
 import { createElement, elementAt, ensureBackstage, ensureContextMenus, ensureTabs, pathOf } from '../model';
 import { canContainEl, inBackstage, titleOf } from '../schema';
+import { t } from '../i18n';
 
 export const PALETTE_ITEMS: readonly string[] = [
   'tab', 'group', 'button', 'toggleButton', 'checkBox', 'splitButton', 'menu', 'dynamicMenu', 'gallery',
@@ -21,7 +22,7 @@ export function mountPalette(host: HTMLElement): void {
         'li',
         {
           draggable: true,
-          title: `${tag}（ダブルクリックで選択中の場所に追加）`,
+          title: t('{tag}（ダブルクリックで選択中の場所に追加）', { tag }),
           ondragstart: (e: DragEvent) => startDrag(e, { kind: 'new', tag }),
           ondragend: () => endDrag(),
           ondblclick: () => insertNearSelection(tag),

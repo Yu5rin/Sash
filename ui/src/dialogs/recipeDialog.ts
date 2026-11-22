@@ -8,6 +8,7 @@ import { builtinRecipes, insertInstance, instantiate, recipeFromElement, type Re
 import { generateStub, parseProcedures, procedureCode, RIBBON_HOLDER_MODULE, RIBBON_HOLDER_MODULE_NAME } from '../vba';
 import { h } from '../dom';
 import { ask, openModal } from './modal';
+import { t } from '../i18n';
 
 type Toast = (msg: string, kind?: 'info' | 'error') => void;
 
@@ -30,21 +31,21 @@ export async function openRecipes(toast: Toast): Promise<void> {
     list.replaceChildren(
       ...all.map((r) =>
         h('button', { type: 'button', role: 'option', class: `recipe-item${r === selected ? ' active' : ''}`, 'aria-selected': String(r === selected), onclick: () => { selected = r; renderList(); renderPreview(); }, ondblclick: () => void apply() },
-          h('span', { class: 'recipe-title' }, r.title),
-          r.custom ? h('span', { class: 'tag' }, '保存したレシピ') : null),
+          h('span', { class: 'recipe-title' }, t(r.title)),
+          r.custom ? h('span', { class: 'tag' }, t('保存したレシピ')) : null),
       ),
     );
   const renderPreview = () =>
     preview.replaceChildren(
       ...([
-      h('p', null, selected.description || '（説明なし）'),
+      h('p', null, selected.description ? t(selected.description) : t('（説明なし）')),
       h('h3', null, 'XML'),
       h('pre', null, selected.xml),
-      selected.vba ? h('h3', null, 'VBA（標準モジュール）') : null,
+      selected.vba ? h('h3', null, t('VBA（標準モジュール）')) : null,
       selected.vba ? h('pre', null, selected.vba) : null,
-      selected.workbookVba ? h('h3', null, 'VBA（ThisWorkbook）') : null,
+      selected.workbookVba ? h('h3', null, t('VBA（ThisWorkbook）')) : null,
       selected.workbookVba ? h('pre', null, selected.workbookVba) : null,
-      selected.needsRibbon ? h('p', { class: 'muted' }, `IRibbonUI を保持する共通コード（${RIBBON_HOLDER_MODULE_NAME}）と onLoad も一緒に入れます。`) : null,
+      selected.needsRibbon ? h('p', { class: 'muted' }, t('IRibbonUI を保持する共通コード（{module}）と onLoad も一緒に入れます。', { module: RIBBON_HOLDER_MODULE_NAME })) : null,
       ] as (HTMLElement | null)[]).filter((x): x is HTMLElement => x !== null),
     );
 
@@ -60,17 +61,17 @@ export async function openRecipes(toast: Toast): Promise<void> {
     if (!selected.custom) return;
     await invoke('recipes.delete', { id: selected.id });
     modal.close();
-    toast(`レシピ「${selected.title}」を削除しました`);
+    toast(t('レシピ「{title}」を削除しました', { title: t(selected.title) }));
   };
 
   renderList();
   renderPreview();
-  const modal = openModal('レシピを挿入', h('div', { class: 'recipes' }, list, preview), {
+  const modal = openModal(t('レシピを挿入'), h('div', { class: 'recipes' }, list, preview), {
     wide: true,
     footer: [
-      h('button', { type: 'button', onclick: () => void remove(), class: 'left' }, '削除'),
-      h('button', { type: 'button', onclick: () => modal.close() }, 'キャンセル'),
-      h('button', { type: 'button', class: 'primary', onclick: () => void apply() }, '挿入'),
+      h('button', { type: 'button', onclick: () => void remove(), class: 'left' }, t('削除')),
+      h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')),
+      h('button', { type: 'button', class: 'primary', onclick: () => void apply() }, t('挿入')),
     ],
   });
 }
@@ -95,13 +96,13 @@ export async function applyRecipe(recipe: Recipe): Promise<string> {
 
   let code = inst.vba;
   if (onLoadName) code = generateStub({ name: onLoadName, expected: '', uses: [{ attr: 'onLoad', tag: 'customUI', id: 'customUI', path: [] }] }) + '\r\n' + code;
-  const renamedNote = inst.renamed.size ? `（重なる id を ${[...inst.renamed].map(([a, b]) => `${a}→${b}`).join('、')} に変えました）` : '';
-  if (!code && !inst.workbookVba) return `レシピ「${recipe.title}」を挿入しました${renamedNote}`;
+  const renamedNote = inst.renamed.size ? t('（重なる id を {list} に変えました）', { list: [...inst.renamed].map(([a, b]) => `${a}→${b}`).join(t('、')) }) : '';
+  if (!code && !inst.workbookVba) return t('レシピ「{title}」を挿入しました{note}', { title: t(recipe.title), note: renamedNote });
 
   if (vba.canWrite) {
-    const r = await ask('VBAも挿入しますか？', `レシピのVBAを ${app.settings.callbackModule}${inst.workbookVba ? ' と ThisWorkbook' : ''} の末尾に追加します。既存のコードは書き換えません。`, [
-      { value: 'insert', label: '挿入する', primary: true },
-      { value: 'copy', label: 'コピーだけ' },
+    const r = await ask(t('VBAも挿入しますか？'), t(inst.workbookVba ? 'レシピのVBAを {module} と ThisWorkbook の末尾に追加します。既存のコードは書き換えません。' : 'レシピのVBAを {module} の末尾に追加します。既存のコードは書き換えません。', { module: app.settings.callbackModule }), [
+      { value: 'insert', label: t('挿入する'), primary: true },
+      { value: 'copy', label: t('コピーだけ') },
     ]);
     if (r === 'insert') {
       const needsCore = recipe.needsRibbon && !vba.modules!.some((m) => m.name === RIBBON_HOLDER_MODULE_NAME);
@@ -109,12 +110,12 @@ export async function applyRecipe(recipe: Recipe): Promise<string> {
       if (code) await invoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
       if (inst.workbookVba) await invoke('vba.insert', { path: s.path, module: 'ThisWorkbook', code: inst.workbookVba, documentModule: true });
       await vba.refresh();
-      return `レシピ「${recipe.title}」をXMLとVBAに挿入しました${renamedNote}。Excelでブックを保存してください`;
+      return t('レシピ「{title}」をXMLとVBAに挿入しました{note}。Excelでブックを保存してください', { title: t(recipe.title), note: renamedNote });
     }
   }
-  const all = [recipe.needsRibbon ? `' ===== ${RIBBON_HOLDER_MODULE_NAME}（まだなければ）=====\r\n${RIBBON_HOLDER_MODULE}` : '', `' ===== ${app.settings.callbackModule} =====\r\n${code}`, inst.workbookVba ? `' ===== ThisWorkbook =====\r\n${inst.workbookVba}` : ''].filter(Boolean).join('\r\n');
+  const all = [recipe.needsRibbon ? `' ===== ${RIBBON_HOLDER_MODULE_NAME}${t('（まだなければ）')}=====\r\n${RIBBON_HOLDER_MODULE}` : '', `' ===== ${app.settings.callbackModule} =====\r\n${code}`, inst.workbookVba ? `' ===== ThisWorkbook =====\r\n${inst.workbookVba}` : ''].filter(Boolean).join('\r\n');
   await navigator.clipboard.writeText(all);
-  return `レシピ「${recipe.title}」を挿入し、VBAをクリップボードにコピーしました${renamedNote}`;
+  return t('レシピ「{title}」を挿入し、VBAをクリップボードにコピーしました{note}', { title: t(recipe.title), note: renamedNote });
 }
 
 function samePathOf(el: Element, path: readonly number[]): boolean {
@@ -127,7 +128,7 @@ export async function saveAsRecipe(toast: Toast): Promise<void> {
   const store = app.store;
   const el = store?.selectedElement;
   if (!store || !el || (el.localName !== 'tab' && el.localName !== 'group')) {
-    toast('レシピにするタブかグループを選択してください', 'error');
+    toast(t('レシピにするタブかグループを選択してください'), 'error');
     return;
   }
   const title = h('input', { type: 'text', value: el.getAttribute('label') ?? el.getAttribute('id') ?? '', spellcheck: false });
@@ -142,12 +143,12 @@ export async function saveAsRecipe(toast: Toast): Promise<void> {
         return mod && x.procedure ? procedureCode(mod, x.procedure) : generateStub(x);
       })
       .join('\r\n');
-    const recipe = recipeFromElement(el, title.value.trim() || '名前なし', desc.value.trim(), code);
+    const recipe = recipeFromElement(el, title.value.trim() || t('名前なし'), desc.value.trim(), code);
     await invoke('recipes.save', recipe as unknown as Record<string, unknown>);
     modal.close();
-    toast(`レシピ「${recipe.title}」を保存しました`);
+    toast(t('レシピ「{title}」を保存しました', { title: recipe.title }));
   };
-  const modal = openModal('レシピとして保存', h('div', { class: 'settings' }, h('label', null, '名前', title), h('label', null, '説明', desc), h('p', { class: 'muted' }, `選択中の <${el.localName}> と、使っているコールバックのVBAを保存します。`)), {
-    footer: [h('button', { type: 'button', onclick: () => modal.close() }, 'キャンセル'), h('button', { type: 'button', class: 'primary', onclick: () => void save() }, '保存')],
+  const modal = openModal(t('レシピとして保存'), h('div', { class: 'settings' }, h('label', null, t('名前'), title), h('label', null, t('説明'), desc), h('p', { class: 'muted' }, t('選択中の <{tag}> と、使っているコールバックのVBAを保存します。', { tag: el.localName }))), {
+    footer: [h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')), h('button', { type: 'button', class: 'primary', onclick: () => void save() }, t('保存'))],
   });
 }

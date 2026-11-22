@@ -5,6 +5,7 @@ import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { fuzzyScore } from '../catalog/catalog';
 import { ask, openModal } from './modal';
+import { t as tr } from '../i18n';
 
 export type LibraryPick = (icon: LibraryIconDetail) => void;
 
@@ -19,7 +20,7 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
   }
   let tag = '';
   let favOnly = false;
-  const search = h('input', { type: 'search', placeholder: '名前やタグで検索', spellcheck: false });
+  const search = h('input', { type: 'search', placeholder: tr('名前やタグで検索'), spellcheck: false });
   const tags = h('div', { class: 'segmented wrap' });
   const grid = h('div', { class: 'library-grid' });
   const status = h('div', { class: 'catalog-status' });
@@ -27,8 +28,8 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
   const allTags = () => [...new Set(data.icons.flatMap((i) => i.tags))].sort((a, b) => a.localeCompare(b));
   const renderTags = () =>
     tags.replaceChildren(
-      h('button', { type: 'button', class: !tag && !favOnly ? 'active' : '', onclick: () => { tag = ''; favOnly = false; render(); } }, 'すべて'),
-      h('button', { type: 'button', class: favOnly ? 'active' : '', onclick: () => { favOnly = !favOnly; render(); } }, 'お気に入り'),
+      h('button', { type: 'button', class: !tag && !favOnly ? 'active' : '', onclick: () => { tag = ''; favOnly = false; render(); } }, tr('すべて')),
+      h('button', { type: 'button', class: favOnly ? 'active' : '', onclick: () => { favOnly = !favOnly; render(); } }, tr('お気に入り')),
       ...allTags().map((t) => h('button', { type: 'button', class: t === tag ? 'active' : '', onclick: () => { tag = tag === t ? '' : t; render(); } }, t)),
     );
 
@@ -42,10 +43,10 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
 
   const edit = async (icon: LibraryIconDto) => {
     const name = h('input', { type: 'text', value: icon.name });
-    const tagInput = h('input', { type: 'text', value: icon.tags.join(', '), placeholder: 'カンマ区切り' });
-    const m = openModal('アイコンの情報', h('div', { class: 'settings' }, h('label', null, '名前', name), h('label', null, 'タグ', tagInput)), {
+    const tagInput = h('input', { type: 'text', value: icon.tags.join(', '), placeholder: tr('カンマ区切り') });
+    const m = openModal(tr('アイコンの情報'), h('div', { class: 'settings' }, h('label', null, tr('名前'), name), h('label', null, tr('タグ'), tagInput)), {
       footer: [
-        h('button', { type: 'button', onclick: () => m.close() }, 'キャンセル'),
+        h('button', { type: 'button', onclick: () => m.close() }, tr('キャンセル')),
         h('button', {
           type: 'button',
           class: 'primary',
@@ -56,15 +57,15 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
             m.close();
             render();
           },
-        }, '保存'),
+        }, tr('保存')),
       ],
     });
   };
 
   const remove = async (icon: LibraryIconDto) => {
-    const r = await ask('アイコンを削除', `ライブラリから「${icon.name}」を削除します。共有フォルダの場合は、ほかの人のライブラリからも消えます。`, [
-      { value: 'ok', label: '削除する', primary: true },
-      { value: 'cancel', label: 'キャンセル' },
+    const r = await ask(tr('アイコンを削除'), tr('ライブラリから「{name}」を削除します。共有フォルダの場合は、ほかの人のライブラリからも消えます。', { name: icon.name }), [
+      { value: 'ok', label: tr('削除する'), primary: true },
+      { value: 'cancel', label: tr('キャンセル') },
     ]);
     if (r !== 'ok') return;
     await invoke('library.delete', { id: icon.id });
@@ -92,18 +93,18 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
           h(
             'span',
             { class: 'library-actions' },
-            h('button', { type: 'button', class: `icon-button fav${icon.favorite ? ' on' : ''}`, title: 'お気に入り', onclick: async (e: MouseEvent) => { e.stopPropagation(); icon.favorite = await invoke('library.toggleFavorite', { id: icon.id }); render(); } }, svg(uiIcons.star)),
-            h('button', { type: 'button', class: 'icon-button', title: '名前とタグ', onclick: (e: MouseEvent) => { e.stopPropagation(); void edit(icon); } }, svg(uiIcons.format)),
-            h('button', { type: 'button', class: 'icon-button', title: '削除', onclick: (e: MouseEvent) => { e.stopPropagation(); void remove(icon); } }, svg(uiIcons.trash)),
+            h('button', { type: 'button', class: `icon-button fav${icon.favorite ? ' on' : ''}`, title: tr('お気に入り'), onclick: async (e: MouseEvent) => { e.stopPropagation(); icon.favorite = await invoke('library.toggleFavorite', { id: icon.id }); render(); } }, svg(uiIcons.star)),
+            h('button', { type: 'button', class: 'icon-button', title: tr('名前とタグ'), onclick: (e: MouseEvent) => { e.stopPropagation(); void edit(icon); } }, svg(uiIcons.format)),
+            h('button', { type: 'button', class: 'icon-button', title: tr('削除'), onclick: (e: MouseEvent) => { e.stopPropagation(); void remove(icon); } }, svg(uiIcons.trash)),
           ),
         ),
       ),
     );
-    status.textContent = data.icons.length === 0 ? 'ライブラリは空です。アイコンエディタの「ライブラリにも保存」で追加できます' : `${list.length} / ${data.icons.length} 件 ・ 場所：${data.root}`;
+    status.textContent = data.icons.length === 0 ? tr('ライブラリは空です。アイコンエディタの「ライブラリにも保存」で追加できます') : tr('{shown} / {total} 件 ・ 場所：{root}', { shown: list.length, total: data.icons.length, root: data.root });
   };
 
   search.addEventListener('input', debounce(render, 80));
-  const modal = openModal(onPick ? 'ライブラリからアイコンを選ぶ' : 'アイコンライブラリ', h('div', { class: 'catalog' }, search, tags, grid, status), { wide: true });
+  const modal = openModal(onPick ? tr('ライブラリからアイコンを選ぶ') : tr('アイコンライブラリ'), h('div', { class: 'catalog' }, search, tags, grid, status), { wide: true });
   search.focus();
   render();
 }

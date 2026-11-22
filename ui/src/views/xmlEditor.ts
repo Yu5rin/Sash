@@ -11,6 +11,12 @@ import { app } from '../app';
 import { allElements, pathOf } from '../model';
 import { attributes, backstageElements, callbackSignature, elements } from '../schema';
 import { attrRange, elementIndexAt, scanElements, type ElementSpan } from '../xmlpos';
+import { lang, t } from '../i18n';
+
+/** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
+function categoryName(cat: string): string {
+  return lang === 'en' && cat === '表示' ? 'Appearance' : t(cat);
+}
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 
@@ -73,7 +79,7 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
       applying = false;
     }
     statusEl.hidden = store.syncError === null;
-    statusEl.textContent = store.syncError ? `同期停止中：XMLの構文を直すと再開します（${store.syncError.message}）` : '';
+    statusEl.textContent = store.syncError ? t('同期停止中：XMLの構文を直すと再開します（{message}）', { message: store.syncError.message }) : '';
   };
 
   app.on('session', () => {
@@ -222,8 +228,8 @@ function registerLanguageFeatures(): void {
           suggestions.push({
             label: d.name,
             kind: d.kind === 'callback' ? monaco.languages.CompletionItemKind.Event : monaco.languages.CompletionItemKind.Property,
-            detail: d.category,
-            documentation: d.desc,
+            detail: categoryName(d.category),
+            documentation: t(d.desc),
             insertText: `${d.name}="$1"`,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
             range,
@@ -242,7 +248,7 @@ function registerLanguageFeatures(): void {
         suggestions.push({
           label: tag,
           kind: monaco.languages.CompletionItemKind.Class,
-          detail: def?.title,
+          detail: def ? t(def.title) : undefined,
           insertText: `${afterLt ? '' : '<'}${tag}${needsId ? ' id="$1"' : ''}${def && def.children.length > 0 ? `>\n\t$0\n</${tag}>` : ' />'}`,
           insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
           range,
@@ -263,13 +269,13 @@ function registerLanguageFeatures(): void {
       const offset = model.getOffsetAt(position);
       const ctx = contextAt(text, offset);
       if (def && ctx.inTag) {
-        const lines = [`**${def.name}**（${def.category}）`, def.desc];
-        if (def.example) lines.push(`例：\`${def.name}="${def.example}"\``);
-        if (def.kind === 'callback') lines.push(`\`Sub 名前(${callbackSignature(def.name, ctx.inTag)})\``);
-        if (def.values) lines.push(`値：${def.values.join(' / ')}`);
+        const lines = [t('**{name}**（{category}）', { name: def.name, category: categoryName(def.category) }), t(def.desc)];
+        if (def.example) lines.push(`${t('例：')}\`${def.name}="${t(def.example)}"\``);
+        if (def.kind === 'callback') lines.push(`\`${t('Sub 名前({signature})', { signature: callbackSignature(def.name, ctx.inTag) })}\``);
+        if (def.values) lines.push(`${t('値：')}${def.values.join(' / ')}`);
         return { contents: lines.map((value) => ({ value })) };
       }
-      if (el) return { contents: [{ value: `**<${el.tag}>** ${el.title}` }] };
+      if (el) return { contents: [{ value: `**<${el.tag}>** ${t(el.title)}` }] };
       return null;
     },
   });
