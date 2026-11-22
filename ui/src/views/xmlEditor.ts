@@ -9,8 +9,14 @@ import 'monaco-editor/esm/vs/editor/contrib/find/browser/findController';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { app } from '../app';
 import { allElements, pathOf } from '../model';
-import { attributes, attrsOf, callbackSignature, elements } from '../schema';
+import { attributes, backstageElements, callbackSignature, elements } from '../schema';
 import { attrRange, elementIndexAt, scanElements, type ElementSpan } from '../xmlpos';
+import { lang, t } from '../i18n';
+
+/** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
+function categoryName(cat: string): string {
+  return lang === 'en' && cat === '表示' ? 'Appearance' : t(cat);
+}
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 
@@ -73,7 +79,7 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
       applying = false;
     }
     statusEl.hidden = store.syncError === null;
-    statusEl.textContent = store.syncError ? `同期停止中：XMLの構文を直すと再開します（${store.syncError.message}）` : '';
+    statusEl.textContent = store.syncError ? t('同期停止中：XMLの構文を直すと再開します（{message}）', { message: store.syncError.message }) : '';
   };
 
   app.on('session', () => {
@@ -161,7 +167,7 @@ function updateMarkers(): void {
 }
 
 /** カーソル位置の XML の文脈（どの要素の中か、タグの中か）を調べる。 */
-function contextAt(text: string, offset: number): { inTag: string | null; attrName: string | null; parentTag: string | null } {
+function contextAt(text: string, offset: number): { inTag: string | null; attrName: string | null; parentTag: string | null; inBackstage: boolean } {
   const before = text.slice(0, offset);
   const lt = before.lastIndexOf('<');
   const gt = before.lastIndexOf('>');
@@ -169,15 +175,23 @@ function contextAt(text: string, offset: number): { inTag: string | null; attrNa
     const inside = before.slice(lt + 1);
     const tag = /^([A-Za-z][\w]*)/.exec(inside)?.[1] ?? null;
     const attrMatch = /([A-Za-z]\w*)\s*=\s*"[^"]*$/.exec(inside);
-    return { inTag: tag, attrName: attrMatch?.[1] ?? null, parentTag: null };
+    const enclosing = openAt(text, lt);
+    return { inTag: tag, attrName: attrMatch?.[1] ?? null, parentTag: null, inBackstage: tag === 'backstage' || enclosing.includes('backstage') };
   }
   // カーソルを囲んでいる要素のうち、最も内側のものを親とする
-  const open = scanElements(text).filter((s) => {
-    const selfClosing = text[s.startTagEnd - 2] === '/';
-    const unclosed = s.end === s.startTagEnd;
-    return !selfClosing && s.startTagEnd <= offset && (unclosed || s.end > offset);
-  });
-  return { inTag: null, attrName: null, parentTag: open.at(-1)?.tag ?? null };
+  const open = openAt(text, offset);
+  return { inTag: null, attrName: null, parentTag: open.at(-1) ?? null, inBackstage: open.includes('backstage') };
+}
+
+/** 位置を囲んでいる（開いたままの）要素名を、外側から順に返す。 */
+function openAt(text: string, offset: number): string[] {
+  return scanElements(text)
+    .filter((s) => {
+      const selfClosing = text[s.startTagEnd - 2] === '/';
+      const unclosed = s.end === s.startTagEnd;
+      return !selfClosing && s.startTagEnd <= offset && (unclosed || s.end > offset);
+    })
+    .map((s) => s.tag);
 }
 
 let registered = false;
@@ -208,13 +222,14 @@ function registerLanguageFeatures(): void {
         const lt = text.lastIndexOf('<', offset);
         const tagText = text.slice(lt, offset);
         const present = new Set([...tagText.matchAll(/\s([A-Za-z]\w*)\s*=/g)].map((m) => m[1]));
-        for (const d of attrsOf(ctx.inTag)) {
+        const tagDef = (ctx.inBackstage && ctx.inTag !== 'backstage' ? backstageElements : elements).get(ctx.inTag);
+        for (const d of (tagDef?.attrs ?? []).map((n) => attributes.get(n)).filter((x): x is NonNullable<typeof x> => x !== undefined)) {
           if (present.has(d.name)) continue;
           suggestions.push({
             label: d.name,
             kind: d.kind === 'callback' ? monaco.languages.CompletionItemKind.Event : monaco.languages.CompletionItemKind.Property,
-            detail: d.category,
-            documentation: d.desc,
+            detail: categoryName(d.category),
+            documentation: t(d.desc),
             insertText: `${d.name}="$1"`,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
             range,
@@ -223,16 +238,17 @@ function registerLanguageFeatures(): void {
         return { suggestions };
       }
       // 要素名：親に置けるものだけ
-      const parent = ctx.parentTag ? elements.get(ctx.parentTag) : null;
+      const table = (tag: string) => (ctx.inBackstage && tag !== 'backstage' ? backstageElements : elements);
+      const parent = ctx.parentTag ? table(ctx.parentTag).get(ctx.parentTag) : null;
       const candidates = parent ? parent.children : ['customUI'];
       const afterLt = text[offset - word.word.length - 1] === '<';
       for (const tag of candidates) {
-        const def = elements.get(tag);
+        const def = (ctx.inBackstage || ctx.parentTag === 'backstage' ? backstageElements : elements).get(tag);
         const needsId = def?.idRequired && def.attrs.includes('id');
         suggestions.push({
           label: tag,
           kind: monaco.languages.CompletionItemKind.Class,
-          detail: def?.title,
+          detail: def ? t(def.title) : undefined,
           insertText: `${afterLt ? '' : '<'}${tag}${needsId ? ' id="$1"' : ''}${def && def.children.length > 0 ? `>\n\t$0\n</${tag}>` : ' />'}`,
           insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
           range,
@@ -253,13 +269,13 @@ function registerLanguageFeatures(): void {
       const offset = model.getOffsetAt(position);
       const ctx = contextAt(text, offset);
       if (def && ctx.inTag) {
-        const lines = [`**${def.name}**（${def.category}）`, def.desc];
-        if (def.example) lines.push(`例：\`${def.name}="${def.example}"\``);
-        if (def.kind === 'callback') lines.push(`\`Sub 名前(${callbackSignature(def.name, ctx.inTag)})\``);
-        if (def.values) lines.push(`値：${def.values.join(' / ')}`);
+        const lines = [t('**{name}**（{category}）', { name: def.name, category: categoryName(def.category) }), t(def.desc)];
+        if (def.example) lines.push(`${t('例：')}\`${def.name}="${t(def.example)}"\``);
+        if (def.kind === 'callback') lines.push(`\`${t('Sub 名前({signature})', { signature: callbackSignature(def.name, ctx.inTag) })}\``);
+        if (def.values) lines.push(`${t('値：')}${def.values.join(' / ')}`);
         return { contents: lines.map((value) => ({ value })) };
       }
-      if (el) return { contents: [{ value: `**<${el.tag}>** ${el.title}` }] };
+      if (el) return { contents: [{ value: `**<${el.tag}>** ${t(el.title)}` }] };
       return null;
     },
   });

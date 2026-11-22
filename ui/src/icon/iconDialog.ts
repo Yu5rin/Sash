@@ -5,10 +5,13 @@
 import { app } from '../app';
 import { invoke } from '../bridge';
 import { openCatalog } from '../dialogs/catalogDialog';
+import { detailToBlobs, openLibrary } from '../dialogs/libraryDialog';
+import type { LibraryIconDetail } from '../bridge';
 import { openModal } from '../dialogs/modal';
 import { h } from '../dom';
 import { elementAt, pathOf, setAttr, type Path } from '../model';
 import { ID_PATTERN } from '../schema';
+import { t as tr } from '../i18n';
 import type { ImageEntry } from '../store';
 import {
   adjustBrightness, cornerColor, fitRect, keyOutColor, monochrome, opaqueBounds, parseHex, parseIco, pickIcoEntry,
@@ -94,23 +97,26 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const sources = h(
     'div',
     { class: 'icon-sources' },
-    h('button', { type: 'button', onclick: () => fileInput.click() }, 'ファイル'),
-    h('button', { type: 'button', title: 'EXE / DLL に埋め込まれたアイコンから選ぶ', onclick: () => void fromExecutable() }, 'EXE / DLL'),
-    app.info.excelInstalled ? h('button', { type: 'button', title: '組み込みアイコン（imageMso）を元にする', onclick: () => fromImageMso() }, '組み込みアイコン') : null,
-    h('button', { type: 'button', title: 'フォルダ内の画像を、今の加工設定でまとめて取り込む（コントロールには設定しません）', onclick: () => folderInput.click() }, 'フォルダを一括'),
+    h('button', { type: 'button', onclick: () => fileInput.click() }, tr('ファイル')),
+    h('button', { type: 'button', title: tr('EXE / DLL に埋め込まれたアイコンから選ぶ'), onclick: () => void fromExecutable() }, 'EXE / DLL'),
+    app.info.excelInstalled ? h('button', { type: 'button', title: tr('組み込みアイコン（imageMso）を元にする'), onclick: () => fromImageMso() }, tr('組み込みアイコン')) : null,
+    h('button', { type: 'button', title: tr('アイコンライブラリから選ぶ（元画像と設定があれば加工し直せます）'), onclick: () => fromLibrary() }, tr('ライブラリ')),
+    h('button', { type: 'button', title: tr('フォルダ内の画像を、今の加工設定でまとめて取り込む（コントロールには設定しません）'), onclick: () => folderInput.click() }, tr('フォルダを一括')),
     fileInput,
     folderInput,
   );
-  const drop = h('div', { class: 'icon-drop', tabIndex: 0 }, h('p', null, '画像をドロップ、Ctrl+V で貼り付け、または'), sources, h('p', { class: 'muted' }, 'PNG / JPG / BMP / GIF / WebP / SVG / ICO'));
-  const sourceView = h('canvas', { class: 'icon-source', title: 'ドラッグで正方形に切り抜き、クリックで透過する色を選びます' });
+  const drop = h('div', { class: 'icon-drop', tabIndex: 0 }, h('p', null, tr('画像をドロップ、Ctrl+V で貼り付け、または')), sources, h('p', { class: 'muted' }, 'PNG / JPG / BMP / GIF / WebP / SVG / ICO'));
+  const sourceView = h('canvas', { class: 'icon-source', title: tr('ドラッグで正方形に切り抜き、クリックで透過する色を選びます') });
   const sourceHint = h('div', { class: 'muted small' });
   const icoList = h('div', { class: 'segmented wrap ico-sizes' });
   const exeList = h('div', { class: 'exe-icons' });
   const previews = h('div', { class: 'icon-previews' });
   const nameInput = h('input', { type: 'text', value: name, spellcheck: false });
   const nameError = h('span', { class: 'field-error' });
-  const okButton = h('button', { type: 'button', class: 'primary', disabled: true, onclick: () => confirm() }, target ? '設定する' : '追加する');
+  const okButton = h('button', { type: 'button', class: 'primary', disabled: true, onclick: () => confirm() }, target ? tr('設定する') : tr('追加する'));
   const output = document.createElement('canvas');
+  const saveToLibrary = h('input', { type: 'checkbox' });
+  const libraryTags = h('input', { type: 'text', placeholder: tr('カンマ区切り（例：社内, 集計）'), spellcheck: false });
 
   // ---- 設定の入力欄 ----
 
@@ -120,17 +126,17 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     return [input, label];
   };
   const check = (key: 'trim' | 'transparent' | 'mono' | 'replace', text: string) =>
-    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: opts[key], dataset: { opt: key }, onchange: (e: Event) => { opts[key] = (e.target as HTMLInputElement).checked; render(); } }), text);
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: opts[key], dataset: { opt: key }, onchange: (e: Event) => { opts[key] = (e.target as HTMLInputElement).checked; render(); } }), tr(text));
   const color = (key: 'monoColor' | 'replaceFrom' | 'replaceTo' | 'badgeColor') =>
     h('input', { type: 'color', value: opts[key], oninput: (e: Event) => { opts[key] = (e.target as HTMLInputElement).value; render(); } });
   const select = <K extends 'size' | 'shape' | 'badge'>(key: K, options: [string, string][]) =>
     h('select', { onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (opts as unknown as Record<string, unknown>)[key] = key === 'size' ? Number(v) : v; if (key === 'size' && source?.ico) selectIco(pickIcoEntry(source.ico.entries, opts.size)); else render(); } },
-      options.map(([v, t]) => h('option', { value: v, selected: String(opts[key]) === v }, t)));
+      options.map(([v, t]) => h('option', { value: v, selected: String(opts[key]) === v }, tr(t))));
   const keySwatch = h('span', { class: 'swatch' });
-  const cropReset = h('button', { type: 'button', class: 'small', onclick: () => { opts.crop = null; render(); } }, '切り抜きを解除');
+  const cropReset = h('button', { type: 'button', class: 'small', onclick: () => { opts.crop = null; render(); } }, tr('切り抜きを解除'));
 
-  const section = (title: string, ...rows: HTMLElement[]) => h('fieldset', null, h('legend', null, title), ...rows);
-  const row = (label: string, ...ctl: (HTMLElement | HTMLElement[] | null)[]) => h('label', null, h('span', { class: 'opt-label' }, label), ...ctl.flat().filter((x): x is HTMLElement => x !== null));
+  const section = (title: string, ...rows: HTMLElement[]) => h('fieldset', null, h('legend', null, tr(title)), ...rows);
+  const row = (label: string, ...ctl: (HTMLElement | HTMLElement[] | null)[]) => h('label', null, h('span', { class: 'opt-label' }, tr(label)), ...ctl.flat().filter((x): x is HTMLElement => x !== null));
 
   const controls = h(
     'div',
@@ -141,7 +147,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       check('trim', '余白を自動でカットしてから収める'),
       h('div', { class: 'inline' }, cropReset)),
     section('背景の透過',
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: opts.transparent, dataset: { opt: 'transparent' }, onchange: (e: Event) => { opts.transparent = (e.target as HTMLInputElement).checked; render(); } }), '背景を透過する', keySwatch),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: opts.transparent, dataset: { opt: 'transparent' }, onchange: (e: Event) => { opts.transparent = (e.target as HTMLInputElement).checked; render(); } }), tr('背景を透過する'), keySwatch),
       row('許容値', ...range('tolerance', 0, 60))),
     section('色',
       h('div', { class: 'inline' }, check('mono', '単色にする'), color('monoColor')),
@@ -153,13 +159,16 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       row('バッジ', select('badge', [['none', 'なし'], ['dot', '点'], ['plus', 'プラス'], ['check', 'チェック'], ['exclaim', '注意']]), color('badgeColor')),
       row('シャープ', ...range('sharpen', 0, 100))),
     section('画像名', row('名前', nameInput), nameError),
+    section('ライブラリ',
+      h('label', { class: 'check' }, saveToLibrary, tr('アイコンライブラリにも保存する（別のブックで使い回せます）')),
+      row('タグ', libraryTags)),
   );
 
-  const content = h('div', { class: 'icon-editor' }, h('div', { class: 'icon-left' }, drop, sourceView, sourceHint, icoList, exeList, h('h3', null, 'プレビュー（実寸）'), previews), h('div', { class: 'icon-right' }, controls));
-  const title = target ? `アイコンを作る：${el!.getAttribute('id') ?? el!.localName}` : 'アイコンを作る';
+  const content = h('div', { class: 'icon-editor' }, h('div', { class: 'icon-left' }, drop, sourceView, sourceHint, icoList, exeList, h('h3', null, tr('プレビュー（実寸）')), previews), h('div', { class: 'icon-right' }, controls));
+  const title = target ? tr('アイコンを作る：{name}', { name: el!.getAttribute('id') ?? el!.localName }) : tr('アイコンを作る');
   const modal = openModal(title, content, {
     wide: true,
-    footer: [h('button', { type: 'button', onclick: () => modal.close() }, 'キャンセル'), okButton],
+    footer: [h('button', { type: 'button', onclick: () => modal.close() }, tr('キャンセル')), okButton],
     onClose: () => document.removeEventListener('paste', onPaste),
   });
 
@@ -218,8 +227,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
 
   function validateName(): boolean {
     const valid = ID_PATTERN.test(name);
-    let err = valid ? '' : '英字か _ で始め、英数字と _ . - だけを使ってください';
-    if (valid && store!.images.has(name) && name !== existing?.id && name !== el?.getAttribute('image')) err = '同じ名前の画像があります（上書きします）';
+    let err = valid ? '' : tr('英字か _ で始め、英数字と _ . - だけを使ってください');
+    if (valid && store!.images.has(name) && name !== existing?.id && name !== el?.getAttribute('image')) err = tr('同じ名前の画像があります（上書きします）');
     nameError.textContent = err;
     okButton.disabled = !source || !valid;
     return valid;
@@ -261,7 +270,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       const res = await invoke('icons.fromExecutable');
       if (!res) return;
       if (res.icons.length === 0) {
-        sourceHint.textContent = 'このファイルにはアイコンがありません';
+        sourceHint.textContent = tr('このファイルにはアイコンがありません');
         return;
       }
       const items = await Promise.all(
@@ -272,7 +281,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
           return h('button', { type: 'button', class: 'exe-icon', title: ic.name, onclick: () => void loadBlob(blob, `${res.fileName}_${ic.name}.ico`) }, h('img', { src: thumb, width: 32, height: 32, alt: '' }));
         }),
       );
-      exeList.replaceChildren(h('div', { class: 'muted small' }, `${res.fileName}：${res.icons.length} 個`), ...items);
+      exeList.replaceChildren(h('div', { class: 'muted small' }, tr('{file}：{n} 個', { file: res.fileName, n: res.icons.length })), ...items);
     } catch (e) {
       sourceHint.textContent = (e as Error).message;
     }
@@ -284,7 +293,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       void invoke('excel.imageMso', { names: [msoName], size: 128 }).then((r) => {
         const b64 = r[msoName];
         if (!b64) {
-          sourceHint.textContent = `${msoName} を取り出せませんでした`;
+          sourceHint.textContent = tr('{name} を取り出せませんでした', { name: msoName });
           return;
         }
         void loadBlob(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: 'image/png' }), `${msoName}.png`);
@@ -292,11 +301,21 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     });
   }
 
+  /** ライブラリのアイコンを元にする。元画像と設定があれば、それを読み込んで加工し直せる状態で開き直す。 */
+  function fromLibrary(): void {
+    void openLibrary((d) => {
+      modal.close();
+      const { png, source } = detailToBlobs(d);
+      const edit = source ? { source, sourceName: d.sourceName ?? `${d.id}.png`, options: d.options ?? {} } : { source: dataUrlToBlob(png), sourceName: `${d.id}.png`, options: {} };
+      openIconDialog(target, undefined, { id: name, dataUrl: png, isNew: true, edit });
+    });
+  }
+
   /** フォルダの画像を、今の設定でまとめて取り込む（仕様書 §6.3）。 */
   async function bulkImport(files: File[]): Promise<void> {
     const images = files.filter((f) => IMAGE_FILE.test(f.name));
     if (images.length === 0) {
-      sourceHint.textContent = '取り込める画像がありません';
+      sourceHint.textContent = tr('取り込める画像がありません');
       return;
     }
     const entries: ImageEntry[] = [];
@@ -357,17 +376,31 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     keySwatch.style.background = `rgb(${opts.key.r},${opts.key.g},${opts.key.b})`;
     keySwatch.title = toHex(opts.key);
     cropReset.hidden = !opts.crop;
-    sourceHint.textContent = `${source.name}（${source.width} × ${source.height}）`;
+    sourceHint.textContent = tr('{name}（{width} × {height}）', { name: source.name, width: source.width, height: source.height });
 
     process(source, opts, output);
     const url = output.toDataURL('image/png');
-    const preview = (bg: string, px: number) => h('div', { class: `icon-preview ${bg}` }, h('img', { src: url, width: px, height: px, alt: '' }), h('span', null, px === 16 ? '小' : '大'));
+    const preview = (bg: string, px: number) => h('div', { class: `icon-preview ${bg}` }, h('img', { src: url, width: px, height: px, alt: '' }), h('span', null, px === 16 ? tr('小') : tr('大')));
     previews.replaceChildren(h('div', { class: 'icon-preview-row' }, preview('light', 16), preview('light', 32), preview('dark', 16), preview('dark', 32)));
     validateName();
   }
 
   function confirm(): void {
     if (!source || !validateName()) return;
+    if (saveToLibrary.checked) {
+      const src = source;
+      void src.blob.arrayBuffer().then((buf) =>
+        invoke('library.save', {
+          name,
+          tags: libraryTags.value.split(/[,、]/).map((t) => t.trim()).filter(Boolean),
+          png: output.toDataURL('image/png').split(',')[1]!,
+          source: bytesToBase64(new Uint8Array(buf)),
+          sourceName: src.name,
+          sourceContentType: src.blob.type || 'application/octet-stream',
+          options: { ...opts },
+        }),
+      );
+    }
     const entry: ImageEntry = { id: name, dataUrl: output.toDataURL('image/png'), isNew: true, edit: { source: source.blob, sourceName: source.name, options: { ...opts } } };
     if (!target) {
       store!.addImage(entry);
@@ -398,7 +431,7 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('画像を読み込めませんでした'));
+    img.onerror = () => reject(new Error(tr('画像を読み込めませんでした')));
     img.src = url;
   });
 }
@@ -523,4 +556,36 @@ function cropTo(c: HTMLCanvasElement, r: { x: number; y: number; width: number; 
   out.height = r.height;
   out.getContext('2d')!.drawImage(c, r.x, r.y, r.width, r.height, 0, 0, r.width, r.height);
   return out;
+}
+
+function dataUrlToBlob(url: string): Blob {
+  const [head, b64] = url.split(',');
+  const type = /data:([^;]+)/.exec(head ?? '')?.[1] ?? 'image/png';
+  return new Blob([Uint8Array.from(atob(b64 ?? ''), (c) => c.charCodeAt(0))], { type });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** ライブラリのアイコンを、そのままコントロールに設定する。 */
+export function applyLibraryIcon(target: Path, d: LibraryIconDetail): void {
+  const store = app.store;
+  if (!store) return;
+  const { png, source } = detailToBlobs(d);
+  const ascii = d.name.match(/[A-Za-z0-9]+/g)?.join('_');
+  const base = `img_${ascii ?? 'lib'}`;
+  let id = base;
+  for (let n = 2; store.images.has(id); n++) id = `${base}_${n}`;
+  const entry: ImageEntry = { id, dataUrl: png, isNew: true, edit: source ? { source, sourceName: d.sourceName ?? `${d.id}.png`, options: d.options ?? {} } : undefined };
+  store.addImageAndApply(entry, (doc) => {
+    const t = elementAt(doc, target);
+    if (!t) return undefined;
+    setAttr(t, 'imageMso', null);
+    setAttr(t, 'getImage', null);
+    setAttr(t, 'image', id);
+    return pathOf(t);
+  });
 }

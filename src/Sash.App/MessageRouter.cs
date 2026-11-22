@@ -4,6 +4,7 @@ using Sash.Core.CustomUI;
 using Sash.Core.Packaging;
 using Sash.Core.Settings;
 using Sash.Excel;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.App;
 
@@ -24,6 +25,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "app.close" => Close(),
                 "file.open" => OpenFile(body),
                 "file.save" => SaveFile(Read<SaveRequest>(body)),
+                "file.exportText" => ExportText(Read<ExportRequest>(body)),
                 "file.recent" => RecentFiles(),
                 "file.removeRecent" => RemoveRecent(Read<PathRequest>(body)),
                 "settings.get" => ToDto(settings.Load()),
@@ -31,6 +33,13 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.openWorkbooks" => ExcelInstalled ? await excel.Value.ListOpenWorkbooksAsync() : [],
                 "excel.apply" => await ApplyAsync(Read<ApplyRequest>(body)),
                 "excel.imageMso" => await ImageMsoAsync(Read<ImageMsoRequest>(body)),
+                "library.list" => LibraryList(),
+                "library.get" => LibraryGet(Read<IdRequest>(body)),
+                "library.save" => LibrarySave(Read<LibrarySaveRequest>(body)),
+                "library.update" => LibraryUpdate(Read<LibraryUpdateRequest>(body)),
+                "library.delete" => LibraryDelete(Read<IdRequest>(body)),
+                "library.chooseFolder" => ChooseLibraryFolder(),
+                "library.toggleFavorite" => ToggleFavorite(Read<IdRequest>(body)),
                 "icons.fromExecutable" => IconsFromExecutable(),
                 "recipes.list" => recipes.List(),
                 "recipes.save" => SaveRecipe(body),
@@ -39,7 +48,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "vba.insert" => await InsertVbaAsync(Read<VbaInsertRequest>(body)),
                 "vba.replaceLine" => await ReplaceLineAsync(Read<VbaReplaceRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
-                _ => throw new InvalidOperationException($"不明な要求です：{request.Type}"),
+                _ => throw new InvalidOperationException(L($"不明な要求です：{request.Type}", $"Unknown request: {request.Type}")),
             };
             return new HostResponse(request.Id, true, payload, null);
         }
@@ -50,7 +59,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     }
 
     private static T Read<T>(JsonElement? body) =>
-        body is { } b ? b.Deserialize<T>(HostJson.Options) ?? throw new InvalidOperationException("要求の内容が空です。") : throw new InvalidOperationException("要求の内容が空です。");
+        body is { } b ? b.Deserialize<T>(HostJson.Options) ?? throw new InvalidOperationException(L("要求の内容が空です。", "The request is empty.")) : throw new InvalidOperationException(L("要求の内容が空です。", "The request is empty."));
 
     private static object GetAppInfo() => new
     {
@@ -74,8 +83,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         {
             using var dialog = new OpenFileDialog
             {
-                Filter = "Excel マクロブック / アドイン (*.xlsm;*.xlam)|*.xlsm;*.xlam",
-                Title = "リボンを編集するブックを開く",
+                Filter = L("Excel マクロブック / アドイン (*.xlsm;*.xlam)|*.xlsm;*.xlam", "Excel macro workbooks / add-ins (*.xlsm;*.xlam)|*.xlsm;*.xlam"),
+                Title = L("リボンを編集するブックを開く", "Open a workbook to edit its ribbon"),
             };
             if (dialog.ShowDialog(owner) != DialogResult.OK)
             {
@@ -92,12 +101,12 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         if (!RibbonPackage.IsSupported(path))
         {
-            throw new InvalidOperationException(".xlsm / .xlam のみ開けます。");
+            throw new InvalidOperationException(L(".xlsm / .xlam のみ開けます。", "Only .xlsm / .xlam files can be opened."));
         }
 
         if (!File.Exists(path))
         {
-            throw new FileNotFoundException($"ファイルが見つかりません：{path}");
+            throw new FileNotFoundException(L($"ファイルが見つかりません：{path}", $"File not found: {path}"));
         }
 
         var doc = RibbonPackage.Load(path);
@@ -134,7 +143,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         if (ExcelInstalled && IsLockedByExcel(req.Path))
         {
-            throw new InvalidOperationException("Excelでこのブックが開かれているため保存できません。「反映（F5）」を使うと、Excelで閉じて書き込み、開き直します。");
+            throw new InvalidOperationException(L("Excelでこのブックが開かれているため保存できません。「反映（F5）」を使うと、Excelで閉じて書き込み、開き直します。", "This workbook is open in Excel and cannot be saved. Use Apply (F5) to close it in Excel, write the changes, and reopen it."));
         }
 
         return new { backup = BackupAndWrite(req.Path, req.Parts) };
@@ -153,6 +162,24 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         }
     }
 
+    /// <summary>保存ダイアログを出してテキストを書き出す（.sash.json）。キャンセル時は null。</summary>
+    private object? ExportText(ExportRequest req)
+    {
+        using var dialog = new SaveFileDialog
+        {
+            FileName = req.DefaultName,
+            Filter = string.IsNullOrEmpty(req.Filter) ? L("すべてのファイル (*.*)|*.*", "All files (*.*)|*.*") : req.Filter,
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog(owner) != DialogResult.OK)
+        {
+            return null;
+        }
+
+        File.WriteAllText(dialog.FileName, req.Content, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        return dialog.FileName;
+    }
+
     private object RecentFiles() =>
         settings.Load().RecentFiles.Select(p => new { path = p, exists = File.Exists(p) }).ToList();
 
@@ -168,8 +195,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         using var dialog = new OpenFileDialog
         {
-            Filter = "アイコンを含むファイル (*.exe;*.dll;*.ocx;*.cpl;*.icl)|*.exe;*.dll;*.ocx;*.cpl;*.icl|すべてのファイル (*.*)|*.*",
-            Title = "アイコンを取り出すファイルを選ぶ",
+            Filter = L("アイコンを含むファイル (*.exe;*.dll;*.ocx;*.cpl;*.icl)|*.exe;*.dll;*.ocx;*.cpl;*.icl|すべてのファイル (*.*)|*.*", "Files with icons (*.exe;*.dll;*.ocx;*.cpl;*.icl)|*.exe;*.dll;*.ocx;*.cpl;*.icl|All files (*.*)|*.*"),
+            Title = L("アイコンを取り出すファイルを選ぶ", "Choose a file to extract icons from"),
         };
         if (dialog.ShowDialog(owner) != DialogResult.OK)
         {
@@ -184,13 +211,107 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         };
     }
 
+    // ---- アイコンライブラリ（仕様書 §6.4） ----
+
+    private Sash.Core.Library.IconLibrary Library()
+    {
+        var path = settings.Load().IconLibraryPath;
+        return new Sash.Core.Library.IconLibrary(string.IsNullOrWhiteSpace(path) ? AppPaths.Icons : path);
+    }
+
+    private object LibraryList()
+    {
+        var lib = Library();
+        var favorites = settings.Load().IconFavorites.ToHashSet(StringComparer.Ordinal);
+        return new
+        {
+            root = lib.Root,
+            icons = lib.List().Select(i => new
+            {
+                id = i.Id,
+                name = i.Name,
+                tags = i.Tags,
+                createdAt = i.CreatedAt,
+                hasSource = i.SourceName is not null,
+                favorite = favorites.Contains(i.Id),
+                png = Convert.ToBase64String(lib.ReadPng(i.Id)),
+            }),
+        };
+    }
+
+    private object? LibraryGet(IdRequest req)
+    {
+        var lib = Library();
+        var icon = lib.Get(req.Id);
+        if (icon is null)
+        {
+            return null;
+        }
+
+        var source = lib.ReadSource(icon.Id);
+        return new
+        {
+            id = icon.Id,
+            name = icon.Name,
+            tags = icon.Tags,
+            png = Convert.ToBase64String(lib.ReadPng(icon.Id)),
+            source = source is null ? null : Convert.ToBase64String(source),
+            sourceName = icon.SourceName,
+            sourceContentType = icon.SourceContentType,
+            options = icon.Options,
+        };
+    }
+
+    private object LibrarySave(LibrarySaveRequest req)
+    {
+        var options = req.Options is { ValueKind: JsonValueKind.Object } o ? System.Text.Json.Nodes.JsonNode.Parse(o.GetRawText()) as System.Text.Json.Nodes.JsonObject : null;
+        var icon = Library().Add(req.Name, req.Tags ?? [], Convert.FromBase64String(req.Png),
+            string.IsNullOrEmpty(req.Source) ? null : Convert.FromBase64String(req.Source), req.SourceName, req.SourceContentType, options);
+        return new { id = icon.Id };
+    }
+
+    private object LibraryUpdate(LibraryUpdateRequest req) => Library().Update(req.Id, req.Name, req.Tags);
+
+    private object? LibraryDelete(IdRequest req)
+    {
+        Library().Delete(req.Id);
+        settings.Update(s => s with { IconFavorites = s.IconFavorites.Where(f => f != req.Id).ToList() });
+        return null;
+    }
+
+    private object? ChooseLibraryFolder()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = L("アイコンライブラリの場所（共有フォルダも選べます）", "Icon library location (a shared folder can be used)"),
+            UseDescriptionForTitle = true,
+            SelectedPath = Library().Root,
+        };
+        if (dialog.ShowDialog(owner) != DialogResult.OK)
+        {
+            return null;
+        }
+
+        settings.Update(s => s with { IconLibraryPath = dialog.SelectedPath });
+        return dialog.SelectedPath;
+    }
+
+    private object ToggleFavorite(IdRequest req)
+    {
+        var next = settings.Update(s => s with
+        {
+            IconFavorites = s.IconFavorites.Contains(req.Id) ? s.IconFavorites.Where(f => f != req.Id).ToList() : [.. s.IconFavorites, req.Id],
+        });
+        return next.IconFavorites.Contains(req.Id);
+    }
+
     // ---- レシピ ----
 
     private object? SaveRecipe(JsonElement? body)
     {
         if (body is not { ValueKind: JsonValueKind.Object } b || System.Text.Json.Nodes.JsonNode.Parse(b.GetRawText()) is not System.Text.Json.Nodes.JsonObject obj)
         {
-            throw new InvalidOperationException("レシピの内容が不正です。");
+            throw new InvalidOperationException(L("レシピの内容が不正です。", "The recipe is invalid."));
         }
 
         recipes.Save(obj);
@@ -206,9 +327,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     // ---- 設定 ----
 
     private static SettingsDto ToDto(AppSettings s) =>
-        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule);
+        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath);
 
-    private SettingsDto SetSettings(SettingsDto patch) => ToDto(settings.Update(s => s with
+    private SettingsDto SetSettings(SettingsDto patch) => ToDto(SettingsLanguage.Apply(settings.Update(s => s with
     {
         Theme = patch.Theme ?? s.Theme,
         XmlOnTop = patch.XmlOnTop ?? s.XmlOnTop,
@@ -218,7 +339,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         CallbackShared = patch.CallbackShared ?? s.CallbackShared,
         CallbackSharedPattern = string.IsNullOrWhiteSpace(patch.CallbackSharedPattern) ? s.CallbackSharedPattern : patch.CallbackSharedPattern,
         CallbackModule = string.IsNullOrWhiteSpace(patch.CallbackModule) ? s.CallbackModule : patch.CallbackModule,
-    }));
+        Language = patch.Language is "ja" or "en" ? patch.Language : s.Language,
+    })));
+
 
     // ---- Excel ----
 
@@ -230,7 +353,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         if (!ExcelInstalled)
         {
             Write();
-            return new { status = "written", message = "Excelが見つからないため、ファイルに書き込みました", backup };
+            return new { status = "written", message = L("Excelが見つからないため、ファイルに書き込みました", "Excel was not found, so the changes were written to the file"), backup };
         }
 
         var result = await excel.Value.ApplyAsync(req.Path, req.SaveIfDirty, Write);
@@ -249,7 +372,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     }
 
     private ExcelService RequireExcel() =>
-        ExcelInstalled ? excel.Value : throw new InvalidOperationException("Excelが見つからないため、VBAを読み書きできません。");
+        ExcelInstalled ? excel.Value : throw new InvalidOperationException(L("Excelが見つからないため、VBAを読み書きできません。", "Excel was not found, so VBA cannot be read or written."));
 
     private async Task<object> ReadVbaAsync(PathRequest req)
     {
@@ -295,6 +418,12 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record IdRequest(string Id);
 
+    private sealed record LibrarySaveRequest(string Name, IReadOnlyList<string>? Tags, string Png, string? Source, string? SourceName, string? SourceContentType, JsonElement? Options);
+
+    private sealed record LibraryUpdateRequest(string Id, string? Name, IReadOnlyList<string>? Tags);
+
+    private sealed record ExportRequest(string DefaultName, string Filter, string Content);
+
     private sealed record ImageDto(string Id, string Base64);
 
     private sealed record PartDto(CustomUIVersion Version, string Xml, IReadOnlyList<ImageDto> AddImages, IReadOnlyList<string> RemoveImages);
@@ -319,5 +448,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         string? CallbackPattern,
         bool? CallbackShared,
         string? CallbackSharedPattern,
-        string? CallbackModule);
+        string? CallbackModule,
+        string? Language,
+        string? IconLibraryPath);
 }

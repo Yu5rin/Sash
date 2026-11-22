@@ -4,6 +4,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Sash.Core.Settings;
 using Sash.Excel;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.App;
 
@@ -24,7 +25,9 @@ internal sealed class MainForm : Form
     public MainForm(string? initialFile)
     {
         _initialFile = initialFile;
-        _router = new MessageRouter(this, new SettingsStore(AppPaths.Settings), new RecipeStore(AppPaths.Recipes), _excel, () => BeginInvoke(() =>
+        var settings = new SettingsStore(AppPaths.Settings);
+        SettingsLanguage.Apply(settings.Load());
+        _router = new MessageRouter(this, settings, new RecipeStore(AppPaths.Recipes), _excel, () => BeginInvoke(() =>
         {
             _closeConfirmed = true;
             Close();
@@ -68,7 +71,7 @@ internal sealed class MainForm : Form
         }
         catch (WebView2RuntimeNotFoundException)
         {
-            MessageBox.Show(this, "WebView2 ランタイムが見つかりません。Microsoft Edge WebView2 ランタイムをインストールしてください。",
+            MessageBox.Show(this, L("WebView2 ランタイムが見つかりません。Microsoft Edge WebView2 ランタイムをインストールしてください。", "WebView2 Runtime was not found. Please install the Microsoft Edge WebView2 Runtime."),
                 "Sash", MessageBoxButtons.OK, MessageBoxIcon.Error);
             _closeConfirmed = true;
             Close();

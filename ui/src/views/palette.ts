@@ -4,13 +4,15 @@ import { app } from '../app';
 import { endDrag, startDrag } from '../dnd';
 import { h, svg } from '../dom';
 import { kindIcon } from '../icons';
-import { createElement, elementAt, ensureContextMenus, ensureTabs, pathOf } from '../model';
-import { canContain, elements } from '../schema';
+import { createElement, elementAt, ensureBackstage, ensureContextMenus, ensureTabs, pathOf } from '../model';
+import { canContainEl, inBackstage, titleOf } from '../schema';
+import { t } from '../i18n';
 
 export const PALETTE_ITEMS: readonly string[] = [
   'tab', 'group', 'button', 'toggleButton', 'checkBox', 'splitButton', 'menu', 'dynamicMenu', 'gallery',
   'dropDown', 'comboBox', 'editBox', 'labelControl', 'separator', 'box', 'buttonGroup', 'dialogBoxLauncher',
   'menuSeparator', 'item', 'contextMenu',
+  'backstage', 'taskGroup', 'taskFormGroup', 'hyperlink', 'imageControl', 'groupBox', 'layoutContainer', 'radioGroup',
 ];
 
 export function mountPalette(host: HTMLElement): void {
@@ -20,13 +22,13 @@ export function mountPalette(host: HTMLElement): void {
         'li',
         {
           draggable: true,
-          title: `${tag}（ダブルクリックで選択中の場所に追加）`,
+          title: t('{tag}（ダブルクリックで選択中の場所に追加）', { tag }),
           ondragstart: (e: DragEvent) => startDrag(e, { kind: 'new', tag }),
           ondragend: () => endDrag(),
           ondblclick: () => insertNearSelection(tag),
         },
         h('span', { class: 'kind-icon' }, svg(kindIcon(tag))),
-        h('span', null, elements.get(tag)?.title ?? tag),
+        h('span', null, titleOf(tag)),
         h('span', { class: 'palette-tag' }, tag),
       ),
     ),
@@ -38,8 +40,17 @@ export function insertNearSelection(tag: string): void {
   const store = app.store;
   if (!store) return;
   store.edit('canvas', (doc) => {
-    const el = createElement(doc, tag);
-    if (tag === 'tab') {
+    const selected = store.selection ? elementAt(doc, store.selection) : null;
+    if (tag === 'backstage') {
+      const existing = doc.documentElement.querySelector(':scope > backstage');
+      if (existing) return pathOf(existing);
+      const bs = createElement(doc, 'backstage');
+      const placeholder = ensureBackstage(doc);
+      placeholder.replaceWith(bs);
+      return pathOf(bs);
+    }
+    const el = createElement(doc, tag, inBackstage(selected) ? selected : null);
+    if (tag === 'tab' && !inBackstage(selected)) {
       const tabs = ensureTabs(doc);
       tabs.append(el);
       return pathOf(el);
@@ -48,12 +59,14 @@ export function insertNearSelection(tag: string): void {
       ensureContextMenus(doc).append(el);
       return pathOf(el);
     }
-    let cur: Element | null = store.selection ? elementAt(doc, store.selection) : null;
+    let cur: Element | null = selected;
     let after: Element | null = null;
     while (cur) {
-      if (canContain(cur.localName, tag)) {
-        cur.insertBefore(el, after?.nextElementSibling ?? null);
-        return pathOf(el);
+      if (canContainEl(cur, tag)) {
+        // 置く場所に合った定義で作り直す（Backstage の中かどうかで中身が変わるため）
+        const placed = createElement(doc, tag, cur);
+        cur.insertBefore(placed, after?.nextElementSibling ?? null);
+        return pathOf(placed);
       }
       after = cur;
       cur = cur.parentElement;

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Sash.Core.Imaging;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.Excel;
 
@@ -181,7 +182,7 @@ public sealed class ExcelService : IDisposable
         if (found is null)
         {
             write();
-            return new ApplyResult(ApplyStatus.Written, "Excelでは開かれていないので、ファイルに書き込みました");
+            return new ApplyResult(ApplyStatus.Written, L("Excelでは開かれていないので、ファイルに書き込みました", "The workbook is not open in Excel, so the changes were written to the file"));
         }
 
         var (app, wb) = found.Value;
@@ -192,7 +193,7 @@ public sealed class ExcelService : IDisposable
             // 勝手には保存しない（仕様書 §7.1 の 3）
             if (!saveIfDirty)
             {
-                return new ApplyResult(ApplyStatus.NeedsSave, "Excel側に未保存の変更があります");
+                return new ApplyResult(ApplyStatus.NeedsSave, L("Excel側に未保存の変更があります", "The workbook has unsaved changes in Excel"));
             }
 
             wb.Save();
@@ -240,27 +241,27 @@ public sealed class ExcelService : IDisposable
         {
             if (writeError is null)
             {
-                return new ApplyResult(ApplyStatus.Blocked, $"書き込みましたが、Excelで開き直せませんでした（{ex.Message}）。Excelで直接開いてください");
+                return new ApplyResult(ApplyStatus.Blocked, L($"書き込みましたが、Excelで開き直せませんでした（{ex.Message}）。Excelで直接開いてください", $"The changes were written, but Excel could not reopen the workbook ({ex.Message}). Please open it in Excel"));
             }
         }
 
         if (writeError is not null)
         {
-            throw new IOException($"書き込みに失敗しました。ブックは元のまま開き直しました：{writeError.Message}", writeError);
+            throw new IOException(L($"書き込みに失敗しました。ブックは元のまま開き直しました：{writeError.Message}", $"Writing failed. The workbook was reopened unchanged: {writeError.Message}"), writeError);
         }
 
         int protectedAfter = SafeValue(() => (int)app.ProtectedViewWindows.Count) ?? 0;
         if (protectedAfter > protectedBefore)
         {
-            return new ApplyResult(ApplyStatus.Blocked, "反映しましたが、保護ビューで開かれています。Excelで［編集を有効にする］を押すとリボンが表示されます");
+            return new ApplyResult(ApplyStatus.Blocked, L("反映しましたが、保護ビューで開かれています。Excelで［編集を有効にする］を押すとリボンが表示されます", "Applied, but the workbook opened in Protected View. Click Enable Editing in Excel to show the ribbon"));
         }
 
         if (TryGetWorkbook(app, fullPath) is null)
         {
-            return new ApplyResult(ApplyStatus.Blocked, "反映しましたが、ブックの再読み込みが確認できません。Excelの画面を確認してください");
+            return new ApplyResult(ApplyStatus.Blocked, L("反映しましたが、ブックの再読み込みが確認できません。Excelの画面を確認してください", "Applied, but reopening the workbook could not be confirmed. Please check Excel"));
         }
 
-        return new ApplyResult(ApplyStatus.Applied, isAddIn ? "アドインを読み込み直して反映しました" : "ブックを開き直して反映しました");
+        return new ApplyResult(ApplyStatus.Applied, isAddIn ? L("アドインを読み込み直して反映しました", "Reloaded the add-in and applied the changes") : L("ブックを開き直して反映しました", "Reopened the workbook and applied the changes"));
     });
 
     /// <summary>
@@ -360,11 +361,11 @@ public sealed class ExcelService : IDisposable
 
     private static dynamic RequireProject(string fullPath)
     {
-        var found = FindWorkbook(fullPath) ?? throw new InvalidOperationException("ブックがExcelで開かれていません。");
+        var found = FindWorkbook(fullPath) ?? throw new InvalidOperationException(L("ブックがExcelで開かれていません。", "The workbook is not open in Excel."));
         dynamic? project = TryGetProject(found.Workbook, out VbaReadStatus status);
         return project ?? throw new InvalidOperationException(status == VbaReadStatus.Locked
-            ? "VBAプロジェクトがパスワードで保護されています。"
-            : "VBAプロジェクトにアクセスできません。Excelの［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにしてください。");
+            ? L("VBAプロジェクトがパスワードで保護されています。", "The VBA project is password protected.")
+            : L("VBAプロジェクトにアクセスできません。Excelの［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにしてください。", "Cannot access the VBA project. In Excel, turn on \"Trust access to the VBA project object model\" under Trust Center > Macro Settings."));
     }
 
     /// <summary>
@@ -414,7 +415,7 @@ public sealed class ExcelService : IDisposable
         string current = cm.Lines(line, 1);
         if (!string.Equals(current, expected, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("VBAのコードが読み込んだ後に変更されています。コールバック一覧を再読み込みしてください。");
+            throw new InvalidOperationException(L("VBAのコードが読み込んだ後に変更されています。コールバック一覧を再読み込みしてください。", "The VBA code changed after it was read. Please reload the callback list."));
         }
 
         cm.ReplaceLine(line, replacement);

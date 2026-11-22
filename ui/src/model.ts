@@ -2,7 +2,8 @@
 // DOM を直接持つので、キャンバスで編集してもコメントと属性の並び順は保たれる（仕様書 §5.5）。
 // 要素の位置は「ルートからの子要素の番号の並び」（パス）で表し、XML を読み直しても選択を保てるようにする。
 
-import { canContain, elements, ID_PATTERN, ID_PREFIX } from './schema';
+import { backstageElements, canContainEl, elements, ID_PATTERN, ID_PREFIX, inBackstage } from './schema';
+import { t as tr } from './i18n';
 
 export type Path = readonly number[];
 
@@ -15,9 +16,9 @@ export function parseXml(xml: string): ParseResult {
     // Chromium のエラー文（"error on line 3 at column 5: ..."）から、行・列・内容だけを取り出す
     const text = (error.textContent ?? '').replace(/\s+/g, ' ');
     const m = /line (\d+) at column (\d+):\s*(.*?)(?:\s*Below is a rendering.*)?$/i.exec(text);
-    if (m) return { ok: false, message: `${m[1]}行目 ${m[2]}列：${m[3]}`, line: Number(m[1]) };
+    if (m) return { ok: false, message: tr('{line}行目 {column}列：{message}', { line: m[1]!, column: m[2]!, message: m[3]! }), line: Number(m[1]) };
     const line = /line (\d+)/i.exec(text);
-    return { ok: false, message: text.trim() || 'XMLの構文エラー', line: line ? Number(line[1]) : undefined };
+    return { ok: false, message: text.trim() || tr('XMLの構文エラー'), line: line ? Number(line[1]) : undefined };
   }
   return { ok: true, doc };
 }
@@ -154,16 +155,22 @@ const DEFAULT_LABEL: Readonly<Record<string, string>> = {
   tab: '新しいタブ', group: '新しいグループ', button: 'ボタン', toggleButton: 'トグル', checkBox: 'チェック',
   menu: 'メニュー', dynamicMenu: 'メニュー', gallery: 'ギャラリー', dropDown: 'ドロップダウン', comboBox: 'コンボ',
   editBox: '入力', labelControl: 'ラベル', item: '項目',
+  taskGroup: 'タスク', taskFormGroup: 'タスク', category: 'カテゴリ', task: 'タスク', hyperlink: 'リンク',
+  groupBox: '枠', radioGroup: '選択', radioButton: '選択肢', menuGroup: 'グループ',
 };
 
-/** パレットから置く要素を作る。分割ボタンなど、子要素が必須のものは一緒に作る。 */
-export function createElement(doc: Document, tag: string): Element {
+/**
+ * パレットから置く要素を作る。分割ボタンなど、子要素が必須のものは一緒に作る。
+ * parent を渡すと、その場所に合った定義（Backstage の中かどうか）で作る。
+ */
+export function createElement(doc: Document, tag: string, parent: Element | null = null): Element {
   const ns = doc.documentElement.namespaceURI;
   const used = usedIds(doc);
+  const bs = tag === 'backstage' || inBackstage(parent);
   const make = (t: string): Element => {
     const el = doc.createElementNS(ns, t);
-    const def = elements.get(t);
-    const label = DEFAULT_LABEL[t] ?? null;
+    const def = bs ? backstageElements.get(t) : elements.get(t);
+    const label = DEFAULT_LABEL[t] !== undefined ? tr(DEFAULT_LABEL[t]) : null;
     if (def?.idRequired || t === 'separator' || t === 'box' || t === 'buttonGroup') {
       const id = suggestId(t, null, used);
       used.add(id);
@@ -174,6 +181,10 @@ export function createElement(doc: Document, tag: string): Element {
   };
 
   const el = make(tag);
+  if (bs) {
+    buildBackstage(el, make);
+    return el;
+  }
   if (tag === 'contextMenu') {
     // コンテキストメニューは組み込みのメニュー（idMso）に項目を足すもの。既定はセルの右クリックメニュー
     el.removeAttribute('id');
@@ -212,6 +223,70 @@ export function ensureTabs(doc: Document): Element {
   return tabs;
 }
 
+/** Backstage の要素に、最低限の中身を足す。 */
+function buildBackstage(el: Element, make: (t: string) => Element): void {
+  const doc = el.ownerDocument;
+  const group = (): Element => {
+    const g = make('group');
+    const top = doc.createElementNS(doc.documentElement.namespaceURI, 'topItems');
+    top.append(make('button'));
+    g.append(top);
+    return g;
+  };
+  const column = (name: string, ...kids: Element[]) => {
+    const c = doc.createElementNS(doc.documentElement.namespaceURI, name);
+    c.append(...kids);
+    return c;
+  };
+  switch (el.localName) {
+    case 'backstage': {
+      const tab = make('tab');
+      tab.append(column('firstColumn', group()));
+      el.append(tab);
+      break;
+    }
+    case 'tab':
+      el.append(column('firstColumn', group()));
+      break;
+    case 'group': {
+      const top = doc.createElementNS(doc.documentElement.namespaceURI, 'topItems');
+      top.append(make('button'));
+      el.append(top);
+      break;
+    }
+    case 'taskGroup':
+    case 'taskFormGroup': {
+      const cat = make('category');
+      const task = make('task');
+      if (el.localName === 'taskFormGroup') task.append(group());
+      cat.append(task);
+      el.append(cat);
+      break;
+    }
+    case 'radioGroup':
+      el.append(make('radioButton'), make('radioButton'));
+      break;
+    case 'dropDown':
+    case 'comboBox':
+      el.append(make('item'));
+      break;
+    case 'menu':
+      el.append(make('button'));
+      break;
+  }
+}
+
+/** customUI > backstage を必要なら作って返す（ribbon の後ろ、contextMenus の前に置く）。 */
+export function ensureBackstage(doc: Document): Element {
+  const root = doc.documentElement;
+  let bs = childElements(root).find((c) => c.localName === 'backstage');
+  if (!bs) {
+    bs = doc.createElementNS(root.namespaceURI, 'backstage');
+    root.insertBefore(bs, childElements(root).find((c) => c.localName === 'contextMenus') ?? null);
+  }
+  return bs;
+}
+
 /** customUI > contextMenus を必要なら作って返す（backstage の後ろ、末尾に置く）。 */
 export function ensureContextMenus(doc: Document): Element {
   const root = doc.documentElement;
@@ -231,7 +306,7 @@ export function insertAt(parent: Element, child: Element, index: number): void {
 /** 要素を移動する。移動先が自分の子孫なら何もしない。 */
 export function moveElement(el: Element, newParent: Element, index: number): boolean {
   if (el === newParent || el.contains(newParent)) return false;
-  if (!canContain(newParent.localName, el.localName)) return false;
+  if (!canContainEl(newParent, el.localName)) return false;
   // index は移動前の子要素の並びでの位置。その位置の要素の前に差し込む
   const ref = newParent.children[index] ?? null;
   if (ref !== el) newParent.insertBefore(el, ref);

@@ -1,6 +1,7 @@
 // メイン画面の上に重なるダイアログ。
 
 import { h, svg } from '../dom';
+import { t } from '../i18n';
 import { uiIcons } from '../icons';
 
 export interface ModalHandle {
@@ -28,7 +29,7 @@ export function openModal(title: string, content: HTMLElement, opts: { wide?: bo
   const dialog = h(
     'div',
     { class: `modal${opts.wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-    h('header', null, h('h2', null, title), h('button', { type: 'button', class: 'icon-button', title: '閉じる (Esc)', onclick: close }, svg(uiIcons.close))),
+    h('header', null, h('h2', null, title), h('button', { type: 'button', class: 'icon-button', title: t('閉じる (Esc)'), onclick: close }, svg(uiIcons.close))),
     h('div', { class: 'modal-body' }, content),
     opts.footer ? h('footer', null, opts.footer) : null,
   );

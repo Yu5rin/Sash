@@ -78,6 +78,38 @@ export class PartStore {
     for (const l of this.listeners) l(change);
   }
 
+  /** 最後に保存した（または読み込んだ）ときの XML。差分表示に使う。 */
+  get savedXml(): string {
+    return this.savedText;
+  }
+
+  /** 最後に保存したときから、追加・削除された画像。 */
+  imageChanges(): { added: string[]; removed: string[] } {
+    return { added: [...this.images.values()].filter((i) => i.isNew).map((i) => i.id), removed: [...this.removedImages] };
+  }
+
+  /** XML と画像をまとめて置き換える（.sash.json の読み込み）。一つの履歴にする。 */
+  replaceAll(xml: string, images: ImageEntry[]): void {
+    this.pushHistory();
+    this.lastTextEditAt = 0;
+    for (const id of this.images.keys()) {
+      const img = this.images.get(id)!;
+      if (!img.isNew) this.removedImages.add(id);
+    }
+    this.images = new Map(images.map((i) => [i.id, i]));
+    for (const i of images) this.removedImages.delete(i.id);
+    this.text = xml;
+    const parsed = parseXml(xml);
+    if (parsed.ok) {
+      this.doc = parsed.doc;
+      this.syncError = null;
+    } else {
+      this.syncError = { message: parsed.message, line: parsed.line };
+    }
+    this.selection = null;
+    this.emit(['doc', 'selection', 'images'], 'other');
+  }
+
   get dirty(): boolean {
     return this.text !== this.savedText || this.imageKey() !== this.savedImageKey;
   }

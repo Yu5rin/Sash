@@ -2,6 +2,7 @@
 
 import { fuzzyScore } from '../catalog/catalog';
 import { h } from '../dom';
+import { t } from '../i18n';
 
 export interface Command {
   id: string;
@@ -51,7 +52,7 @@ export function openCommandPalette(commands: () => Command[]): void {
   if (open) return;
   open = true;
   const all = commands().filter((c) => c.enabled?.() ?? true);
-  const input = h('input', { type: 'search', placeholder: 'コマンドを検索（例：保存、ボタン、レシピ、テーマ）', spellcheck: false, 'aria-label': 'コマンドを検索' });
+  const input = h('input', { type: 'search', placeholder: t('コマンドを検索（例：保存、ボタン、レシピ、テーマ）'), spellcheck: false, 'aria-label': t('コマンドを検索') });
   const list = h('ul', { class: 'palette-results', role: 'listbox' });
   let items: Command[] = [];
   let index = 0;
@@ -94,7 +95,7 @@ export function openCommandPalette(commands: () => Command[]): void {
     render();
   });
 
-  const backdrop = h('div', { class: 'palette-backdrop', onmousedown: (e: MouseEvent) => e.target === backdrop && close() }, h('div', { class: 'command-palette', role: 'dialog', 'aria-label': 'コマンドパレット' }, input, list));
+  const backdrop = h('div', { class: 'palette-backdrop', onmousedown: (e: MouseEvent) => e.target === backdrop && close() }, h('div', { class: 'command-palette', role: 'dialog', 'aria-label': t('コマンドパレット') }, input, list));
   document.body.append(backdrop);
   input.focus();
   render();

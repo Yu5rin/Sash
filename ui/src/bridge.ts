@@ -1,5 +1,7 @@
 // ホスト（C#）とのメッセージ交換。src/Sash.App/MessageRouter.cs と対応させる。
 
+import { lang, t } from './i18n';
+
 export type CustomUIVersion = 'office2007' | 'office2010';
 
 export interface AppInfo {
@@ -67,6 +69,31 @@ export interface Settings {
   callbackShared: boolean;
   callbackSharedPattern: string;
   callbackModule: string;
+  language: 'ja' | 'en';
+  /** アイコンライブラリの場所（表示用。変更は library.chooseFolder で行う）。 */
+  iconLibraryPath: string;
+}
+
+export interface LibraryIconDto {
+  id: string;
+  name: string;
+  tags: string[];
+  createdAt: string;
+  hasSource: boolean;
+  favorite: boolean;
+  /** PNG の base64。 */
+  png: string;
+}
+
+export interface LibraryIconDetail {
+  id: string;
+  name: string;
+  tags: string[];
+  png: string;
+  source: string | null;
+  sourceName: string | null;
+  sourceContentType: string | null;
+  options: Record<string, unknown> | null;
 }
 
 export type VbaReadStatus = 'ok' | 'notOpen' | 'trustDenied' | 'locked' | 'noExcel';
@@ -84,6 +111,7 @@ export interface HostApi {
   'app.close': { req: undefined; res: null };
   'file.open': { req: { path?: string } | undefined; res: OpenedDocument | null };
   'file.save': { req: { path: string; parts: PartToSave[] }; res: { backup: string } };
+  'file.exportText': { req: { defaultName: string; filter: string; content: string }; res: string | null };
   'file.recent': { req: undefined; res: RecentFile[] };
   'file.removeRecent': { req: { path: string }; res: null };
   'settings.get': { req: undefined; res: Settings };
@@ -92,6 +120,13 @@ export interface HostApi {
   'excel.apply': { req: { path: string; parts: PartToSave[]; saveIfDirty: boolean }; res: ApplyResult };
   'excel.imageMso': { req: { names: string[]; size: number }; res: Record<string, string | null> };
   'excel.labels': { req: { ids: string[] }; res: Record<string, string> };
+  'library.list': { req: undefined; res: { root: string; icons: LibraryIconDto[] } };
+  'library.get': { req: { id: string }; res: LibraryIconDetail | null };
+  'library.save': { req: { name: string; tags: string[]; png: string; source?: string; sourceName?: string; sourceContentType?: string; options?: unknown }; res: { id: string } };
+  'library.update': { req: { id: string; name?: string; tags?: string[] }; res: unknown };
+  'library.delete': { req: { id: string }; res: null };
+  'library.chooseFolder': { req: undefined; res: string | null };
+  'library.toggleFavorite': { req: { id: string }; res: boolean };
   'icons.fromExecutable': { req: undefined; res: { fileName: string; icons: { name: string; base64: string }[] } | null };
   'recipes.list': { req: undefined; res: unknown[] };
   'recipes.save': { req: Record<string, unknown>; res: null };
@@ -144,7 +179,7 @@ webview?.addEventListener('message', (e) => {
   if (!p) return;
   pending.delete(data.id);
   if (data.ok) p.resolve(data.payload);
-  else p.reject(new Error(data.error ?? '不明なエラー'));
+  else p.reject(new Error(data.error ?? t('不明なエラー')));
 });
 
 export function onHostEvent(listener: (e: HostEvent) => void): void {
@@ -198,7 +233,7 @@ const sampleXml = `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/
 `;
 
 const mock = {
-  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon' } as Settings,
+  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)') } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
     const r = (v: unknown) => Promise.resolve(v as HostApi[K]['res']);
     switch (type) {
@@ -209,7 +244,16 @@ const mock = {
       case 'file.open':
         return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }] });
       case 'file.save':
-        return r({ backup: '(ブラウザ実行中のため保存しません)' });
+        return r({ backup: t('(ブラウザ実行中のため保存しません)') });
+      case 'file.exportText': {
+        // ブラウザ実行中はダウンロードで代用する
+        const p = payload as { defaultName: string; content: string };
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([p.content], { type: 'application/json' }));
+        a.download = p.defaultName;
+        a.click();
+        return r(p.defaultName);
+      }
       case 'file.recent':
         return r([{ path: 'C:\\sample\\集計ツール.xlam', exists: true }]);
       case 'settings.get':
@@ -220,12 +264,14 @@ const mock = {
       case 'excel.openWorkbooks':
         return r([]);
       case 'excel.apply':
-        return r({ status: 'written', message: 'ブラウザ実行中のため反映しません' });
+        return r({ status: 'written', message: t('ブラウザ実行中のため反映しません') });
       case 'excel.imageMso':
       case 'excel.labels':
         return r({});
       case 'recipes.list':
         return r([]);
+      case 'library.list':
+        return r({ root: t('(ブラウザ実行中)'), icons: [] });
       case 'vba.read':
         return r({ status: 'noExcel', modules: [] });
       default:

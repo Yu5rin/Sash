@@ -7,23 +7,30 @@ import { canDropInto, drop, draggedTag, endDrag, startDrag, dragPayload } from '
 import { h } from '../dom';
 import { childElements, elementAt, pathOf, samePath, isAncestorPath, type Path } from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
-import { elements } from '../schema';
+import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
+import { defFor } from '../schema';
+import { lang, t as tr } from '../i18n';
 
 /** 表示する組み込みタブ（Excel の既定の並び）。 */
-const BUILTIN_TABS: readonly [string, string][] = [
-  ['TabHome', 'ホーム'],
-  ['TabInsert', '挿入'],
-  ['TabPageLayoutExcel', 'ページ レイアウト'],
-  ['TabFormulas', '数式'],
-  ['TabData', 'データ'],
-  ['TabReview', '校閲'],
-  ['TabView', '表示'],
-  ['TabDeveloper', '開発'],
-  ['HelpTab', 'ヘルプ'],
+const BUILTIN_TABS: readonly [string, string, string][] = [
+  ['TabHome', 'ホーム', 'Home'],
+  ['TabInsert', '挿入', 'Insert'],
+  ['TabPageLayoutExcel', 'ページ レイアウト', 'Page Layout'],
+  ['TabFormulas', '数式', 'Formulas'],
+  ['TabData', 'データ', 'Data'],
+  ['TabReview', '校閲', 'Review'],
+  ['TabView', '表示', 'View'],
+  ['TabDeveloper', '開発', 'Developer'],
+  ['HelpTab', 'ヘルプ', 'Help'],
 ];
 
+/** 組み込みタブの表示名。「表示」は属性の分類名と同じ文言なので、辞書ではなくここで英語にする。 */
+function tabName(ja: string, en: string): string {
+  return lang === 'en' ? en : ja;
+}
+
 /** 表示中のタブ。自作タブはパス、組み込みタブは idMso で表す。 */
-let activeTab: { kind: 'path'; path: Path } | { kind: 'builtin'; idMso: string } | null = null;
+let activeTab: { kind: 'path'; path: Path } | { kind: 'builtin'; idMso: string } | { kind: 'backstage' } | null = null;
 
 let onImageDrop: ((files: FileList, target: Path) => void) | null = null;
 
@@ -32,6 +39,7 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   const render = () => renderCanvas(host);
   app.on('session', () => {
     activeTab = null;
+    resetBackstage();
     render();
   });
   app.on('store', (c) => {
@@ -57,6 +65,10 @@ function followSelection(): void {
   const store = app.store;
   const sel = store?.selection;
   if (!store || !sel) return;
+  if (followBackstageSelection(store.doc, sel)) {
+    activeTab = { kind: 'backstage' };
+    return;
+  }
   let el = elementAt(store.doc, sel);
   while (el && el.localName !== 'tab') el = el.parentElement;
   if (!el) return;
@@ -69,7 +81,8 @@ function isBuiltinTab(idMso: string): boolean {
 }
 
 function builtinTabLabel(idMso: string): string {
-  return BUILTIN_TABS.find(([id]) => id === idMso)?.[1] ?? labels.get(idMso) ?? idMso;
+  const builtin = BUILTIN_TABS.find(([id]) => id === idMso);
+  return builtin ? tabName(builtin[1], builtin[2]) : labels.get(idMso) ?? idMso;
 }
 
 // ---- 描画 ----
@@ -93,7 +106,7 @@ function collectTabs(doc: Document): TabEntry[] {
   const tabEls = childElements(findChild(ribbon, 'tabs') ?? doc.createElement('x')).filter((t) => t.localName === 'tab');
   const entries: TabEntry[] = fromScratch
     ? []
-    : BUILTIN_TABS.map(([idMso, label]) => ({ key: `builtin:${idMso}`, label, builtin: true, el: null, idMso }));
+    : BUILTIN_TABS.map(([idMso, ja, en]) => ({ key: `builtin:${idMso}`, label: tabName(ja, en), builtin: true, el: null, idMso }));
 
   for (const t of tabEls) {
     const idMso = t.getAttribute('idMso');
@@ -136,17 +149,27 @@ function renderCanvas(host: HTMLElement): void {
   const tabs = collectTabs(doc);
 
   // 表示するタブを決める。未選択なら最初の自作タブ、なければホーム
-  let active = tabs.find((t) =>
+  const showBackstage = activeTab?.kind === 'backstage';
+  let active = showBackstage ? undefined : tabs.find((t) =>
     activeTab?.kind === 'path' ? t.el !== null && samePath(pathOf(t.el), activeTab.path) : activeTab?.kind === 'builtin' && t.idMso === activeTab.idMso,
   );
-  active ??= tabs.find((t) => !t.builtin) ?? tabs.find((t) => t.el !== null) ?? tabs[0];
+  if (!showBackstage) active ??= tabs.find((t) => !t.builtin) ?? tabs.find((t) => t.el !== null) ?? tabs[0];
 
   const errorPaths = new Set(app.problems.filter((p) => p.severity === 'error').map((p) => p.path.join('.')));
 
   const tabBar = h(
     'div',
     { class: 'rb-tabs', role: 'tablist' },
-    h('span', { class: 'rb-tab file' }, 'ファイル'),
+    h('span', {
+      class: `rb-tab file${activeTab?.kind === 'backstage' ? ' active' : ''}`,
+      role: 'tab',
+      title: tr('Backstage（ファイル タブ）を表示'),
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        activeTab = { kind: 'backstage' };
+        renderCanvas(host);
+      },
+    }, tr('ファイル')),
     tabs.map((t) =>
       h(
         'span',
@@ -169,7 +192,7 @@ function renderCanvas(host: HTMLElement): void {
             hideIndicator(host);
           },
         },
-        t.label || '(ラベルなし)',
+        t.label || tr('(ラベルなし)'),
       ),
     ),
   );
@@ -198,13 +221,13 @@ function renderCanvas(host: HTMLElement): void {
     }
     if (active.el) body.dataset['path'] = pathOf(active.el).join('.');
     if (groups.length === 0 && !active.builtin) {
-      body.append(h('div', { class: 'rb-empty' }, 'パレットから「グループ」をここにドラッグしてください'));
+      body.append(h('div', { class: 'rb-empty' }, tr('パレットから「グループ」をここにドラッグしてください')));
     }
   }
 
   const qat = renderQat(doc, errorPaths);
-  const ctx = renderContextMenus(doc, errorPaths);
-  host.replaceChildren(...[qat, tabBar, body, ctx, h('div', { class: 'drop-indicator', hidden: true })].filter((x): x is HTMLElement => x !== null));
+  const ctx = showBackstage ? null : renderContextMenus(doc, errorPaths);
+  host.replaceChildren(...[qat, tabBar, showBackstage ? renderBackstage(doc, errorPaths) : body, ctx, h('div', { class: 'drop-indicator', hidden: true })].filter((x): x is HTMLElement => x !== null));
 }
 
 /** コンテキストメニュー（右クリックメニュー）に足す項目を、メニューの形で並べる。 */
@@ -251,14 +274,14 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
         },
       },
       h('div', { class: 'ctx-title', title: idMso }, labels.get(idMso) ?? idMso),
-      h('div', { class: 'ctx-builtin' }, '（組み込みの項目）'),
-      h('div', { class: 'ctx-items', dataset: { container: mp.join('.') } }, m.children.length ? childElements(m).flatMap((c) => item(c, 0)) : h('div', { class: 'rb-menu-item muted' }, 'ここに項目をドラッグ')),
+      h('div', { class: 'ctx-builtin' }, tr('（組み込みの項目）')),
+      h('div', { class: 'ctx-items', dataset: { container: mp.join('.') } }, m.children.length ? childElements(m).flatMap((c) => item(c, 0)) : h('div', { class: 'rb-menu-item muted' }, tr('ここに項目をドラッグ'))),
     );
   });
   if (!cms && menus.length === 0) {
-    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } }, h('h3', null, 'コンテキストメニュー（右クリック）'), h('div', { class: 'muted' }, 'パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます'));
+    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } }, h('h3', null, tr('コンテキストメニュー（右クリック）')), h('div', { class: 'muted' }, tr('パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます')));
   }
-  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, 'コンテキストメニュー（右クリック）'), h('div', { class: 'ctx-cards' }, cards));
+  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, tr('コンテキストメニュー（右クリック）')), h('div', { class: 'ctx-cards' }, cards));
 }
 
 function isSelected(el: Element): boolean {
@@ -269,7 +292,7 @@ function renderQat(doc: Document, errorPaths: Set<string>): HTMLElement | null {
   const qat = findChild(findChild(doc.documentElement, 'ribbon'), 'qat');
   if (!qat) return null;
   const items = childElements(qat).flatMap((c) => childElements(c));
-  return h('div', { class: 'rb-qat', dataset: { path: pathOf(qat).join('.') } }, h('span', { class: 'rb-qat-label' }, 'クイック アクセス'), items.map((c) => renderControl(c, 'small', errorPaths)));
+  return h('div', { class: 'rb-qat', dataset: { path: pathOf(qat).join('.') } }, h('span', { class: 'rb-qat-label' }, tr('クイック アクセス')), items.map((c) => renderControl(c, 'small', errorPaths)));
 }
 
 function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
@@ -303,7 +326,7 @@ function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
       launcher
         ? h('span', {
             class: `rb-launcher${isSelected(launcher) ? ' selected' : ''}`,
-            title: 'ダイアログ起動ツール',
+            title: tr('ダイアログ起動ツール'),
             dataset: { path: pathOf(launcher).join('.') },
             onclick: (e: MouseEvent) => {
               e.stopPropagation();
@@ -471,14 +494,14 @@ function menuPopup(el: Element): HTMLElement | null {
     }
   };
   walk(el, 0);
-  if (items.length === 0) items.push(h('div', { class: 'rb-menu-item muted' }, el.localName === 'dynamicMenu' ? '中身は getContent で作られます' : '（空）'));
+  if (items.length === 0) items.push(h('div', { class: 'rb-menu-item muted' }, el.localName === 'dynamicMenu' ? tr('中身は getContent で作られます') : tr('（空）')));
   return h('div', { class: 'rb-menu-popup', dataset: { container: path.join('.') } }, items);
 }
 
 // ---- ドラッグ＆ドロップ ----
 
 interface DropSpot {
-  parentPath: Path | null | 'contextMenus';
+  parentPath: Path | null | 'contextMenus' | 'backstage';
   index: number;
   rect: { left: number; top: number; width: number; height: number };
 }
@@ -518,6 +541,14 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
     return { parentPath: tabsPath, index: tabsEl?.children.length ?? 0, rect: { left: r.right + 1, top: r.top, width: 2, height: r.height } };
   }
 
+  // Backstage がまだないときは、空の欄へのドロップで作る
+  const bsNew = target.closest<HTMLElement>('[data-bs-new]');
+  if (bsNew) {
+    if (draggedTag(doc) !== 'backstage') return null;
+    const r = bsNew.getBoundingClientRect();
+    return { parentPath: 'backstage', index: 0, rect: { left: r.left + 4, top: r.top + 4, width: r.width - 8, height: 2 } };
+  }
+
   // コンテキストメニューの一覧がまだないときは、空の欄へのドロップで作る
   const ctxNew = target.closest<HTMLElement>('[data-ctx-new]');
   if (ctxNew) {
@@ -546,12 +577,12 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
         const r = node.getBoundingClientRect();
         const idx = Array.prototype.indexOf.call(parent.children, el) as number;
         // メニューの項目は縦に並ぶので、上下で前後を決める
-        const vertical = node.classList.contains('rb-menu-item') || node.classList.contains('ctx-card');
-        const before = vertical && !node.classList.contains('ctx-card') ? e.clientY < r.top + r.height / 2 : e.clientX < r.left + r.width / 2;
+        const vertical = node.classList.contains('rb-menu-item') || node.classList.contains('bs-item') || node.classList.contains('bs-group') || node.classList.contains('bs-category');
+        const before = vertical ? e.clientY < r.top + r.height / 2 : e.clientX < r.left + r.width / 2;
         return {
           parentPath: pathOf(parent),
           index: before ? idx : idx + 1,
-          rect: vertical && !node.classList.contains('ctx-card')
+          rect: vertical
             ? { left: r.left, top: (before ? r.top : r.bottom) - 1, width: r.width, height: 2 }
             : { left: (before ? r.left : r.right) - 1, top: r.top, width: 2, height: r.height },
         };
@@ -569,13 +600,13 @@ function spotInContainer(e: DragEvent, node: HTMLElement, containerPath: Path, c
   });
   for (const k of kids) {
     const r = k.getBoundingClientRect();
-    const inList = k.parentElement?.classList.contains('ctx-items') || k.parentElement?.classList.contains('rb-menu-popup');
+    const inList = isVerticalList(k.parentElement);
     const before = inList
       ? e.clientY < r.top + r.height / 2
       : e.clientX < r.left || (e.clientX <= r.right && e.clientY < r.top + r.height / 2 && r.height < 40) || (e.clientX <= r.left + r.width / 2 && r.height >= 40);
     if (before) {
       const idx = parsePath(k.dataset['path'])!.at(-1)!;
-      const list = k.parentElement?.classList.contains('ctx-items') || k.parentElement?.classList.contains('rb-menu-popup');
+      const list = isVerticalList(k.parentElement);
       const stacked = list || (r.height < 40 && k.parentElement?.classList.contains('rb-stack') && k.previousElementSibling !== null);
       return {
         parentPath: containerPath,
@@ -591,6 +622,13 @@ function spotInContainer(e: DragEvent, node: HTMLElement, containerPath: Path, c
     index: container.children.length,
     rect: last ? { left: r.right + 1, top: r.top, width: 2, height: r.height } : { left: r.left + 4, top: r.top + 4, width: 2, height: Math.max(r.height - 8, 16) },
   };
+}
+
+/** 縦に並ぶ一覧（メニュー、Backstage）か。前後を上下で決める。 */
+function isVerticalList(el: Element | null): boolean {
+  if (!el) return false;
+  const c = el.classList;
+  return c.contains('ctx-items') || c.contains('rb-menu-popup') || c.contains('bs-list') || c.contains('bs-column') || (c.contains('bs-nav') && !c.contains('horizontal'));
 }
 
 function showIndicator(host: HTMLElement, spot: DropSpot): void {
@@ -613,7 +651,7 @@ function imageTarget(e: DragEvent): Path | null {
   const node = (e.target as HTMLElement).closest<HTMLElement>('.rb-ctl[data-path], .rb-group[data-path]');
   const path = parsePath(node?.dataset['path']);
   const el = path && app.store ? elementAt(app.store.doc, path) : null;
-  return el && elements.get(el.localName)?.attrs.includes('image') ? path : null;
+  return el && defFor(el)?.attrs.includes('image') ? path : null;
 }
 
 function onDragOver(e: DragEvent, host: HTMLElement): void {

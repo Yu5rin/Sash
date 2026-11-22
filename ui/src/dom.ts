@@ -1,5 +1,7 @@
 // 小さな DOM 組み立てヘルパー。
 
+import { t } from './i18n';
+
 type Child = Node | string | null | undefined | false;
 type Props = Record<string, unknown> & { class?: string; dataset?: Record<string, string> };
 
@@ -31,7 +33,7 @@ export function svg(markup: string): SVGElement {
 
 export function $<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
-  if (!el) throw new Error(`#${id} がありません`);
+  if (!el) throw new Error(t('#{id} がありません', { id }));
   return el as T;
 }
 
