@@ -24,6 +24,25 @@ public enum ApplyStatus
 
 public sealed record ApplyResult(ApplyStatus Status, string Message);
 
+/// <summary>VBA モジュール 1 つ分。Type は vbext_ComponentType（1 = 標準、2 = クラス、3 = フォーム、100 = ドキュメント）。</summary>
+public sealed record VbaModule(string Name, int Type, string Code);
+
+public enum VbaReadStatus
+{
+    Ok,
+
+    /// <summary>ブックが Excel で開かれていない。</summary>
+    NotOpen,
+
+    /// <summary>「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」がオフ。</summary>
+    TrustDenied,
+
+    /// <summary>VBA プロジェクトがパスワードで保護されている。</summary>
+    Locked,
+}
+
+public sealed record VbaReadResult(VbaReadStatus Status, IReadOnlyList<VbaModule> Modules);
+
 /// <summary>
 /// Excel との連携（仕様書 §7、§9.1）。COM は遅延バインド（dynamic）で呼び、Interop アセンブリは同梱しない。
 /// すべての COM 呼び出しは <see cref="ComThread"/> 上で行う。
@@ -283,6 +302,124 @@ public sealed class ExcelService : IDisposable
             }
         }
     }
+
+    // ---- VBA（仕様書 §8） ----
+
+    private const int VbextStdModule = 1;
+
+    /// <summary>VBE からモジュールのコードを読む。読めないときは理由を返す（設定は勝手に変えない）。</summary>
+    public Task<VbaReadResult> ReadVbaAsync(string fullPath) => _com.InvokeAsync(() =>
+    {
+        var found = FindWorkbook(fullPath);
+        if (found is null)
+        {
+            return new VbaReadResult(VbaReadStatus.NotOpen, []);
+        }
+
+        dynamic? project = TryGetProject(found.Value.Workbook, out VbaReadStatus status);
+        if (project is null)
+        {
+            return new VbaReadResult(status, []);
+        }
+
+        var modules = new List<VbaModule>();
+        foreach (var c in Enumerate(project.VBComponents))
+        {
+            dynamic comp = c;
+            dynamic cm = comp.CodeModule;
+            int count = cm.CountOfLines;
+            string code = count > 0 ? cm.Lines(1, count) : string.Empty;
+            modules.Add(new VbaModule((string)comp.Name, (int)comp.Type, code));
+        }
+
+        return new VbaReadResult(VbaReadStatus.Ok, modules);
+    });
+
+    private static dynamic? TryGetProject(dynamic wb, out VbaReadStatus status)
+    {
+        try
+        {
+            dynamic project = wb.VBProject;
+            // Protection: 0 = 保護なし、1 = 表示がロックされている
+            if (SafeValue(() => (int)project.Protection) == 1)
+            {
+                status = VbaReadStatus.Locked;
+                return null;
+            }
+
+            _ = project.VBComponents.Count;
+            status = VbaReadStatus.Ok;
+            return project;
+        }
+        catch (COMException)
+        {
+            status = VbaReadStatus.TrustDenied;
+            return null;
+        }
+    }
+
+    private static dynamic RequireProject(string fullPath)
+    {
+        var found = FindWorkbook(fullPath) ?? throw new InvalidOperationException("ブックがExcelで開かれていません。");
+        dynamic? project = TryGetProject(found.Workbook, out VbaReadStatus status);
+        return project ?? throw new InvalidOperationException(status == VbaReadStatus.Locked
+            ? "VBAプロジェクトがパスワードで保護されています。"
+            : "VBAプロジェクトにアクセスできません。Excelの［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにしてください。");
+    }
+
+    /// <summary>
+    /// モジュールの末尾にコードを追加する。モジュールがなければ標準モジュールとして作る。
+    /// 既存のコードは書き換えない（仕様書 §8.2）。documentModule が true なら ThisWorkbook に追加する。
+    /// </summary>
+    public Task<bool> InsertVbaAsync(string fullPath, string moduleName, string code, bool documentModule) => _com.InvokeAsync(() =>
+    {
+        dynamic project = RequireProject(fullPath);
+        dynamic? target = null;
+        if (documentModule)
+        {
+            var found = FindWorkbook(fullPath)!.Value;
+            string codeName = found.Workbook.CodeName;
+            target = project.VBComponents.Item(codeName);
+        }
+        else
+        {
+            foreach (var c in Enumerate(project.VBComponents))
+            {
+                dynamic comp = c;
+                if (string.Equals((string)comp.Name, moduleName, StringComparison.OrdinalIgnoreCase))
+                {
+                    target = comp;
+                    break;
+                }
+            }
+
+            if (target is null)
+            {
+                target = project.VBComponents.Add(VbextStdModule);
+                target.Name = moduleName;
+            }
+        }
+
+        dynamic cm = target.CodeModule;
+        int count = cm.CountOfLines;
+        cm.InsertLines(count + 1, (count > 0 ? "\r\n" : string.Empty) + code.TrimEnd());
+        return true;
+    });
+
+    /// <summary>1 行だけを書き換える。読み込んだ後にコードが変わっていたら書き換えない。</summary>
+    public Task<bool> ReplaceVbaLineAsync(string fullPath, string moduleName, int line, string expected, string replacement) => _com.InvokeAsync(() =>
+    {
+        dynamic project = RequireProject(fullPath);
+        dynamic cm = project.VBComponents.Item(moduleName).CodeModule;
+        string current = cm.Lines(line, 1);
+        if (!string.Equals(current, expected, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("VBAのコードが読み込んだ後に変更されています。コールバック一覧を再読み込みしてください。");
+        }
+
+        cm.ReplaceLine(line, replacement);
+        return true;
+    });
 
     // ---- imageMso / 表示名（仕様書 §9.1） ----
 

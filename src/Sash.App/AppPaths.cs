@@ -12,6 +12,8 @@ internal static class AppPaths
 
     public static string Settings => Path.Combine(Root, "settings.json");
 
+    public static string Recipes => Path.Combine(Root, "recipes.json");
+
     /// <summary>Excel から取得した imageMso の画像のキャッシュ。</summary>
     public static string ImageMsoCache => Path.Combine(Root, "cache", "imageMso");
 

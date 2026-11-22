@@ -11,6 +11,8 @@ export interface ImageEntry {
   dataUrl: string;
   /** ファイルにまだ書き込んでいない画像か。 */
   isNew: boolean;
+  /** アイコンエディタで作ったときの元画像と加工設定。あれば同じ設定からやり直せる（このセッションの間だけ）。 */
+  edit?: { source: Blob; sourceName: string; options: unknown };
 }
 
 interface Snapshot {
@@ -145,6 +147,17 @@ export class PartStore {
     this.pushHistory();
     this.images.set(entry.id, entry);
     this.removedImages.delete(entry.id);
+    this.emit(['images'], 'other');
+  }
+
+  /** 複数の画像を一つの履歴でまとめて追加する（フォルダの一括取り込み）。 */
+  addImages(entries: readonly ImageEntry[]): void {
+    if (entries.length === 0) return;
+    this.pushHistory();
+    for (const e of entries) {
+      this.images.set(e.id, e);
+      this.removedImages.delete(e.id);
+    }
     this.emit(['images'], 'other');
   }
 

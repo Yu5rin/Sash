@@ -3,7 +3,7 @@
 
 import { app } from '../app';
 import { catalog, labels } from '../catalog/catalog';
-import { canDropInto, drop, endDrag, startDrag, dragPayload } from '../dnd';
+import { canDropInto, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
 import { childElements, elementAt, pathOf, samePath, isAncestorPath, type Path } from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
@@ -203,7 +203,62 @@ function renderCanvas(host: HTMLElement): void {
   }
 
   const qat = renderQat(doc, errorPaths);
-  host.replaceChildren(...[qat, tabBar, body, h('div', { class: 'drop-indicator', hidden: true })].filter((x): x is HTMLElement => x !== null));
+  const ctx = renderContextMenus(doc, errorPaths);
+  host.replaceChildren(...[qat, tabBar, body, ctx, h('div', { class: 'drop-indicator', hidden: true })].filter((x): x is HTMLElement => x !== null));
+}
+
+/** コンテキストメニュー（右クリックメニュー）に足す項目を、メニューの形で並べる。 */
+function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement | null {
+  if (app.store?.version === 'office2007') return null;
+  const cms = findChild(doc.documentElement, 'contextMenus');
+  const menus = cms ? childElements(cms).filter((c) => c.localName === 'contextMenu') : [];
+  const sel = app.store?.selection ?? null;
+  const item = (c: Element, depth: number): HTMLElement[] => {
+    const cp = pathOf(c);
+    const row = h(
+      'div',
+      {
+        class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}${errorPaths.has(cp.join('.')) ? ' has-error' : ''}`,
+        style: `padding-left:${8 + depth * 14}px`,
+        dataset: { path: cp.join('.') },
+        draggable: true,
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          app.store?.select(cp, 'canvas');
+        },
+        ondragstart: (e: DragEvent) => {
+          e.stopPropagation();
+          startDrag(e, { kind: 'move', path: cp });
+        },
+        ondragend: () => endDrag(),
+      },
+      c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [c.hasAttribute('image') || c.hasAttribute('imageMso') ? iconFor(c, 'small') : h('span', { class: 'rb-icon-gap' }), h('span', null, labelOf(c) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
+    );
+    const kids = c.localName === 'menu' || c.localName === 'splitButton' ? childElements(c).flatMap((k) => item(k, depth + 1)) : [];
+    return [row, ...kids];
+  };
+  const cards = menus.map((m) => {
+    const mp = pathOf(m);
+    const idMso = m.getAttribute('idMso') ?? '';
+    return h(
+      'div',
+      {
+        class: `ctx-card${samePath(sel, mp) ? ' selected' : ''}${errorPaths.has(mp.join('.')) ? ' has-error' : ''}`,
+        dataset: { path: mp.join('.') },
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          app.store?.select(mp, 'canvas');
+        },
+      },
+      h('div', { class: 'ctx-title', title: idMso }, labels.get(idMso) ?? idMso),
+      h('div', { class: 'ctx-builtin' }, '（組み込みの項目）'),
+      h('div', { class: 'ctx-items', dataset: { container: mp.join('.') } }, m.children.length ? childElements(m).flatMap((c) => item(c, 0)) : h('div', { class: 'rb-menu-item muted' }, 'ここに項目をドラッグ')),
+    );
+  });
+  if (!cms && menus.length === 0) {
+    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } }, h('h3', null, 'コンテキストメニュー（右クリック）'), h('div', { class: 'muted' }, 'パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます'));
+  }
+  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, 'コンテキストメニュー（右クリック）'), h('div', { class: 'ctx-cards' }, cards));
 }
 
 function isSelected(el: Element): boolean {
@@ -423,7 +478,7 @@ function menuPopup(el: Element): HTMLElement | null {
 // ---- ドラッグ＆ドロップ ----
 
 interface DropSpot {
-  parentPath: Path | null;
+  parentPath: Path | null | 'contextMenus';
   index: number;
   rect: { left: number; top: number; width: number; height: number };
 }
@@ -463,6 +518,14 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
     return { parentPath: tabsPath, index: tabsEl?.children.length ?? 0, rect: { left: r.right + 1, top: r.top, width: 2, height: r.height } };
   }
 
+  // コンテキストメニューの一覧がまだないときは、空の欄へのドロップで作る
+  const ctxNew = target.closest<HTMLElement>('[data-ctx-new]');
+  if (ctxNew) {
+    if (draggedTag(doc) !== 'contextMenu') return null;
+    const r = ctxNew.getBoundingClientRect();
+    return { parentPath: 'contextMenus', index: 0, rect: { left: r.left + 4, top: r.bottom - 6, width: r.width - 8, height: 2 } };
+  }
+
   // 内側のコンテナから順に、置けるところを探す
   let node: HTMLElement | null = target.closest<HTMLElement>('[data-container], [data-path]');
   while (node && host.contains(node)) {
@@ -482,11 +545,15 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
       if (parent && canDropInto(doc, parent)) {
         const r = node.getBoundingClientRect();
         const idx = Array.prototype.indexOf.call(parent.children, el) as number;
-        const before = e.clientX < r.left + r.width / 2;
+        // メニューの項目は縦に並ぶので、上下で前後を決める
+        const vertical = node.classList.contains('rb-menu-item') || node.classList.contains('ctx-card');
+        const before = vertical && !node.classList.contains('ctx-card') ? e.clientY < r.top + r.height / 2 : e.clientX < r.left + r.width / 2;
         return {
           parentPath: pathOf(parent),
           index: before ? idx : idx + 1,
-          rect: { left: (before ? r.left : r.right) - 1, top: r.top, width: 2, height: r.height },
+          rect: vertical && !node.classList.contains('ctx-card')
+            ? { left: r.left, top: (before ? r.top : r.bottom) - 1, width: r.width, height: 2 }
+            : { left: (before ? r.left : r.right) - 1, top: r.top, width: 2, height: r.height },
         };
       }
     }
@@ -502,10 +569,14 @@ function spotInContainer(e: DragEvent, node: HTMLElement, containerPath: Path, c
   });
   for (const k of kids) {
     const r = k.getBoundingClientRect();
-    const before = e.clientX < r.left || (e.clientX <= r.right && e.clientY < r.top + r.height / 2 && r.height < 40) || (e.clientX <= r.left + r.width / 2 && r.height >= 40);
+    const inList = k.parentElement?.classList.contains('ctx-items') || k.parentElement?.classList.contains('rb-menu-popup');
+    const before = inList
+      ? e.clientY < r.top + r.height / 2
+      : e.clientX < r.left || (e.clientX <= r.right && e.clientY < r.top + r.height / 2 && r.height < 40) || (e.clientX <= r.left + r.width / 2 && r.height >= 40);
     if (before) {
       const idx = parsePath(k.dataset['path'])!.at(-1)!;
-      const stacked = r.height < 40 && k.parentElement?.classList.contains('rb-stack') && k.previousElementSibling !== null;
+      const list = k.parentElement?.classList.contains('ctx-items') || k.parentElement?.classList.contains('rb-menu-popup');
+      const stacked = list || (r.height < 40 && k.parentElement?.classList.contains('rb-stack') && k.previousElementSibling !== null);
       return {
         parentPath: containerPath,
         index: idx,

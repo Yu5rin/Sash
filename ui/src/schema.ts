@@ -179,7 +179,8 @@ const elementList: ElementDef[] = [
   e({ tag: 'dialogBoxLauncher', title: 'ダイアログ起動ツール', attrs: [], children: ['button'], isControl: true }),
   e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'image', 'imageMso', 'screentip', 'supertip'], children: [], idRequired: true }),
   e({ tag: 'backstage', title: 'Backstage', attrs: ['onShow', 'onHide'], children: [], opaque: true, since2010: true }),
-  e({ tag: 'contextMenus', title: 'コンテキストメニュー', attrs: [], children: [], opaque: true, since2010: true }),
+  e({ tag: 'contextMenus', title: 'コンテキストメニューの一覧', attrs: [], children: ['contextMenu'], since2010: true }),
+  e({ tag: 'contextMenu', title: 'コンテキストメニュー', attrs: ['idMso'], children: MENU_CONTROLS, idRequired: true, since2010: true }),
 ];
 
 export const elements: ReadonlyMap<string, ElementDef> = new Map(elementList.map((d) => [d.tag, d]));

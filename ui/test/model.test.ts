@@ -102,3 +102,13 @@ describe('編集操作', () => {
     expect(copy.previousElementSibling!.getAttribute('id')).toBe('btn1');
   });
 });
+
+describe('コンテキストメニューの作成', () => {
+  it('idMso 付きで、項目を1つ持って作られる', () => {
+    const d = doc(`<customUI xmlns="${NS}" />`);
+    const el = createElement(d, 'contextMenu');
+    expect(el.getAttribute('idMso')).toBe('ContextMenuCell');
+    expect(el.hasAttribute('id')).toBe(false);
+    expect(el.children[0]!.localName).toBe('button');
+  });
+});

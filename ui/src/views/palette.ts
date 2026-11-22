@@ -4,18 +4,18 @@ import { app } from '../app';
 import { endDrag, startDrag } from '../dnd';
 import { h, svg } from '../dom';
 import { kindIcon } from '../icons';
-import { createElement, elementAt, ensureTabs, pathOf } from '../model';
+import { createElement, elementAt, ensureContextMenus, ensureTabs, pathOf } from '../model';
 import { canContain, elements } from '../schema';
 
-const ITEMS: readonly string[] = [
+export const PALETTE_ITEMS: readonly string[] = [
   'tab', 'group', 'button', 'toggleButton', 'checkBox', 'splitButton', 'menu', 'dynamicMenu', 'gallery',
   'dropDown', 'comboBox', 'editBox', 'labelControl', 'separator', 'box', 'buttonGroup', 'dialogBoxLauncher',
-  'menuSeparator', 'item',
+  'menuSeparator', 'item', 'contextMenu',
 ];
 
 export function mountPalette(host: HTMLElement): void {
   host.replaceChildren(
-    ...ITEMS.map((tag) =>
+    ...PALETTE_ITEMS.map((tag) =>
       h(
         'li',
         {
@@ -42,6 +42,10 @@ export function insertNearSelection(tag: string): void {
     if (tag === 'tab') {
       const tabs = ensureTabs(doc);
       tabs.append(el);
+      return pathOf(el);
+    }
+    if (tag === 'contextMenu') {
+      ensureContextMenus(doc).append(el);
       return pathOf(el);
     }
     let cur: Element | null = store.selection ? elementAt(doc, store.selection) : null;

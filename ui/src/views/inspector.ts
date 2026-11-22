@@ -2,15 +2,17 @@
 // 静的な値と get 系コールバックの組は1行の切り替えにまとめ、両方を同時に指定する矛盾を起こさない。
 
 import { app } from '../app';
+import { defaultCallbackName, renameCallback, vba } from '../callbacks';
 import { h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, setAttr, suggestId, usedIds } from '../model';
+import type { ImageEntry } from '../store';
 import { attributes, attrsOf, callbackSignature, elements, ID_PATTERN, type AttrDef, type Category } from '../schema';
 
 export interface InspectorHooks {
   pickIdMso(current: string, apply: (v: string) => void): void;
   pickImageMso(current: string, apply: (v: string) => void): void;
-  editImage(): void;
+  editImage(existing?: ImageEntry): void;
 }
 
 const CATEGORIES: readonly Category[] = ['基本', '表示', '動作', '詳細'];
@@ -22,6 +24,7 @@ export function mountInspector(host: HTMLElement, h0: InspectorHooks): void {
   const render = () => renderInspector(host);
   app.on('session', render);
   app.on('problems', render);
+  app.on('vba', render);
   app.on('store', (c) => {
     if (c && (c.kinds.has('selection') || c.kinds.has('doc') || c.kinds.has('images'))) render();
   });
@@ -42,10 +45,6 @@ function commit(name: string, value: string | null, also: Record<string, string 
   });
 }
 
-function defaultCallbackName(el: Element, attr: string): string {
-  const id = el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName;
-  return el.localName === 'customUI' ? `Ribbon_${attr}` : `Ribbon_${id}_${attr}`;
-}
 
 function renderInspector(host: HTMLElement): void {
   const store = app.store;
@@ -173,16 +172,35 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
 
 function callbackEditor(el: Element, attr: string): HTMLElement {
   const value = el.getAttribute(attr) ?? '';
+  const input = h('input', { type: 'text', value, placeholder: defaultCallbackName(el, attr), spellcheck: false, dataset: { attr } });
+  const apply = () => {
+    const v = input.value.trim();
+    const ok = !v || /^[A-Za-z_][A-Za-z0-9_.!]*$/.test(v);
+    input.classList.toggle('invalid', !ok);
+    input.title = ok ? '' : 'VBAのSub名として使えない文字があります';
+    if (!ok || v === value) return;
+    // 名前を変えたときは、VBA 側の Sub 名も変えるかを確認する
+    if (value && v) void renameCallback(app.store!.selection!, attr, value, v);
+    else commit(attr, v || null);
+  };
+  input.addEventListener('change', apply);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') apply();
+    if (e.key === 'Escape') input.value = value;
+  });
+  const status = value ? vba.statuses().find((x) => x.name === value) : undefined;
+  const stateText = status && vba.status === 'ok' ? { implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: '' }[status.state] : '';
   return h(
     'div',
     { class: 'insp-callback' },
     h(
       'div',
       { class: 'insp-inline' },
-      textInput(attr, value, { placeholder: defaultCallbackName(el, attr), validate: (v) => (/^[A-Za-z_][A-Za-z0-9_.!]*$/.test(v) ? null : 'VBAのSub名として使えない文字があります') }),
+      input,
       value ? null : h('button', { type: 'button', class: 'small', onclick: () => commit(attr, defaultCallbackName(el, attr)) }, '追加'),
     ),
     value ? h('code', { class: 'insp-signature' }, `Sub ${value}(${callbackSignature(attr, el.localName)})`) : null,
+    stateText ? h('span', { class: `cb-state ${status!.state}`, title: status!.reason ?? '' }, stateText) : null,
   );
 }
 
@@ -248,6 +266,7 @@ function iconRow(el: Element): HTMLElement {
         [...store.images.keys()].map((k) => h('option', { value: k, selected: k === id }, k)),
         img ? null : h('option', { value: id, selected: true }, id ? `${id}（見つかりません）` : '選択してください'),
       ),
+      img?.edit ? h('button', { type: 'button', class: 'small', title: '元画像と設定から加工し直す', onclick: () => hooks.editImage(img) }, '加工し直す') : null,
       h('button', { type: 'button', class: 'small', onclick: () => hooks.editImage() }, '新しく作る'),
     );
   } else if (mode === 'getImage') {

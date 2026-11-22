@@ -21,6 +21,18 @@ public sealed record AppSettings
     /// <summary>バックアップの世代数。</summary>
     public int BackupGenerations { get; init; } = 10;
 
+    /// <summary>コールバック名の規則。{id} と {attr} を置き換える。</summary>
+    public string CallbackPattern { get; init; } = "Ribbon_{id}_{attr}";
+
+    /// <summary>複数のコントロールで 1 つの Sub を共有し、control.Id で振り分ける。</summary>
+    public bool CallbackShared { get; init; }
+
+    /// <summary>共有するときのコールバック名の規則。{attr} を置き換える。</summary>
+    public string CallbackSharedPattern { get; init; } = "Ribbon_{attr}";
+
+    /// <summary>VBA の雛形を挿入する標準モジュール。</summary>
+    public string CallbackModule { get; init; } = "modRibbon";
+
     /// <summary>最近使ったファイル（新しい順）。</summary>
     public IReadOnlyList<string> RecentFiles { get; init; } = [];
 }

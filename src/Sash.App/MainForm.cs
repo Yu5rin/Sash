@@ -24,7 +24,7 @@ internal sealed class MainForm : Form
     public MainForm(string? initialFile)
     {
         _initialFile = initialFile;
-        _router = new MessageRouter(this, new SettingsStore(AppPaths.Settings), _excel, () => BeginInvoke(() =>
+        _router = new MessageRouter(this, new SettingsStore(AppPaths.Settings), new RecipeStore(AppPaths.Recipes), _excel, () => BeginInvoke(() =>
         {
             _closeConfirmed = true;
             Close();

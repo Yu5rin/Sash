@@ -18,6 +18,7 @@ const TYPE_FILTERS: readonly [string, string][] = [
   ['menu', 'メニュー'],
   ['splitButton', '分割ボタン'],
   ['gallery', 'ギャラリー'],
+  ['contextMenu', '右クリックメニュー'],
 ];
 
 export function openCatalog(mode: CatalogMode, current: string, apply: (value: string) => void, preferType = ''): void {

@@ -20,6 +20,8 @@ export const uiIcons = {
   image: wrap('<rect x="2.5" y="3" width="11" height="10" rx="1"/><circle cx="6" cy="6.5" r="1.2"/><path d="M3 12l3.5-3.5 2.5 2.5 2-2 2.5 2.5"/>'),
   trash: wrap('<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9h5.8l.6-9"/>'),
   star: wrap('<path d="M8 2.5l1.7 3.5 3.8.5-2.8 2.6.7 3.8L8 11.1l-3.4 1.8.7-3.8-2.8-2.6 3.8-.5z"/>'),
+  recipe: wrap('<rect x="3" y="2.5" width="10" height="11" rx="1"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>'),
+  command: wrap('<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M4.5 6.5l2 1.5-2 1.5M8 10h3"/>'),
   swap: wrap('<path d="M4 3v10M2 11l2 2 2-2M12 13V3M10 5l2-2 2 2"/>'),
 };
 
