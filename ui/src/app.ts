@@ -14,13 +14,15 @@ export interface Session {
   created: boolean;
 }
 
-type AppEvent = 'session' | 'problems' | 'store' | 'settings';
+type AppEvent = 'session' | 'problems' | 'store' | 'settings' | 'vba';
 
 class App {
   info: AppInfo = { version: '', excelInstalled: false };
-  settings: Settings = { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false };
+  settings: Settings = { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon' };
   session: Session | null = null;
   problems: Problem[] = [];
+  /** Lint に問題を足す仕組み（VBA との照合など、ほかのモジュールが登録する）。 */
+  readonly problemProviders: (() => Problem[])[] = [];
 
   private readonly listeners = new Map<AppEvent, Set<(detail?: Change) => void>>();
   private unsubscribeStore: (() => void) | null = null;
@@ -105,7 +107,7 @@ class App {
       imageIds: new Set(store.images.keys()),
       knownIdMso,
       missingImageMso: missingImageMso(),
-    });
+    }).concat(this.problemProviders.flatMap((p) => p()));
     this.emit('problems');
   }
 }

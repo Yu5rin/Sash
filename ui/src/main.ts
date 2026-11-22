@@ -239,6 +239,13 @@ function openSettings(): void {
     h('label', null, 'アイコンの出力サイズ', h('select', { onchange: (e: Event) => void update({ iconSize: Number((e.target as HTMLSelectElement).value) as 32 | 64 }) },
       h('option', { value: '32', selected: s.iconSize === 32 }, '32 × 32'),
       h('option', { value: '64', selected: s.iconSize === 64 }, '64 × 64（高DPI）'))),
+    h('h3', null, 'コールバック'),
+    h('label', null, '名前の規則', h('input', { type: 'text', value: s.callbackPattern, spellcheck: false, title: '{id} と {attr} が置き換わります', onchange: (e: Event) => void update({ callbackPattern: (e.target as HTMLInputElement).value.trim() }) })),
+    h('label', null, 'Subの共有', h('select', { onchange: (e: Event) => void update({ callbackShared: (e.target as HTMLSelectElement).value === 'shared' }) },
+      h('option', { value: 'each', selected: !s.callbackShared }, 'コントロールごとに分ける'),
+      h('option', { value: 'shared', selected: s.callbackShared }, '1つのSubを共有し control.Id で振り分ける'))),
+    h('label', null, '共有するときの名前', h('input', { type: 'text', value: s.callbackSharedPattern, spellcheck: false, title: '{attr} が置き換わります', onchange: (e: Event) => void update({ callbackSharedPattern: (e.target as HTMLInputElement).value.trim() }) })),
+    h('label', null, '挿入先のモジュール', h('input', { type: 'text', value: s.callbackModule, spellcheck: false, onchange: (e: Event) => void update({ callbackModule: (e.target as HTMLInputElement).value.trim() }) })),
     h('p', { class: 'muted' }, `Sash ${app.info.version} ・ Excel ${app.info.excelInstalled ? 'あり' : 'なし（ファイル編集のみ）'}`),
   );
   openModal('設定', content);

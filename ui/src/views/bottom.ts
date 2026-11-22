@@ -4,16 +4,19 @@ import { app } from '../app';
 import { h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { allElements, displayName, elementAt, pathOf } from '../model';
-import { attributes, callbackSignature } from '../schema';
+import { insertStubs, setupRibbonHolder, vba } from '../callbacks';
+import type { PartStore } from '../store';
+import { generateStub, type CallbackState, type CallbackStatus } from '../vba';
 
 type Tab = 'problems' | 'callbacks' | 'images';
 
 let current: Tab = 'problems';
 
-export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string) => void): void {
+export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: 'info' | 'error') => void): void {
   const render = () => renderBottom(tabsHost, body, toast);
   app.on('session', render);
   app.on('problems', render);
+  app.on('vba', render);
   app.on('store', (c) => {
     if (c && (c.kinds.has('doc') || c.kinds.has('images'))) render();
   });
@@ -24,23 +27,6 @@ export function showBottomTab(tab: Tab): void {
   app.emit('problems');
 }
 
-interface CallbackUse {
-  name: string;
-  uses: { attr: string; el: Element }[];
-}
-
-function collectCallbacks(doc: Document): CallbackUse[] {
-  const map = new Map<string, CallbackUse>();
-  for (const el of allElements(doc)) {
-    for (const at of Array.from(el.attributes)) {
-      if (attributes.get(at.name)?.kind !== 'callback') continue;
-      const entry = map.get(at.value) ?? { name: at.value, uses: [] };
-      entry.uses.push({ attr: at.name, el });
-      map.set(at.value, entry);
-    }
-  }
-  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
 
 function imageUses(doc: Document): Map<string, Element[]> {
   const map = new Map<string, Element[]>();
@@ -51,16 +37,71 @@ function imageUses(doc: Document): Map<string, Element[]> {
   return map;
 }
 
-/** VBA の雛形（仕様書 §8.1 のシグネチャ）。 */
-function stub(cb: CallbackUse): string {
-  const first = cb.uses[0]!;
-  return `Public Sub ${cb.name}(${callbackSignature(first.attr, first.el.localName)})\n    ' TODO: ${cb.uses.map((u) => `${u.el.getAttribute('id') ?? u.el.localName}.${u.attr}`).join(', ')}\nEnd Sub\n`;
+const STATE_LABEL: Record<CallbackState, string> = { implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: 'VBA側にしかない' };
+
+function renderCallbacks(store: PartStore, toast: (msg: string, kind?: 'info' | 'error') => void): HTMLElement {
+  const statuses = vba.statuses();
+  const missing = statuses.filter((x) => x.state === 'missing' && x.uses.length > 0);
+  const run = (p: Promise<string>) => void p.then((m) => toast(m)).catch((e: Error) => toast(e.message, 'error'));
+  const copy = (text: string, msg: string) => void navigator.clipboard.writeText(text).then(() => toast(msg));
+  const stubOf = (x: CallbackStatus) => generateStub({ ...x, name: x.name.replace(/^.*[.!]/, '') });
+
+  return h(
+    'ul',
+    { class: 'panel-list' },
+    h(
+      'li',
+      { class: 'panel-actions' },
+      h('span', { class: 'muted' }, vba.loading ? 'VBAを読み込んでいます…' : vba.statusMessage()),
+      h(
+        'span',
+        { class: 'actions' },
+        app.info.excelInstalled ? h('button', { type: 'button', class: 'small', onclick: () => void vba.refresh() }, '再読み込み') : null,
+        missing.length ? h('button', { type: 'button', class: 'small', onclick: () => copy(missing.map(stubOf).join('\r\n'), `${missing.length} 件の雛形をコピーしました`) }, '未実装をコピー') : null,
+        missing.length && vba.canWrite ? h('button', { type: 'button', class: 'small primary', onclick: () => run(insertStubs(statuses)) }, `未実装 ${missing.length} 件をモジュールに挿入`) : null,
+        h('button', { type: 'button', class: 'small', title: 'onLoad で IRibbonUI を保持し、Invalidate できるようにする雛形（仕様書 §8.3）', onclick: () => run(setupRibbonHolder()) }, 'onLoad と Invalidate の雛形'),
+      ),
+    ),
+    statuses.length === 0
+      ? h('li', { class: 'panel-empty' }, 'コールバックはありません')
+      : statuses.map((x) =>
+          h(
+            'li',
+            { class: 'callback', onclick: () => x.uses[0] && store.select(x.uses[0].path, 'other') },
+            h('span', { class: `cb-state ${x.state}`, title: x.reason ?? '' }, vba.status === 'ok' || x.state === 'unused' ? STATE_LABEL[x.state] : '照合なし'),
+            h('code', null, x.name),
+            x.reason ? h('span', { class: 'muted small' }, x.reason) : null,
+            h('span', { class: 'where' }, x.uses.length ? x.uses.map((u) => `${u.id}.${u.attr}`).join(', ') : x.procedure ? `${x.procedure.module} ${x.procedure.line}行目` : ''),
+            x.uses.length
+              ? h('button', {
+                  type: 'button',
+                  class: 'small',
+                  onclick: (e: MouseEvent) => {
+                    e.stopPropagation();
+                    copy(stubOf(x), `${x.name} の雛形をコピーしました`);
+                  },
+                }, 'コピー')
+              : null,
+            x.state === 'missing' && vba.canWrite
+              ? h('button', {
+                  type: 'button',
+                  class: 'small',
+                  onclick: (e: MouseEvent) => {
+                    e.stopPropagation();
+                    run(insertStubs([x]));
+                  },
+                }, '挿入')
+              : null,
+          ),
+        ),
+  );
 }
 
-function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string) => void): void {
+function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: 'info' | 'error') => void): void {
   const store = app.store;
   const errors = app.problems.filter((p) => p.severity === 'error').length;
-  const callbacks = store ? collectCallbacks(store.doc) : [];
+  const callbacks = store ? vba.statuses() : [];
+  const cbIssues = callbacks.filter((x) => x.state === 'missing' || x.state === 'mismatch').length;
   const uses = store ? imageUses(store.doc) : new Map<string, Element[]>();
   const images = store ? [...store.images.values()] : [];
   const unused = images.filter((i) => !uses.has(i.id));
@@ -69,7 +110,7 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
     h('button', { type: 'button', role: 'tab', class: current === id ? 'active' : '', 'aria-selected': String(current === id), onclick: () => showBottomTab(id) }, label);
   tabsHost.replaceChildren(
     tab('problems', `問題 ${app.problems.length}${errors ? `（エラー ${errors}）` : ''}`),
-    tab('callbacks', `コールバック ${callbacks.length}`),
+    tab('callbacks', `コールバック ${callbacks.length}${vba.status === 'ok' && cbIssues ? `（要対応 ${cbIssues}）` : ''}`),
     tab('images', `アイコン ${images.length}${unused.length ? `（未使用 ${unused.length}）` : ''}`),
   );
 
@@ -98,42 +139,7 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
           ),
     );
   } else if (current === 'callbacks') {
-    body.replaceChildren(
-      callbacks.length === 0
-        ? h('div', { class: 'panel-empty' }, 'コールバックはありません')
-        : h(
-            'ul',
-            { class: 'panel-list' },
-            h(
-              'li',
-              { class: 'panel-actions' },
-              h('span', { class: 'muted' }, 'VBAとの照合と挿入は第2弾で対応します。雛形はコピーして使えます'),
-              h('button', {
-                type: 'button',
-                class: 'small',
-                onclick: () => {
-                  void navigator.clipboard.writeText(callbacks.map(stub).join('\n')).then(() => toast('すべての雛形をコピーしました'));
-                },
-              }, 'すべての雛形をコピー'),
-            ),
-            callbacks.map((cb) =>
-              h(
-                'li',
-                { class: 'callback', onclick: () => store.select(pathOf(cb.uses[0]!.el), 'other') },
-                h('code', null, cb.name),
-                h('span', { class: 'where' }, cb.uses.map((u) => `${u.el.getAttribute('id') ?? u.el.localName}.${u.attr}`).join(', ')),
-                h('button', {
-                  type: 'button',
-                  class: 'small',
-                  onclick: (e: MouseEvent) => {
-                    e.stopPropagation();
-                    void navigator.clipboard.writeText(stub(cb)).then(() => toast(`${cb.name} の雛形をコピーしました`));
-                  },
-                }, 'コピー'),
-              ),
-            ),
-          ),
-    );
+    body.replaceChildren(renderCallbacks(store, toast));
   } else {
     body.replaceChildren(
       images.length === 0

@@ -63,6 +63,18 @@ export interface Settings {
   xmlOnTop: boolean;
   iconSize: 32 | 64;
   ribbonErrorsHintShown: boolean;
+  callbackPattern: string;
+  callbackShared: boolean;
+  callbackSharedPattern: string;
+  callbackModule: string;
+}
+
+export type VbaReadStatus = 'ok' | 'notOpen' | 'trustDenied' | 'locked' | 'noExcel';
+
+export interface VbaModuleDto {
+  name: string;
+  type: number;
+  code: string;
 }
 
 /** 要求の種類ごとの payload と応答の型。 */
@@ -80,6 +92,9 @@ export interface HostApi {
   'excel.apply': { req: { path: string; parts: PartToSave[]; saveIfDirty: boolean }; res: ApplyResult };
   'excel.imageMso': { req: { names: string[]; size: number }; res: Record<string, string | null> };
   'excel.labels': { req: { ids: string[] }; res: Record<string, string> };
+  'vba.read': { req: { path: string }; res: { status: VbaReadStatus; modules: VbaModuleDto[] } };
+  'vba.insert': { req: { path: string; module: string; code: string; documentModule: boolean }; res: boolean };
+  'vba.replaceLine': { req: { path: string; module: string; line: number; expected: string; replacement: string }; res: boolean };
 }
 
 /** ホストから届く通知。 */
@@ -179,7 +194,7 @@ const sampleXml = `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/
 `;
 
 const mock = {
-  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false } as Settings,
+  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon' } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
     const r = (v: unknown) => Promise.resolve(v as HostApi[K]['res']);
     switch (type) {
@@ -205,6 +220,8 @@ const mock = {
       case 'excel.imageMso':
       case 'excel.labels':
         return r({});
+      case 'vba.read':
+        return r({ status: 'noExcel', modules: [] });
       default:
         return r(null);
     }

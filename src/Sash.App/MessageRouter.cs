@@ -31,6 +31,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.openWorkbooks" => ExcelInstalled ? await excel.Value.ListOpenWorkbooksAsync() : [],
                 "excel.apply" => await ApplyAsync(Read<ApplyRequest>(body)),
                 "excel.imageMso" => await ImageMsoAsync(Read<ImageMsoRequest>(body)),
+                "vba.read" => await ReadVbaAsync(Read<PathRequest>(body)),
+                "vba.insert" => await InsertVbaAsync(Read<VbaInsertRequest>(body)),
+                "vba.replaceLine" => await ReplaceLineAsync(Read<VbaReplaceRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
                 _ => throw new InvalidOperationException($"不明な要求です：{request.Type}"),
             };
@@ -157,7 +160,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     // ---- 設定 ----
 
-    private static SettingsDto ToDto(AppSettings s) => new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown);
+    private static SettingsDto ToDto(AppSettings s) =>
+        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule);
 
     private SettingsDto SetSettings(SettingsDto patch) => ToDto(settings.Update(s => s with
     {
@@ -165,6 +169,10 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         XmlOnTop = patch.XmlOnTop ?? s.XmlOnTop,
         IconSize = patch.IconSize is 32 or 64 ? patch.IconSize.Value : s.IconSize,
         RibbonErrorsHintShown = patch.RibbonErrorsHintShown ?? s.RibbonErrorsHintShown,
+        CallbackPattern = string.IsNullOrWhiteSpace(patch.CallbackPattern) ? s.CallbackPattern : patch.CallbackPattern,
+        CallbackShared = patch.CallbackShared ?? s.CallbackShared,
+        CallbackSharedPattern = string.IsNullOrWhiteSpace(patch.CallbackSharedPattern) ? s.CallbackSharedPattern : patch.CallbackSharedPattern,
+        CallbackModule = string.IsNullOrWhiteSpace(patch.CallbackModule) ? s.CallbackModule : patch.CallbackModule,
     }));
 
     // ---- Excel ----
@@ -195,6 +203,36 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         };
     }
 
+    private ExcelService RequireExcel() =>
+        ExcelInstalled ? excel.Value : throw new InvalidOperationException("Excelが見つからないため、VBAを読み書きできません。");
+
+    private async Task<object> ReadVbaAsync(PathRequest req)
+    {
+        if (!ExcelInstalled)
+        {
+            return new { status = "noExcel", modules = Array.Empty<object>() };
+        }
+
+        var r = await excel.Value.ReadVbaAsync(req.Path);
+        return new
+        {
+            status = r.Status switch
+            {
+                VbaReadStatus.Ok => "ok",
+                VbaReadStatus.NotOpen => "notOpen",
+                VbaReadStatus.TrustDenied => "trustDenied",
+                _ => "locked",
+            },
+            modules = r.Modules.Select(m => new { name = m.Name, type = m.Type, code = m.Code }),
+        };
+    }
+
+    private async Task<object> InsertVbaAsync(VbaInsertRequest req) =>
+        await RequireExcel().InsertVbaAsync(req.Path, req.Module, req.Code, req.DocumentModule);
+
+    private async Task<object> ReplaceLineAsync(VbaReplaceRequest req) =>
+        await RequireExcel().ReplaceVbaLineAsync(req.Path, req.Module, req.Line, req.Expected, req.Replacement);
+
     private async Task<object> ImageMsoAsync(ImageMsoRequest req)
     {
         if (!ExcelInstalled)
@@ -222,5 +260,17 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record LabelsRequest(IReadOnlyList<string> Ids);
 
-    internal sealed record SettingsDto(string? Theme, bool? XmlOnTop, int? IconSize, bool? RibbonErrorsHintShown);
+    private sealed record VbaInsertRequest(string Path, string Module, string Code, bool DocumentModule);
+
+    private sealed record VbaReplaceRequest(string Path, string Module, int Line, string Expected, string Replacement);
+
+    internal sealed record SettingsDto(
+        string? Theme,
+        bool? XmlOnTop,
+        int? IconSize,
+        bool? RibbonErrorsHintShown,
+        string? CallbackPattern,
+        bool? CallbackShared,
+        string? CallbackSharedPattern,
+        string? CallbackModule);
 }
