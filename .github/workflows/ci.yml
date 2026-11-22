@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: UIのビルド
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: .NETのビルド
+        run: dotnet build Sash.slnx -c Release
+
+      - name: テスト
+        run: dotnet test Sash.slnx -c Release --no-build
+
+      - name: 単一exeの発行
+        run: dotnet publish src/Sash.App -p:PublishProfile=win-x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sash-win-x64
+          path: artifacts/publish/win-x64/Sash.exe

@@ -27,7 +27,55 @@ Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam）のカス�
 
 ## ステータス
 
-仕様策定中です。詳細は [docs/SPEC.md](docs/SPEC.md) を参照してください。
+第1弾の実装に着手したところです。仕様は [docs/SPEC.md](docs/SPEC.md) を参照してください。
+
+## 開発
+
+### 構成
+
+| パス | 内容 |
+| --- | --- |
+| `src/Sash.Core` | OPC（zip）の読み書き、customUIモデル、バックアップ。OSに依存しない（net10.0） |
+| `src/Sash.Excel` | Excel連携。COMは遅延バインドで呼ぶ（net10.0-windows） |
+| `src/Sash.App` | ホスト。WinFormsの外枠とWebView2。UIは埋め込みリソースとして配信する（net10.0-windows） |
+| `ui` | UI本体。TypeScript、Vite、Monaco Editor。ビルド結果は `src/Sash.App/wwwroot` に出力される |
+| `tests/Sash.Core.Tests` | Coreの単体テスト（xUnit） |
+
+### 必要なもの
+
+- .NET SDK 10.0
+- Node.js 22以降
+- 実行にはWindowsとWebView2ランタイムが必要（Core のビルドとテストはLinux / macOSでも動く）
+
+### ビルドと実行
+
+UIを先にビルドしてから、.NETをビルドします。UIを埋め込みリソースとしてexeに取り込むためです。
+
+```bash
+cd ui && npm ci && npm run build
+```
+
+```bash
+dotnet build Sash.slnx
+```
+
+```bash
+dotnet test Sash.slnx
+```
+
+```bash
+dotnet run --project src/Sash.App
+```
+
+UIを編集しながら確認するときは、`ui` で `npm run dev` を起動し、環境変数 `SASH_UI_DEV_URL=http://localhost:5173` を設定してアプリを起動します。ホットリロードが効きます。ブラウザで `http://localhost:5173` を直接開くと、サンプルのリボンでUIだけを確認できます。
+
+### 配布用の単一exe
+
+```bash
+dotnet publish src/Sash.App -p:PublishProfile=win-x64
+```
+
+`artifacts/publish/win-x64/Sash.exe` に、self-containedの単一exeが出力されます。
 
 ## ライセンス
 

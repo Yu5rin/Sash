@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ホスト：WinFormsの外枠とWebView2。UIは wwwroot（ui/ のビルド成果物）を埋め込みリソースとして配信する -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <RootNamespace>Sash.App</RootNamespace>
+    <AssemblyName>Sash</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sash.Core\Sash.Core.csproj" />
+    <ProjectReference Include="..\Sash.Excel\Sash.Excel.csproj" />
+  </ItemGroup>
+
+  <!-- 単一exeでも動くよう、UIはファイルではなく埋め込みリソースとして持つ -->
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- WebView2 パッケージは WPF 用の dll も参照に加えるが、WinForms だけを使うので外す（WindowsBase の競合警告を防ぐ） -->
+  <Target Name="RemoveWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="WarnMissingUi" BeforeTargets="Build" Condition="!Exists('wwwroot\index.html')">
+    <Warning Text="wwwroot\index.html がありません。先に ui フォルダで npm run build を実行してください。" Code="SASH001" />
+  </Target>
+
+</Project>
