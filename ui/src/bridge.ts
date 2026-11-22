@@ -92,6 +92,7 @@ export interface HostApi {
   'excel.apply': { req: { path: string; parts: PartToSave[]; saveIfDirty: boolean }; res: ApplyResult };
   'excel.imageMso': { req: { names: string[]; size: number }; res: Record<string, string | null> };
   'excel.labels': { req: { ids: string[] }; res: Record<string, string> };
+  'icons.fromExecutable': { req: undefined; res: { fileName: string; icons: { name: string; base64: string }[] } | null };
   'recipes.list': { req: undefined; res: unknown[] };
   'recipes.save': { req: Record<string, unknown>; res: null };
   'recipes.delete': { req: { id: string }; res: null };

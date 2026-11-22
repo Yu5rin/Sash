@@ -473,3 +473,21 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-muted); border: 1
 .recipe-preview h3 { font-size: 12px; color: var(--text-muted); margin: 12px 0 4px; }
 .recipe-preview pre { margin: 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; font-family: Consolas, monospace; font-size: 12px; overflow: auto; white-space: pre; }
 .modal footer .left { margin-right: auto; }
+
+/* ---- アイコンエディタ（第2弾） ---- */
+
+.icon-editor { grid-template-columns: 300px 1fr; }
+.icon-right { overflow: auto; padding-right: 4px; }
+.icon-sources { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+.icon-options { gap: 4px; }
+.icon-options fieldset { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px 8px; margin: 0 0 6px; display: flex; flex-direction: column; gap: 6px; }
+.icon-options legend { font-size: 11px; color: var(--text-muted); padding: 0 4px; }
+.icon-options .opt-label { width: 84px; flex-shrink: 0; font-size: 12px; color: var(--text-muted); }
+.icon-options .inline { display: flex; align-items: center; gap: 8px; }
+.icon-options input[type="color"] { width: 32px; height: 22px; padding: 0 2px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface); }
+.icon-source { cursor: crosshair; }
+.exe-icons { display: flex; flex-wrap: wrap; gap: 4px; max-height: 160px; overflow: auto; }
+.exe-icon { padding: 3px; }
+.small { font-size: 12px; }
+.icon-left { overflow: auto; }
+.icon-left h3 { font-size: 12px; color: var(--text-muted); font-weight: 600; margin: 8px 0 2px; }

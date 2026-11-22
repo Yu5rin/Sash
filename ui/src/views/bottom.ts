@@ -5,14 +5,17 @@ import { h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { allElements, displayName, elementAt, pathOf } from '../model';
 import { insertStubs, setupRibbonHolder, vba } from '../callbacks';
-import type { PartStore } from '../store';
+import type { ImageEntry, PartStore } from '../store';
 import { generateStub, type CallbackState, type CallbackStatus } from '../vba';
 
 type Tab = 'problems' | 'callbacks' | 'images';
 
 let current: Tab = 'problems';
 
-export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: 'info' | 'error') => void): void {
+let openIcon: (existing?: ImageEntry) => void = () => undefined;
+
+export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: 'info' | 'error') => void, iconEditor: (existing?: ImageEntry) => void): void {
+  openIcon = iconEditor;
   const render = () => renderBottom(tabsHost, body, toast);
   app.on('session', render);
   app.on('problems', render);
@@ -143,10 +146,11 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
   } else {
     body.replaceChildren(
       images.length === 0
-        ? h('div', { class: 'panel-empty' }, 'ファイルに画像はありません。インスペクタの「アイコン」から作れます')
+        ? h('div', { class: 'panel-empty' }, 'ファイルに画像はありません。インスペクタの「アイコン」から作れます', ' ', h('button', { type: 'button', class: 'small', onclick: () => openIcon() }, '画像を取り込む'))
         : h(
             'ul',
             { class: 'panel-list images' },
+            h('li', { class: 'panel-actions' }, h('span', { class: 'muted' }, 'コントロールに設定せずに画像だけを作るときや、フォルダから一括で取り込むときはこちら'), h('button', { type: 'button', class: 'small', onclick: () => openIcon() }, '画像を取り込む')),
             unused.length
               ? h('li', { class: 'panel-actions' }, h('span', { class: 'muted' }, `どのコントロールからも使われていない画像が ${unused.length} 個あります`), h('button', { type: 'button', class: 'small', onclick: () => store.removeImages(unused.map((u) => u.id)) }, '未使用をすべて削除'))
               : null,
@@ -159,6 +163,16 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
                 h('code', null, img.id),
                 h('span', { class: 'where' }, users.length ? users.map((u) => u.getAttribute('id') ?? u.localName).join(', ') : '未使用'),
                 img.isNew ? h('span', { class: 'tag' }, '未保存') : null,
+                img.edit
+                  ? h('button', {
+                      type: 'button',
+                      class: 'small',
+                      onclick: (e: MouseEvent) => {
+                        e.stopPropagation();
+                        openIcon(img);
+                      },
+                    }, '加工し直す')
+                  : null,
                 h('button', {
                   type: 'button',
                   class: 'icon-button',

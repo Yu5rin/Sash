@@ -31,6 +31,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.openWorkbooks" => ExcelInstalled ? await excel.Value.ListOpenWorkbooksAsync() : [],
                 "excel.apply" => await ApplyAsync(Read<ApplyRequest>(body)),
                 "excel.imageMso" => await ImageMsoAsync(Read<ImageMsoRequest>(body)),
+                "icons.fromExecutable" => IconsFromExecutable(),
                 "recipes.list" => recipes.List(),
                 "recipes.save" => SaveRecipe(body),
                 "recipes.delete" => DeleteRecipe(Read<IdRequest>(body)),
@@ -159,6 +160,28 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         settings.RemoveRecent(req.Path);
         return null;
+    }
+
+    // ---- アイコン ----
+
+    private object? IconsFromExecutable()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Filter = "アイコンを含むファイル (*.exe;*.dll;*.ocx;*.cpl;*.icl)|*.exe;*.dll;*.ocx;*.cpl;*.icl|すべてのファイル (*.*)|*.*",
+            Title = "アイコンを取り出すファイルを選ぶ",
+        };
+        if (dialog.ShowDialog(owner) != DialogResult.OK)
+        {
+            return null;
+        }
+
+        var icons = IconExtractor.Extract(dialog.FileName);
+        return new
+        {
+            fileName = Path.GetFileNameWithoutExtension(dialog.FileName),
+            icons = icons.Select(i => new { name = i.Name, base64 = Convert.ToBase64String(i.Ico) }),
+        };
     }
 
     // ---- レシピ ----

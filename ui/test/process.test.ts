@@ -70,3 +70,53 @@ describe('ICO', () => {
     expect(parseIco(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]).buffer)).toBeNull();
   });
 });
+
+import { adjustBrightness, monochrome, parseHex, replaceColor, shapeMask, sharpen, squareCrop, toHex } from '../src/icon/process';
+
+describe('色と形の加工', () => {
+  it('単色化はアルファを保つ', () => {
+    const px = pixels(1, 1, [10, 20, 30, 128]);
+    monochrome(px, { r: 200, g: 100, b: 0 });
+    expect(Array.from(px.data)).toEqual([200, 100, 0, 128]);
+  });
+
+  it('近い色だけを置き換える', () => {
+    const px = pixels(2, 1, [255, 0, 0, 255]);
+    px.data.set([0, 0, 255, 255], 4);
+    replaceColor(px, { r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, 10);
+    expect(Array.from(px.data.slice(0, 3))).toEqual([0, 255, 0]);
+    expect(Array.from(px.data.slice(4, 7))).toEqual([0, 0, 255]);
+  });
+
+  it('明るさを上げ下げする', () => {
+    const px = pixels(1, 1, [100, 100, 100, 255]);
+    adjustBrightness(px, 50);
+    expect(px.data[0]).toBe(178);
+    adjustBrightness(px, -100);
+    expect(px.data[0]).toBe(0);
+  });
+
+  it('円形マスクは四隅を透明にし、中心は残す', () => {
+    const px = pixels(32, 32, [0, 0, 0, 255]);
+    shapeMask(px, 'circle', 0);
+    expect(px.data[3]).toBe(0);
+    expect(px.data[(16 * 32 + 16) * 4 + 3]).toBe(255);
+  });
+
+  it('シャープ化は平らな面を変えない', () => {
+    const px = pixels(3, 3, [100, 100, 100, 255]);
+    sharpen(px, 100);
+    expect(px.data[16]).toBe(100);
+  });
+
+  it('16進の色を変換する', () => {
+    expect(parseHex('#1e7145')).toEqual({ r: 30, g: 113, b: 69 });
+    expect(toHex({ r: 30, g: 113, b: 69 })).toBe('#1e7145');
+  });
+
+  it('手動切り抜きは画像に収まる正方形にする', () => {
+    expect(squareCrop(10, 10, 40, 30, 100, 100)).toEqual({ x: 10, y: 10, width: 30, height: 30 });
+    expect(squareCrop(90, 90, 120, 95, 100, 100)).toEqual({ x: 70, y: 70, width: 30, height: 30 });
+    expect(squareCrop(5, 5, 5, 6, 100, 100)).toBeNull();
+  });
+});

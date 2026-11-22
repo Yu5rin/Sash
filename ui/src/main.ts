@@ -15,6 +15,7 @@ import { uiIcons } from './icons';
 import { mountLayout } from './layout';
 import { duplicateElement, elementAt, pathOf } from './model';
 import { enableMsoIcons } from './msoIcons';
+import type { ImageEntry } from './store';
 import { elements } from './schema';
 import { mountBottom, showBottomTab } from './views/bottom';
 import { mountCanvas } from './views/canvas';
@@ -215,15 +216,20 @@ function duplicateSelection(): void {
   store.edit('other', () => pathOf(duplicateElement(store.selectedElement!)));
 }
 
-function openImageEditor(files?: FileList | File[]): void {
+function openImageEditor(files?: FileList | File[], existing?: ImageEntry): void {
   const store = app.store;
-  if (!store?.selection) return;
+  if (!store) return;
+  if (existing && !store.selection) {
+    openIconDialog(null, undefined, existing);
+    return;
+  }
+  if (!store.selection) return;
   const el = store.selectedElement;
   if (!el || !elements.get(el.localName)?.attrs.includes('image')) {
     toast('この要素にはアイコンを設定できません');
     return;
   }
-  openIconDialog(store.selection, files);
+  openIconDialog(store.selection, files, existing);
 }
 
 function openSettings(): void {
@@ -333,9 +339,12 @@ mountInspector($('inspector'), {
     openCatalog('idMso', cur, apply, tag === 'tab' || tag === 'group' ? tag : '');
   },
   pickImageMso: (cur, apply) => openCatalog('imageMso', cur, apply),
-  editImage: () => openImageEditor(),
+  editImage: (existing) => openImageEditor(undefined, existing),
 });
-mountBottom($('bottom-tabs'), $('bottom-body'), toast);
+mountBottom($('bottom-tabs'), $('bottom-body'), toast, (existing) => {
+  // 一覧から開いたときは、コントロールには設定せずに画像だけを作り直す
+  openIconDialog(null, undefined, existing);
+});
 mountHome($('home'), (p) => void open(p));
 
 app.on('session', updateToolbar);

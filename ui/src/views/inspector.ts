@@ -6,12 +6,13 @@ import { defaultCallbackName, renameCallback, vba } from '../callbacks';
 import { h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, setAttr, suggestId, usedIds } from '../model';
+import type { ImageEntry } from '../store';
 import { attributes, attrsOf, callbackSignature, elements, ID_PATTERN, type AttrDef, type Category } from '../schema';
 
 export interface InspectorHooks {
   pickIdMso(current: string, apply: (v: string) => void): void;
   pickImageMso(current: string, apply: (v: string) => void): void;
-  editImage(): void;
+  editImage(existing?: ImageEntry): void;
 }
 
 const CATEGORIES: readonly Category[] = ['基本', '表示', '動作', '詳細'];
@@ -265,6 +266,7 @@ function iconRow(el: Element): HTMLElement {
         [...store.images.keys()].map((k) => h('option', { value: k, selected: k === id }, k)),
         img ? null : h('option', { value: id, selected: true }, id ? `${id}（見つかりません）` : '選択してください'),
       ),
+      img?.edit ? h('button', { type: 'button', class: 'small', title: '元画像と設定から加工し直す', onclick: () => hooks.editImage(img) }, '加工し直す') : null,
       h('button', { type: 'button', class: 'small', onclick: () => hooks.editImage() }, '新しく作る'),
     );
   } else if (mode === 'getImage') {
