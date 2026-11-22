@@ -22,7 +22,7 @@ import { enableMsoIcons } from './msoIcons';
 import type { ImageEntry } from './store';
 import { defFor, titleOf } from './schema';
 import { mountBottom, showBottomTab } from './views/bottom';
-import { mountCanvas } from './views/canvas';
+import { mountCanvas, tabIdToActivate } from './views/canvas';
 import { mountHome } from './views/home';
 import { mountInspector } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
@@ -171,7 +171,7 @@ async function applyToExcel(): Promise<void> {
   const run = async (saveIfDirty: boolean) => {
     const parts = partsToSave();
     toast(t('反映しています…'));
-    return invoke('excel.apply', { path: s.path, parts, saveIfDirty });
+    return invoke('excel.apply', { path: s.path, parts, saveIfDirty, activateTab: tabIdToActivate() ?? undefined });
   };
   try {
     let res = await run(false);
@@ -525,7 +525,7 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// ファイルのドロップ。xlsm / xlam はホストにパスを調べてもらって開く
+// ファイルのドロップ。xlsm / xlam / xltm / xlsb はホストにパスを調べてもらって開く
 window.addEventListener('dragover', (e) => {
   if (e.dataTransfer?.types.includes('Files') && !(e.target as HTMLElement).closest('#canvas, .modal')) e.preventDefault();
 });
@@ -534,8 +534,8 @@ window.addEventListener('drop', (e) => {
   const files = e.dataTransfer?.files;
   if (!files?.length) return;
   e.preventDefault();
-  if (!/\.(xlsm|xlam)$/i.test(files[0]!.name)) {
-    toast(t('.xlsm か .xlam のファイルをドロップしてください'), 'error');
+  if (!/\.(xlsm|xlam|xltm|xlsb)$/i.test(files[0]!.name)) {
+    toast(t('.xlsm / .xlam / .xltm / .xlsb のファイルをドロップしてください'), 'error');
     return;
   }
   if (isHosted) sendDroppedFiles(files);
