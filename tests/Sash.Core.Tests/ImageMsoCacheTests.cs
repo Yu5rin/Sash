@@ -21,7 +21,8 @@ internal sealed class TempDir : IDisposable
 
 public class ImageMsoCacheTests
 {
-    private static readonly byte[] Png = [0x89, 0x50, 0x4E, 0x47];
+    /// <summary>PNG の署名で始まるバイト列（キャッシュは署名のないファイルを壊れたものとして扱うため）。</summary>
+    internal static readonly byte[] Png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
 
     [Fact]
     public void 画像は返し_存在しない名前はnull_知らない名前はMissesに返す()
@@ -158,3 +159,79 @@ public class OnceLogTests
         Assert.True(new OnceLog(null).Write("a", "x"));
     }
 }
+
+public class ImageMsoCacheValidationTests
+{
+    private static readonly byte[] Png = ImageMsoCacheTests.Png;
+
+    [Theory]
+    [InlineData(new byte[0])]
+    [InlineData(new byte[] { 0x42, 0x4D, 1, 2, 3, 4, 5, 6, 7, 8 })]
+    [InlineData(new byte[] { 0x89, 0x50, 0x4E, 0x47 })]
+    public void 空や壊れた画像はキャッシュにないものとして扱い_消して取り直させる(byte[] bad)
+    {
+        using var dir = new TempDir();
+        var cache = new ImageMsoCache(dir.Path);
+        Directory.CreateDirectory(cache.SizeDirectory(32));
+        var path = Path.Combine(cache.SizeDirectory(32), "AutoSum.png");
+        File.WriteAllBytes(path, bad);
+
+        Assert.False(cache.IsKnown("AutoSum", 32));
+        Assert.False(File.Exists(path));
+
+        File.WriteAllBytes(path, bad);
+        var r = new ImageMsoCache(dir.Path).Lookup(["AutoSum"], 32);
+        Assert.Equal(["AutoSum"], r.Misses);
+        Assert.False(r.Found.ContainsKey("AutoSum"));
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public void 正しいPNGは取り込み済みとして扱う()
+    {
+        using var dir = new TempDir();
+        var cache = new ImageMsoCache(dir.Path);
+        cache.Store("AutoSum", 32, Png);
+
+        Assert.True(cache.IsKnown("AutoSum", 32));
+        Assert.Equal(Png, cache.Lookup(["AutoSum"], 32).Found["AutoSum"]);
+    }
+
+    [Fact]
+    public void 失敗の記録を書いて読み直し_消せる()
+    {
+        using var dir = new TempDir();
+        var cache = new ImageMsoCache(dir.Path);
+        Assert.Null(cache.ReadFailure());
+
+        cache.WriteFailure(new ImageMsoFailureRecord("16.0.19029", DateTimeOffset.Now, "理由"));
+        var read = new ImageMsoCache(dir.Path).ReadFailure();
+        Assert.Equal(("16.0.19029", "理由"), (read!.ExcelVersion, read.Message));
+
+        cache.ClearFailure();
+        Assert.Null(cache.ReadFailure());
+        cache.ClearFailure();
+    }
+
+    [Theory]
+    [InlineData("16.0.19029", "16.0.19029")]
+    [InlineData("16.0.19029.20000", "16.0.19029")]
+    [InlineData(" 16.0 ", "16.0.0")]
+    [InlineData("16", "16.0.0")]
+    [InlineData("abc", "abc")]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    public void Excelの版をそろえる(string? input, string? expected)
+    {
+        Assert.Equal(expected, ImageMsoCache.NormalizeExcelVersion(input));
+    }
+
+    [Fact]
+    public void 形の違う版も同じExcelなら同じとみなす()
+    {
+        Assert.True(ImageMsoCache.SameExcelVersion("16.0.19029", "16.0.19029.20000"));
+        Assert.False(ImageMsoCache.SameExcelVersion("16.0.19029", "16.0.19127"));
+        Assert.False(ImageMsoCache.SameExcelVersion(null, "16.0.19029"));
+    }
+}
+

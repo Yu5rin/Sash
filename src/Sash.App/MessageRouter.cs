@@ -631,11 +631,11 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private static ImageMsoPrefetch CreatePrefetch(ImageMsoCache cache, Action<object> post)
     {
-        var prefetch = new ImageMsoPrefetch(cache, AppLog.Write);
+        var prefetch = new ImageMsoPrefetch(cache, AppLog.Write, () => InstalledExcelVersion.Value);
         prefetch.Changed += status =>
         {
             var dto = PrefetchStatus(status);
-            post(new { @event = "iconPrefetch", dto.State, dto.Done, dto.Total, dto.Size, dto.Failed, dto.Cached, dto.Message });
+            post(new { @event = "iconPrefetch", dto.State, dto.Done, dto.Total, dto.Size, dto.Failed, dto.Cached, dto.Message, dto.Cancelled });
         };
         return prefetch;
     }
@@ -644,9 +644,12 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     private static PrefetchStatusDto PrefetchStatus(ImageMsoPrefetchStatus s)
     {
         var state = s.State == "none" && !ExcelInstalled && s.Cached == 0 ? "unavailable" : s.State;
-        var current = InstalledExcelVersion.Value;
-        var outdated = state == "done" && s.ExcelVersion is not null && current is not null && !string.Equals(s.ExcelVersion, current, StringComparison.Ordinal);
-        return new PrefetchStatusDto(state, s.Done, s.Total, s.Size, s.Failed, s.Cached, s.ExcelVersion, s.CachedAt, s.Message, ExcelInstalled, current, outdated);
+        // キャッシュの版は取り込んだ Excel（Application.Version と Build）から、いまの版は EXCEL.EXE のファイルの版から読む。
+        // 形が違っても同じ Excel を「更新された」と言い続けないよう、メジャー.マイナー.ビルドにそろえて比べる
+        var current = ImageMsoCache.NormalizeExcelVersion(InstalledExcelVersion.Value);
+        var cachedVersion = ImageMsoCache.NormalizeExcelVersion(s.ExcelVersion);
+        var outdated = state == "done" && cachedVersion is not null && current is not null && !ImageMsoCache.SameExcelVersion(cachedVersion, current);
+        return new PrefetchStatusDto(state, s.Done, s.Total, s.Size, s.Failed, s.Cached, cachedVersion, s.CachedAt, s.Message, ExcelInstalled, current, outdated, s.Cancelled);
     }
 
     private PrefetchStatusDto PrefetchStart(PrefetchStartRequest req)
@@ -713,7 +716,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         string? Message,
         bool ExcelInstalled,
         string? CurrentExcelVersion,
-        bool Outdated);
+        bool Outdated,
+        bool Cancelled);
 
     private sealed record VbaInsertRequest(string Path, string Module, string Code, bool DocumentModule);
 

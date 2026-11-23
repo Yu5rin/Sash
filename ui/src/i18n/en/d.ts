@@ -57,4 +57,10 @@ export const en: Readonly<Record<string, string>> = {
   'アイコンを取り込む': 'Import icons',
   'Excel が見つからないため、アイコンを取り込めません。': 'Excel was not found, so the icons cannot be imported.',
   '取り込みを中止しました。取り込めた分は使えます。': 'Import cancelled. The icons imported so far can be used.',
+  'サードパーティのライセンス': 'Third-party licenses',
+  'ライセンスの文書を読み込めませんでした：{message}': 'Could not load the license texts: {message}',
+  'Sash は次の部品を使っています。それぞれのライセンスの全文を示します。': 'Sash uses the following components. The full text of each license is shown below.',
+  'idMso / imageMso の一覧': 'List of idMso / imageMso',
+  'XML エディタ': 'XML editor',
+  'XML エディタが含む部品': 'Components included in the XML editor',
 };

@@ -423,7 +423,9 @@ export function searchIcons(icons: readonly FluentIcon[], query: string, variant
     if (/^[a-z0-9_-]+$/.test(tok)) {
       const ascii = tok.replace(/-/g, '_');
       // 英語の語でも、辞書に載っている短い言葉（ai, web, vba など）はその置き換えも使う
-      return [ascii, ...(JA_KEYWORDS[ascii] ?? [])];
+      // Object.hasOwn で引く。constructor や __proto__ のような語だと、そのまま引くと Object.prototype のものが返って
+      // 展開で TypeError になるため
+      return [ascii, ...(Object.hasOwn(JA_KEYWORDS, ascii) ? JA_KEYWORDS[ascii]! : [])];
     }
     return jaToEnglish(tok);
   });

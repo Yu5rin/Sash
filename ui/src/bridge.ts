@@ -171,6 +171,11 @@ export interface IconPrefetchStatus {
   currentExcelVersion?: string | null;
   /** キャッシュを作った Excel と、いまの Excel の版が違う（取り込み直しを勧める）。 */
   outdated?: boolean;
+  /**
+   * 直前の取り込みが中止で終わった。取り込み直しを中止すると前の記録が残っていて state は done になるので、
+   * 「取り込みました」と出さないために別に知らせる。
+   */
+  cancelled?: boolean;
 }
 
 /** 要求の種類ごとの payload と応答の型。 */
@@ -223,7 +228,7 @@ export type HostEvent =
   | { event: 'closeRequested' }
   | { event: 'fileDropped'; path: string }
   /** imageMso の取り込みの進み具合。まとまり（50 件）ごとと、状態が変わったときに届く。 */
-  | { event: 'iconPrefetch'; state: IconPrefetchState; done: number; total: number; size?: number; failed?: number; cached?: number; message?: string | null };
+  | { event: 'iconPrefetch'; state: IconPrefetchState; done: number; total: number; size?: number; failed?: number; cached?: number; message?: string | null; cancelled?: boolean };
 
 interface HostResponse {
   id: number;
@@ -345,13 +350,14 @@ function mockPrefetchSnapshot(): IconPrefetchStatus {
 
 function emitMockPrefetch(): void {
   const s = mockPrefetch;
-  const e: HostEvent = { event: 'iconPrefetch', state: s.state, done: s.done, total: s.total, size: s.size, failed: s.failed, cached: s.cached, message: s.message };
+  const e: HostEvent = { event: 'iconPrefetch', state: s.state, done: s.done, total: s.total, size: s.size, failed: s.failed, cached: s.cached, message: s.message, cancelled: s.cancelled ?? false };
   for (const l of eventListeners) l(e);
 }
 
 function startMockPrefetch(names: string[], sizes: number[]): void {
   if (mockPrefetch.state === 'running') return;
-  Object.assign(mockPrefetch, { state: 'running', done: 0, total: names.length * sizes.length, size: sizes[0] ?? 32, message: null });
+  // 取り込み直しの中止を確かめられるよう、前の記録（excelVersion など）は残したまま始める
+  Object.assign(mockPrefetch, { state: 'running', done: 0, total: names.length * sizes.length, size: sizes[0] ?? 32, message: null, cancelled: false });
   const step = Math.max(50, Math.ceil(mockPrefetch.total / 40));
   mockPrefetch.timer = window.setInterval(() => {
     mockPrefetch.done = Math.min(mockPrefetch.total, mockPrefetch.done + step);
@@ -437,13 +443,19 @@ const mock = {
       case 'icons.prefetchStart': {
         if (!mockExcel) return Promise.reject(new Error(t('Excel が見つからないため、アイコンを取り込めません。')));
         const p = payload as { names: string[]; sizes?: number[] };
-        startMockPrefetch(p.names, p.sizes?.length ? p.sizes : [32, 16]);
+        startMockPrefetch(p.names, p.sizes?.length ? p.sizes : [32]);
         return r(mockPrefetchSnapshot());
       }
       case 'icons.prefetchCancel':
         if (mockPrefetch.state === 'running') {
           window.clearInterval(mockPrefetch.timer);
-          Object.assign(mockPrefetch, { state: 'none', cached: Math.floor(mockPrefetch.done / 2), message: t('取り込みを中止しました。取り込めた分は使えます。') });
+          // 取り込み直しの中止なら、本物のホストと同じく前の記録が残って done になる
+          Object.assign(mockPrefetch, {
+            state: mockPrefetch.cachedAt ? 'done' : 'none',
+            cached: Math.max(mockPrefetch.cached, mockPrefetch.done),
+            message: t('取り込みを中止しました。取り込めた分は使えます。'),
+            cancelled: true,
+          });
           emitMockPrefetch();
         }
         return r(mockPrefetchSnapshot());

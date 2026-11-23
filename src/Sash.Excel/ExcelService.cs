@@ -91,6 +91,12 @@ public sealed class ExcelService : IDisposable
     /// <summary>終了処理に入ったか。片付けた後に、取り込みの続きが Excel を起動し直さないようにする。</summary>
     private volatile bool _disposing;
 
+    /// <summary>
+    /// 一括の取り込みの最中か（BeginAsync から EndAsync まで）。その間の表示のための要求はキャッシュだけで答える。
+    /// 要求のたびに見えない Excel を起動・終了すると、取り込みと COM のスレッドを取り合って両方が遅くなるため。
+    /// </summary>
+    private volatile bool _bulkActive;
+
     public ExcelService(ImageMsoCache iconCache)
     {
         _iconCache = iconCache;
@@ -648,6 +654,8 @@ public sealed class ExcelService : IDisposable
     /// </summary>
     private dynamic HelperApp()
     {
+        // 終了処理に入った後は、新しい Excel を起動しない（片付けの後に起動すると、見えない Excel が残ってしまう）
+        ObjectDisposedException.ThrowIf(_disposing, this);
         var running = RunningExcel.Applications().FirstOrDefault();
         if (running is not null)
         {
@@ -665,8 +673,17 @@ public sealed class ExcelService : IDisposable
         {
             var type = Type.GetTypeFromProgID("Excel.Application", throwOnError: true)!;
             _helperApp = Activator.CreateInstance(type)!;
-            _helperApp.Visible = false;
-            _helperApp.DisplayAlerts = false;
+            try
+            {
+                _helperApp.Visible = false;
+                _helperApp.DisplayAlerts = false;
+            }
+            catch (Exception ex) when (IsComFailure(ex))
+            {
+                // 起動した直後の設定で失敗しても、起動した Excel を残さない
+                ReleaseHelperIfIdle();
+                throw;
+            }
         }
 
         return _helperApp;
@@ -717,7 +734,10 @@ public sealed class ExcelService : IDisposable
         {
             int? count = SafeValue(() => (int)app.Workbooks.Count);
             bool? visible = SafeValue(() => (bool)app.Visible);
-            if (count == 0 && visible == false)
+
+            // 見えるかどうかが読めなくても、ブックがなければ Sash が起動したままの Excel なので終わらせる
+            // （起動直後の設定に失敗した Excel を残さないため）
+            if (count == 0 && visible != true)
             {
                 app.Quit();
             }
@@ -747,7 +767,9 @@ public sealed class ExcelService : IDisposable
     public async Task<Dictionary<string, byte[]?>> GetImageMsoAsync(IReadOnlyList<string> names, int size)
     {
         var lookup = await Task.Run(() => _iconCache.Lookup(names ?? [], size)).ConfigureAwait(false);
-        if (lookup.Misses.Count == 0)
+
+        // 一括の取り込みの最中はキャッシュだけで答える。足りない名前は結果に含めず、取り込みが終わったら UI が取り直す
+        if (lookup.Misses.Count == 0 || _bulkActive)
         {
             return lookup.Found;
         }
@@ -765,6 +787,13 @@ public sealed class ExcelService : IDisposable
     private Dictionary<string, byte[]?> FetchOnDemand(IReadOnlyList<string> names, int size)
     {
         var result = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
+
+        // 待っている間に一括の取り込みが始まっていたら、Excel を起動せずに返す（理由は GetImageMsoAsync と同じ）
+        if (_bulkActive || _disposing)
+        {
+            return result;
+        }
+
         dynamic? bars = null;
         try
         {
@@ -776,7 +805,7 @@ public sealed class ExcelService : IDisposable
                     {
                         bars = HelperApp().CommandBars;
                     }
-                    catch (Exception ex) when (IsComFailure(ex) || ex is TypeLoadException)
+                    catch (Exception ex) when (IsComFailure(ex) || ex is TypeLoadException or ObjectDisposedException)
                     {
                         // Excel を起動できない。残りの名前は結果に含めない
                         _onceLog.Write($"helper:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: Excel に接続できなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
@@ -817,16 +846,31 @@ public sealed class ExcelService : IDisposable
 
     private sealed class BulkSource(ExcelService owner) : IImageMsoBatchSource
     {
-        public Task<string?> BeginAsync(CancellationToken cancellationToken) => owner._com.InvokeAsync(owner.StartBulkApp);
+        public Task<string?> BeginAsync(CancellationToken cancellationToken)
+        {
+            // COM のスレッドに積む前に立てる。後から積まれる表示の要求が、Excel を起動しにいかないように
+            owner._bulkActive = true;
+            return owner._com.InvokeAsync(owner.StartBulkApp);
+        }
 
         public Task<IReadOnlyList<ImageMsoFetchResult>> FetchAsync(IReadOnlyList<string> names, int size, CancellationToken cancellationToken) =>
             owner._com.InvokeAsync(() => owner.FetchBulk(names, size, cancellationToken));
 
-        public Task EndAsync() => owner._com.InvokeAsync(() =>
+        public async Task EndAsync()
         {
-            owner.ReleaseBulkApp();
-            return true;
-        });
+            try
+            {
+                await owner._com.InvokeAsync(() =>
+                {
+                    owner.ReleaseBulkApp();
+                    return true;
+                }).ConfigureAwait(false);
+            }
+            finally
+            {
+                owner._bulkActive = false;
+            }
+        }
     }
 
     /// <summary>取り込み専用の見えない Excel を起動し、版（Version と Build。例：16.0.19029）を返す。COM スレッドで呼ぶ。</summary>
@@ -838,9 +882,19 @@ public sealed class ExcelService : IDisposable
 
         // CreateObject と同じく、利用者の Excel とは別の Excel が起動する
         _bulkApp = Activator.CreateInstance(type)!;
-        _bulkApp.Visible = false;
-        _bulkApp.DisplayAlerts = false;
         dynamic app = _bulkApp;
+        try
+        {
+            app.Visible = false;
+            app.DisplayAlerts = false;
+        }
+        catch (Exception ex) when (IsComFailure(ex))
+        {
+            // 起動した直後の設定で失敗したら、その Excel を終わらせてから失敗を返す（見えない Excel を残さない）
+            ReleaseBulkApp();
+            throw;
+        }
+
         string? version = Safe(() => (string)app.Version);
         string? build = Safe(() => Convert.ToString((object)app.Build, System.Globalization.CultureInfo.InvariantCulture));
         var text = version is null ? null : build is null ? version : $"{version}.{build}";
@@ -857,6 +911,19 @@ public sealed class ExcelService : IDisposable
             // 取り込み中に Excel が終わった（利用者がタスク マネージャーで終わらせたなど）。1 回だけ起動し直す
             Log?.Invoke("imageMso の取り込み用の Excel が応答しないため、起動し直す");
             StartBulkApp();
+        }
+        else
+        {
+            // 取り込みの最中に利用者がブックをダブルクリックすると、Windows がこの見えない Excel に開かせることがある。
+            // そのまま使い続けると利用者のブックが見えないままになり、最後に Quit すると閉じてしまうので、
+            // ブックが入っていたらこの Excel は見えるようにして利用者に引き渡し（Quit しない）、新しい見えない Excel で続ける
+            dynamic current = _bulkApp!;
+            int? count = SafeValue(() => (int)current.Workbooks.Count);
+            if (count > 0)
+            {
+                Log?.Invoke("imageMso の取り込み用の Excel でブックが開かれたため、その Excel を利用者に引き渡し、別の Excel で続ける");
+                StartBulkApp(); // 中で ReleaseBulkApp が、ブックの入った Excel を見えるようにして引き渡す
+            }
         }
 
         dynamic bars = _bulkApp!.CommandBars;
@@ -913,39 +980,17 @@ public sealed class ExcelService : IDisposable
 
     /// <summary>
     /// GetImageMso が返す IPictureDisp（32bit のビットマップ）を、アルファを保ったまま PNG にする。次の順に試す。
-    /// 1. Handle（HBITMAP）を GetDIBits で読む。GDI のハンドルはプロセスごとのものなので、Excel が別のプロセス
-    ///    （利用者の Excel も Sash が起動した Excel も、ふつうはそう）だと読めない。読めたときだけ使う。
-    /// 2. QueryInterface で IPicture を取り、SaveAsFile でメモリ上のストリームに BMP を書かせて読む（COM が中身を運ぶ）。
-    /// 3. IPersistStream.Save で同じように書かせて読む。
+    /// 1. QueryInterface で IPicture を取り、SaveAsFile でメモリ上のストリームに BMP を書かせて読む（COM が中身を運ぶ）。
+    /// 2. IPersistStream.Save で同じように書かせて読む。
+    /// 3. IPicture を取れなかったときだけ、Handle（HBITMAP）を GetDIBits で読む。
+    /// HBITMAP を先に試さないのは、GDI のハンドルがプロセスごとのものだから。Excel は別のプロセスで動くのがふつうで、
+    /// その値がたまたまこのプロセスの 32x32 のビットマップを指していると、別の画像をキャッシュに書いてしまう。
     /// どれも失敗したら null。理由ごとに最初の 1 回だけログに残す。
     /// </summary>
     private byte[]? PictureToPng(object picture, int size)
     {
-        if (_handlePath >= 0)
-        {
-            try
-            {
-                var png = PngFromHandle(picture, size, out var reason);
-                if (png is not null)
-                {
-                    if (_handlePath == 0)
-                    {
-                        Log?.Invoke("imageMso: HBITMAP から直接読めた");
-                    }
-
-                    _handlePath = 1;
-                    return png;
-                }
-
-                _onceLog.Write($"handle:{reason}", $"imageMso: HBITMAP から読めなかった（{reason}）。Excel が別のプロセスで動いているため。BMP のバイト列で受け取る方法を試す");
-            }
-            catch (Exception ex) when (IsComFailure(ex) || ex is OverflowException)
-            {
-                _onceLog.Write($"handle:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: Handle を読めなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-            }
-        }
-
-        foreach (var (via, save) in new (string, Func<object, byte[]?>)[] { ("IPicture.SaveAsFile", SaveViaPicture), ("IPersistStream.Save", SaveViaPersistStream) })
+        var noPicture = false;
+        foreach (var (via, save) in new (string, Func<object, byte[]?>)[] { ("IPicture.SaveAsFile", p => SaveViaPicture(p, out noPicture)), ("IPersistStream.Save", SaveViaPersistStream) })
         {
             var bmp = save(picture);
             if (bmp is null)
@@ -956,19 +1001,46 @@ public sealed class ExcelService : IDisposable
             try
             {
                 var png = BmpDecoder.ToPng(bmp, out var image);
-                if (_handlePath != 1)
-                {
-                    // HBITMAP の方法は、この PC（別のプロセスの Excel）では使えないので、以後は試さない
-                    _handlePath = -1;
-                }
-
                 _onceLog.Write($"bmp:{via}:{image.BitCount}:{image.Compression}", $"imageMso: {via} で受け取った（{image.Describe()}、{bmp.Length} バイト）");
                 return png;
             }
-            catch (FormatException ex)
+            catch (Exception ex) when (ex is FormatException or ArgumentException or IndexOutOfRangeException or OverflowException)
             {
-                _onceLog.Write($"bmpformat:{via}:{ex.Message}", $"imageMso: {via} の BMP を読めなかった: {ex.Message}（先頭 {Convert.ToHexString(bmp.AsSpan(0, Math.Min(32, bmp.Length)))}、{bmp.Length} バイト）");
+                // 1 件の壊れた画像で、まとまり全体を失敗させない（この名前だけを「画像にできなかった」にする）
+                _onceLog.Write($"bmpformat:{via}:{ex.GetType().Name}:{ex.Message}", $"imageMso: {via} の BMP を読めなかった: {ex.GetType().Name} {ex.Message}（先頭 {Convert.ToHexString(bmp.AsSpan(0, Math.Min(32, bmp.Length)))}、{bmp.Length} バイト）");
             }
+        }
+
+        if (!noPicture || _handlePath < 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var png = PngFromHandle(picture, size, out var reason);
+            if (png is not null)
+            {
+                if (_handlePath == 0)
+                {
+                    Log?.Invoke("imageMso: IPicture を取れなかったので、HBITMAP から直接読んだ");
+                }
+
+                _handlePath = 1;
+                return png;
+            }
+
+            if (_handlePath == 0)
+            {
+                // 一度読めなかったら、この PC では使えないとみなして以後は試さない
+                _handlePath = -1;
+            }
+
+            _onceLog.Write($"handle:{reason}", $"imageMso: HBITMAP から読めなかった（{reason}）");
+        }
+        catch (Exception ex) when (IsComFailure(ex) || ex is OverflowException)
+        {
+            _onceLog.Write($"handle:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: Handle を読めなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
         }
 
         return null;
@@ -1030,9 +1102,10 @@ public sealed class ExcelService : IDisposable
         return PngEncoder.EncodeBgra(bits, w, h);
     }
 
-    /// <summary>IPicture.SaveAsFile で BMP を書かせる。取れなければ null（理由はログへ）。</summary>
-    private byte[]? SaveViaPicture(object picture)
+    /// <summary>IPicture.SaveAsFile で BMP を書かせる。取れなければ null（理由はログへ）。noPicture は IPicture を取れなかったこと。</summary>
+    private byte[]? SaveViaPicture(object picture, out bool noPicture)
     {
+        noPicture = false;
         IOlePicture ole;
         try
         {
@@ -1040,6 +1113,7 @@ public sealed class ExcelService : IDisposable
         }
         catch (Exception ex) when (ex is InvalidCastException or COMException)
         {
+            noPicture = true;
             _onceLog.Write($"ipicture:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: IPicture を取得できなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
             return null;
         }
@@ -1204,22 +1278,23 @@ public sealed class ExcelService : IDisposable
     public void Dispose()
     {
         _disposing = true;
-        if (_helperApp is not null || _bulkApp is not null)
+        try
         {
-            try
+            // 起動した Excel は、利用者のブックが入っていなければ終わらせ、入っていれば引き渡す
+            // （取り込みの途中で Sash を閉じたときも、取り込み用の Excel を残さない）。
+            // _helperApp と _bulkApp は COM のスレッドだけが書くので、ここ（UI のスレッド）で null かどうかを見て
+            // 飛ばすことはしない。起動の途中（StartBulkApp の実行中）でも、片付けはその後ろに積まれて必ず走る。
+            // _disposing を先に立てたので、片付けの後に新しい Excel は起動されない
+            _com.InvokeAsync(() =>
             {
-                // 起動した Excel は、利用者のブックが入っていなければ終わらせ、入っていれば引き渡す
-                // （取り込みの途中で Sash を閉じたときも、取り込み用の Excel を残さない）
-                _com.InvokeAsync(() =>
-                {
-                    ReleaseHelperIfIdle();
-                    ReleaseBulkApp();
-                    return true;
-                }).Wait(TimeSpan.FromSeconds(10));
-            }
-            catch (AggregateException)
-            {
-            }
+                ReleaseHelperIfIdle();
+                ReleaseBulkApp();
+                return true;
+            }).Wait(TimeSpan.FromSeconds(10));
+        }
+        catch (AggregateException)
+        {
+            // 二度目の Dispose（COM のスレッドがもう終わっている）など
         }
 
         _com.Dispose();

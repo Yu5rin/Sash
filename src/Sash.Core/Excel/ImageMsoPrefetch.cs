@@ -46,6 +46,10 @@ public interface IImageMsoBatchSource
 /// <param name="ExcelVersion">取り込み済みのキャッシュを作った Excel の版。</param>
 /// <param name="CachedAt">取り込みを終えた日時。</param>
 /// <param name="Message">利用者に見せる補足（失敗の理由、中止したことなど）。</param>
+/// <param name="Cancelled">
+/// 直前の取り込みが中止で終わったか。取り込み直しを中止すると、前の記録（manifest）が残っているので State は done になる。
+/// それだけでは UI が「取り込みました」と出してしまうので、中止したことを別に知らせる。
+/// </param>
 public sealed record ImageMsoPrefetchStatus(
     string State,
     int Done,
@@ -55,19 +59,28 @@ public sealed record ImageMsoPrefetchStatus(
     int Cached,
     string? ExcelVersion,
     DateTimeOffset? CachedAt,
-    string? Message);
+    string? Message,
+    bool Cancelled = false);
 
 /// <summary>
 /// imageMso の一括の取り込み（初回起動時と、設定画面の「取り込み直す」）。
 /// 数千件を 1 回の COM 呼び出しで処理すると、その間ほかの Excel の操作がすべて待たされるので、
 /// <see cref="BatchSize"/> 件ずつに分けて呼ぶ。1 件ずつの失敗は数えるだけにし、最初の失敗の理由だけをログに残す。
 /// </summary>
-public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = null)
+/// <param name="cache">取り込み先のキャッシュ。</param>
+/// <param name="log">診断の記録の書き出し先。</param>
+/// <param name="currentExcelVersion">
+/// いま入っている Excel の版を返す（Excel を起動せずに読めるもの）。失敗の記録がこの版のものなら、自動では取り込み直さない。
+/// </param>
+public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = null, Func<string?>? currentExcelVersion = null)
 {
     public const int BatchSize = 50;
 
-    /// <summary>キャンバスが小さいボタン（16px）と大きいボタン（32px）を描くので、両方を取り込む。表示に使う 32px を先にする。</summary>
-    public static readonly IReadOnlyList<int> DefaultSizes = [32, 16];
+    /// <summary>
+    /// UI はキャンバスもアイコンの一覧も 32px の画像を縮めて描く（小さいボタンも 32px を 16px に縮める）ので、32px だけを取り込む。
+    /// 16px も取ると時間が倍かかるうえ、使われないファイルが数千個増えるだけになる。ほかの大きさは引数で指定できる。
+    /// </summary>
+    public static readonly IReadOnlyList<int> DefaultSizes = [32];
 
     /// <summary>
     /// これだけ処理して 1 件も画像にできなければ、変換の方法がこの PC で動いていないとみなして打ち切る
@@ -77,6 +90,7 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
 
     private readonly Lock _gate = new();
     private bool _running;
+    private bool _cancelled;
     private string? _failure;
     private string? _message;
     private int _done;
@@ -114,18 +128,25 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
 
     public ImageMsoPrefetchStatus GetStatus()
     {
-        bool running;
+        bool running, cancelled;
         string? failure, message;
         int done, total, size, failed;
         lock (_gate)
         {
-            (running, failure, message, done, total, size, failed) = (_running, _failure, _message, _done, _total, _size, _failed);
+            (running, cancelled, failure, message, done, total, size, failed) = (_running, _cancelled, _failure, _message, _done, _total, _size, _failed);
+        }
+
+        // 前の起動で失敗したまま、Excel の版が変わっていなければ failed として返す。
+        // UI は failed では自動で取り込みを始めないので、起動のたびに見えない Excel を起動して失敗し直すことがなくなる
+        if (!running && failure is null && cache.ReadFailure() is { } record && FailureApplies(record))
+        {
+            failure = record.Message ?? L("前回、アイコンを取り込めませんでした。", "The icons could not be imported last time.");
         }
 
         var manifest = cache.ReadManifest();
         var state = running ? "running" : failure is not null ? "failed" : manifest is not null ? "done" : "none";
         return new ImageMsoPrefetchStatus(state, done, total, size, failed, cache.ImageCount(ImageMsoCache.PrimarySize),
-            manifest?.ExcelVersion, manifest?.CompletedAt, failure ?? message);
+            manifest?.ExcelVersion, manifest?.CompletedAt, failure ?? message, !running && cancelled);
     }
 
     /// <summary>
@@ -152,6 +173,7 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
             }
 
             _running = true;
+            _cancelled = false;
             _failure = null;
             _message = null;
             _done = 0;
@@ -181,11 +203,37 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
         }
     }
 
+    /// <summary>
+    /// 失敗の記録が、いまの Excel にも当てはまるか。Excel が更新されていれば（両方の版が分かっていて違えば）当てはまらない
+    /// （更新で直っているかもしれないので、もう一度自動で試してよい）。どちらかが分からなければ、同じ Excel とみなす。
+    /// </summary>
+    private bool FailureApplies(ImageMsoFailureRecord record)
+    {
+        var current = ImageMsoCache.NormalizeExcelVersion(SafeCurrentVersion());
+        var recorded = ImageMsoCache.NormalizeExcelVersion(record.ExcelVersion);
+        return current is null || recorded is null || string.Equals(current, recorded, StringComparison.Ordinal);
+    }
+
+    private string? SafeCurrentVersion()
+    {
+        try
+        {
+            return currentExcelVersion?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            // 版が読めなくても状態は返す（版が分からないものとして扱う）
+            log?.Invoke($"Excel の版を読めなかった: {ex.Message}");
+            return null;
+        }
+    }
+
     private async Task RunAsync(List<string> names, List<int> sizes, bool force, IImageMsoBatchSource source, CancellationToken ct)
     {
-        var begun = false;
+        string? version = null;
         string? failure = null;
         string? message = null;
+        var cancelled = false;
         try
         {
             // 取り込む分を先に決める（ここまでは Excel を起動しない）
@@ -196,8 +244,7 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
             }
 
             Raise();
-            var version = await source.BeginAsync(ct).ConfigureAwait(false);
-            begun = true;
+            version = ImageMsoCache.NormalizeExcelVersion(await source.BeginAsync(ct).ConfigureAwait(false));
             var found = 0;
             var gaveUp = false;
             foreach (var (size, list) in work)
@@ -266,6 +313,7 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
 
             var primary = sizes.Contains(ImageMsoCache.PrimarySize) ? ImageMsoCache.PrimarySize : sizes[0];
             cache.WriteManifest(new ImageMsoManifest(version, sizes, cache.ImageCount(primary), cache.MissingCount(primary), names.Count, DateTimeOffset.Now));
+            cache.ClearFailure();
             if (failedCount > 0)
             {
                 message = L($"{failedCount} 件は画像にできませんでした。必要になったときに取り直します。", $"{failedCount} icons could not be converted. They will be retried when needed.");
@@ -275,6 +323,7 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
         catch (OperationCanceledException)
         {
             cache.Flush();
+            cancelled = true;
             message = L("取り込みを中止しました。取り込めた分は使えます。", "Import cancelled. The icons imported so far can be used.");
         }
         catch (Exception ex)
@@ -286,21 +335,27 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
         }
         finally
         {
-            if (begun)
+            // BeginAsync が途中で失敗しても（Excel を起動した後の設定で例外が出たなど）、起動した Excel が残らないよう
+            // 必ず後片付けを呼ぶ。起動していなければ後片付けは何もしない
+            try
             {
-                try
-                {
-                    await source.EndAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    log?.Invoke($"imageMso の取り込みの後片付けに失敗: {ex}");
-                }
+                await source.EndAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke($"imageMso の取り込みの後片付けに失敗: {ex}");
+            }
+
+            if (failure is not null)
+            {
+                // 失敗をファイルに残し、次の起動から同じ版の Excel では自動で始めない（設定画面からは始められる）
+                cache.WriteFailure(new ImageMsoFailureRecord(ImageMsoCache.NormalizeExcelVersion(SafeCurrentVersion()) ?? version, DateTimeOffset.Now, failure));
             }
 
             lock (_gate)
             {
                 _running = false;
+                _cancelled = cancelled;
                 _failure = failure;
                 _message = message;
             }

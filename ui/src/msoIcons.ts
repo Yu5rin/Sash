@@ -102,6 +102,14 @@ let progressToast: ToastHandle | null = null;
 /** 進み具合の通知の要素。利用者が × で閉じたら、取り込みが続いていても出し直さない。 */
 let progressEl: Element | null = null;
 let cancelling = false;
+/**
+ * 進み具合の通知を最後に書き換えた時刻と、まだ出していない最新の状態。
+ * まとまりごとに知らせが来るたびに書き換えると、読み上げが追いつかず「中止」も押しにくくなるので、500ms に 1 回までにする。
+ */
+const PROGRESS_INTERVAL_MS = 500;
+let progressShownAt = 0;
+let progressPending: IconPrefetchStatus | null = null;
+let progressTimer: number | undefined;
 
 /** 利用者が取り込みを中止したことを覚えておく（次の起動で勝手に始めないため）。 */
 const DECLINED_KEY = 'sash.msoPrefetch.declined';
@@ -139,7 +147,11 @@ export function shouldEnableMsoIcons(excelInstalled: boolean, s: IconPrefetchSta
   return excelInstalled || (s?.cached ?? 0) > 0 || s?.state === 'done';
 }
 
-/** 起動時に自動で取り込みを始めるか。Excel があり、まだ取り込んでおらず、利用者が中止していないときだけ。 */
+/**
+ * 起動時に自動で取り込みを始めるか。Excel があり、まだ取り込んでおらず、利用者が中止していないときだけ。
+ * failed（前の起動で失敗し、Excel の版も変わっていない。ホストがファイルに記録している）は、中止したときと同じく始めない。
+ * 始めると起動のたびに見えない Excel を起動して、同じ理由で失敗してエラーを出し続けるため。設定画面からは始められる。
+ */
 export function shouldAutoPrefetch(excelInstalled: boolean, s: IconPrefetchStatus | null, wasDeclined: boolean): boolean {
   return excelInstalled && s?.state === 'none' && !wasDeclined;
 }
@@ -171,9 +183,25 @@ function showProgress(s: IconPrefetchStatus): void {
   if (progressToast) {
     // 利用者が閉じた通知は出し直さない（編集の邪魔をしないため）。設定の「アイコン」で進み具合を見られる
     if (progressEl && !progressEl.isConnected) return;
+    const wait = progressShownAt + PROGRESS_INTERVAL_MS - Date.now();
+    if (wait > 0) {
+      // 間引いた分は最後の状態だけを、間隔が空いたところで出す（最後の件数が出ないままにならないように）
+      progressPending = s;
+      if (progressTimer === undefined) {
+        progressTimer = window.setTimeout(() => {
+          progressTimer = undefined;
+          const next = progressPending;
+          progressPending = null;
+          if (next && progressToast && status?.state === 'running' && !cancelling) showProgress(next);
+        }, wait);
+      }
+      return;
+    }
+    progressShownAt = Date.now();
     progressToast.update(progressOptions(s));
     return;
   }
+  progressShownAt = Date.now();
   progressToast = toast(progressOptions(s));
   progressEl = document.getElementById('toasts')?.lastElementChild ?? null;
 }
@@ -182,6 +210,9 @@ function closeProgress(): void {
   if (progressEl?.isConnected) progressToast?.close();
   progressToast = null;
   progressEl = null;
+  window.clearTimeout(progressTimer);
+  progressTimer = undefined;
+  progressPending = null;
 }
 
 function finished(s: IconPrefetchStatus): void {
@@ -191,12 +222,14 @@ function finished(s: IconPrefetchStatus): void {
   // 取り込めた分はキャッシュから出せるので、取れなかった名前も含めて描き直す
   enableMsoIcons(enabled || shouldEnableMsoIcons(s.excelInstalled ?? false, s));
   refreshMsoIcons();
-  if (s.state === 'done') {
+  // 中止を先に見る。取り込み直しを中止すると、前の記録が残っているので state は done になる。
+  // done を先に見ると、中止したのに「取り込みました」と出てしまう
+  if (wasCancelling || s.cancelled) {
+    toast({ kind: 'info', message: t('アイコンの取り込みを中止しました。設定の「アイコン」からいつでも取り込めます。') });
+  } else if (s.state === 'done') {
     toast({ kind: 'success', message: t('Excel のアイコンを取り込みました（{n} 件）', { n: formatCount(s.cached) }) });
   } else if (s.state === 'failed') {
     toast({ kind: 'error', message: s.message || t('Excel のアイコンを取り込めませんでした') });
-  } else if (wasCancelling) {
-    toast({ kind: 'info', message: t('アイコンの取り込みを中止しました。設定の「アイコン」からいつでも取り込めます。') });
   }
   // 日時や Excel の版は進み具合の知らせに入っていないので、取り直して画面に出す
   void invoke('icons.prefetchStatus').then((full) => {
@@ -241,7 +274,8 @@ export async function startMsoPrefetch(force: boolean): Promise<void> {
   setDeclined(false);
   cancelling = false;
   try {
-    const s = await invoke('icons.prefetchStart', { names: imageMsoNames(), sizes: [32, 16], force });
+    // 表示に使うのは 32px だけ（小さいボタンも 32px を縮めて描く）なので、32px だけを取り込む
+    const s = await invoke('icons.prefetchStart', { names: imageMsoNames(), sizes: [32], force });
     // 始めた直後の状態。以後は iconPrefetch の知らせで進む
     if (s.state === 'running' || status?.state !== 'running') setStatus(s);
   } catch (e) {

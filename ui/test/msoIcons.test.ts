@@ -160,13 +160,16 @@ describe('起動時と取り込みの流れ', () => {
 
     const start = invoke.mock.calls.find((c) => c[0] === 'icons.prefetchStart')!;
     const req = start[1] as { names: string[]; sizes: number[]; force: boolean };
-    expect(req.sizes).toEqual([32, 16]);
+    // 表示に使う 32px だけを取り込む（16px は使われないので取らない）
+    expect(req.sizes).toEqual([32]);
     expect(req.force).toBe(false);
     expect(req.names.length).toBeGreaterThan(1000);
     expect(req.names).toContain('AutoSum');
     expect(new Set(req.names).size).toBe(req.names.length);
 
     emit({ event: 'iconPrefetch', state: 'running', done: 1234, total: 4162 });
+    // 進み具合の書き換えは 500ms に 1 回まで
+    await vi.advanceTimersByTimeAsync(500);
     expect(toastText()).toContain('Excel のアイコンを取り込んでいます… 1,234 / 4,162');
     expect(document.querySelector('.toast-action')?.textContent).toBe('中止');
 
@@ -223,4 +226,61 @@ describe('起動時と取り込みの流れ', () => {
 
     expect(toastText()).toContain('変換できませんでした');
   });
+
+  it('前の起動で失敗した（failed）なら、中止と同じく自動では始めない', async () => {
+    const m = await load();
+    invoke.mockResolvedValue(status({ state: 'failed', message: '起動できない' }));
+    await m.initMsoIcons(true, 10);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(invoke).not.toHaveBeenCalledWith('icons.prefetchStart', expect.anything());
+    // 起動時に前の失敗をエラーとして出し直さない
+    expect(toastText()).toEqual([]);
+  });
+
+  it('取り込み直しを中止したら、前の記録が残って done でも「取り込みました」と出さない', async () => {
+    const m = await load();
+    invoke.mockImplementation((type: string) => {
+      if (type === 'icons.prefetchCancel') return Promise.resolve(status({ state: 'done', cached: 2000, cancelled: true }));
+      return Promise.resolve(status({ state: 'done', cached: 2000, cancelled: true }));
+    });
+    await m.loadPrefetchStatus();
+    emit({ event: 'iconPrefetch', state: 'running', done: 50, total: 100 });
+    document.querySelector<HTMLButtonElement>('.toast-action')!.click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(toastText()).toContain('アイコンの取り込みを中止しました。設定の「アイコン」からいつでも取り込めます。');
+    expect(toastText().some((x) => x.startsWith('Excel のアイコンを取り込みました'))).toBe(false);
+  });
+
+  it('ホストが中止を知らせたら（ほかの画面から中止したなど）、中止として通知する', async () => {
+    const m = await load();
+    invoke.mockResolvedValue(status({ state: 'done', cached: 2000 }));
+    await m.loadPrefetchStatus();
+    emit({ event: 'iconPrefetch', state: 'running', done: 50, total: 100 });
+    emit({ event: 'iconPrefetch', state: 'done', done: 50, total: 100, cached: 2000, cancelled: true });
+
+    expect(toastText()).toContain('アイコンの取り込みを中止しました。設定の「アイコン」からいつでも取り込めます。');
+    expect(toastText().some((x) => x.startsWith('Excel のアイコンを取り込みました'))).toBe(false);
+  });
+
+  it('進み具合の通知は 500ms に 1 回までにし、「中止」のボタンは作り直さない', async () => {
+    const m = await load();
+    invoke.mockResolvedValue(status({ state: 'none' }));
+    await m.loadPrefetchStatus();
+    emit({ event: 'iconPrefetch', state: 'running', done: 50, total: 1000 });
+    const button = document.querySelector<HTMLButtonElement>('.toast-action')!;
+    const message = document.querySelector('.toast-message')!;
+
+    emit({ event: 'iconPrefetch', state: 'running', done: 100, total: 1000 });
+    emit({ event: 'iconPrefetch', state: 'running', done: 150, total: 1000 });
+    // 間引いている間は書き換えない
+    expect(toastText()).toEqual(['Excel のアイコンを取り込んでいます… 50 / 1,000']);
+
+    await vi.advanceTimersByTimeAsync(500);
+    // 最後の状態だけを出す。ボタンと文言の要素はそのまま（押している途中に入れ替わらない）
+    expect(toastText()).toEqual(['Excel のアイコンを取り込んでいます… 150 / 1,000']);
+    expect(document.querySelector('.toast-action')).toBe(button);
+    expect(document.querySelector('.toast-message')).toBe(message);
+  });
 });
+

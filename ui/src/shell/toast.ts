@@ -44,6 +44,9 @@ interface Entry {
   startedAt: number;
   paused: boolean;
   close: () => void;
+  /** 文言の要素。update で文言だけを差し替えるために持つ。 */
+  messageEl?: HTMLElement;
+  actionEl?: HTMLButtonElement;
 }
 
 const entries: Entry[] = [];
@@ -90,12 +93,30 @@ function render(entry: Entry): void {
   // エラーはすぐに読み上げる。それ以外は控えめに
   entry.el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   entry.el.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  entry.messageEl = h('span', { class: 'toast-message' }, message);
+  // 押したときの処理は、その時点の opts から引く（update で文言だけ差し替えたときも、新しい処理が走るように）
+  entry.actionEl = action
+    ? h('button', { type: 'button', class: 'toast-action', onclick: () => { const run = entry.opts.action?.run; entry.close(); run?.(); } }, action.label) as HTMLButtonElement
+    : undefined;
   entry.el.replaceChildren(
     h('span', { class: 'toast-icon' }, svg(ICONS[kind])),
-    h('span', { class: 'toast-message' }, message),
-    ...(action ? [h('button', { type: 'button', class: 'toast-action', onclick: () => { entry.close(); action.run(); } }, action.label)] : []),
+    entry.messageEl,
+    ...(entry.actionEl ? [entry.actionEl] : []),
     h('button', { type: 'button', class: 'icon-button toast-close', title: t('通知を閉じる'), 'aria-label': t('通知を閉じる'), onclick: () => entry.close() }, svg(uiIcons.close)),
   );
+}
+
+/**
+ * 種類とボタンの有無が同じなら、文言（とボタンの文字）だけを差し替える。
+ * 進み具合のように何度も update される通知でボタンを作り直すと、押している最中（mousedown と mouseup の間）に
+ * ボタンが入れ替わってクリックにならず、フォーカスも失われ、読み上げも毎回やり直しになるため。
+ */
+function patch(entry: Entry, prev: Entry['opts']): boolean {
+  const next = entry.opts;
+  if (prev.kind !== next.kind || !prev.action !== !next.action || !entry.messageEl) return false;
+  if (entry.messageEl.textContent !== next.message) entry.messageEl.textContent = next.message;
+  if (next.action && entry.actionEl && entry.actionEl.textContent !== next.action.label) entry.actionEl.textContent = next.action.label;
+  return true;
 }
 
 /** 通知を出す。 */
@@ -156,9 +177,10 @@ function updateEntry(entry: Entry, opts: ToastOptions): void {
     return;
   }
   const kind = opts.kind ?? 'info';
+  const prev = entry.opts;
   entry.opts = { ...opts, kind };
   entry.remaining = opts.timeout ?? DEFAULT_TIMEOUT[kind];
-  render(entry);
+  if (!patch(entry, prev)) render(entry);
   schedule(entry);
 }
 

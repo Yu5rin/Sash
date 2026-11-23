@@ -21,6 +21,16 @@ public sealed record ImageMsoManifest(
     int Requested,
     DateTimeOffset CompletedAt);
 
+/// <summary>
+/// 取り込みに失敗したときの記録（キャッシュのフォルダの prefetch-failed.json）。
+/// 失敗をメモリにだけ持つと、起動のたびに見えない Excel を起動して同じ理由で失敗し、エラーを出し続けるので、
+/// 同じ版の Excel では自動で取り込みを始めないよう、ファイルに残す。
+/// </summary>
+/// <param name="ExcelVersion">失敗したときの Excel の版（<see cref="ImageMsoCache.NormalizeExcelVersion"/> の形）。分からなければ null。</param>
+/// <param name="FailedAt">失敗した日時。</param>
+/// <param name="Message">利用者に見せた理由。</param>
+public sealed record ImageMsoFailureRecord(string? ExcelVersion, DateTimeOffset FailedAt, string? Message);
+
 /// <summary>キャッシュを引いた結果。Found は見つかった画像（存在しない名前は null）、Misses はキャッシュにない名前。</summary>
 public sealed record ImageMsoLookup(Dictionary<string, byte[]?> Found, IReadOnlyList<string> Misses);
 
@@ -38,6 +48,10 @@ public sealed class ImageMsoCache
 
     private const string MissingFile = "missing.json";
     private const string ManifestFile = "manifest.json";
+    private const string FailureFile = "prefetch-failed.json";
+
+    /// <summary>PNG の先頭 8 バイト。</summary>
+    private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -75,6 +89,51 @@ public sealed class ImageMsoCache
         return !name.EndsWith('.') && !name.EndsWith(' ');
     }
 
+    /// <summary>
+    /// Excel の版を「メジャー.マイナー.ビルド」にそろえる（例：16.0.19029.20000 → 16.0.19029）。
+    /// 取り込んだ Excel から読む版（Application.Version と Build）と、Excel を起動せずに EXCEL.EXE から読む版とで
+    /// 形が違っても、同じ Excel を「更新された」と取り違えないようにするため。数字が読めなければ空白を除いた元の文字列。
+    /// </summary>
+    public static string? NormalizeExcelVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return null;
+        }
+
+        var parts = version.Trim().Split('.');
+        var numbers = new List<int>(3);
+        foreach (var part in parts)
+        {
+            if (numbers.Count == 3)
+            {
+                break;
+            }
+
+            if (!int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
+            {
+                return version.Trim();
+            }
+
+            numbers.Add(n);
+        }
+
+        while (numbers.Count < 3)
+        {
+            numbers.Add(0);
+        }
+
+        return string.Join('.', numbers.Select(n => n.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>2 つの Excel の版が同じか（<see cref="NormalizeExcelVersion"/> でそろえて比べる）。どちらかが不明なら false。</summary>
+    public static bool SameExcelVersion(string? a, string? b)
+    {
+        var x = NormalizeExcelVersion(a);
+        var y = NormalizeExcelVersion(b);
+        return x is not null && y is not null && string.Equals(x, y, StringComparison.Ordinal);
+    }
+
     public string SizeDirectory(int size) => Path.Combine(Root, size.ToString(CultureInfo.InvariantCulture));
 
     private string ImagePath(string name, int size) => Path.Combine(SizeDirectory(size), name + ".png");
@@ -98,7 +157,7 @@ public sealed class ImageMsoCache
                     continue;
                 }
 
-                var png = TryRead(ImagePath(name, size));
+                var png = TryRead(ImagePath(name, size), size);
                 if (png is not null)
                 {
                     found[name] = png;
@@ -122,7 +181,7 @@ public sealed class ImageMsoCache
     {
         lock (_lock)
         {
-            return MissingSet(size).Contains(name) || File.Exists(ImagePath(name, size));
+            return MissingSet(size).Contains(name) || HasValidImage(ImagePath(name, size), size);
         }
     }
 
@@ -288,6 +347,56 @@ public sealed class ImageMsoCache
         }
     }
 
+    /// <summary>取り込みに失敗した記録を読む。なければ null。</summary>
+    public ImageMsoFailureRecord? ReadFailure()
+    {
+        lock (_lock)
+        {
+            try
+            {
+                var path = Path.Combine(Root, FailureFile);
+                return File.Exists(path) ? JsonSerializer.Deserialize<ImageMsoFailureRecord>(File.ReadAllText(path), Json) : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+            {
+                // 壊れた記録は「失敗していない」とみなす。最悪でも、次の起動で取り込みをもう一度試すだけ
+                return null;
+            }
+        }
+    }
+
+    public void WriteFailure(ImageMsoFailureRecord record)
+    {
+        lock (_lock)
+        {
+            try
+            {
+                Directory.CreateDirectory(Root);
+                var path = Path.Combine(Root, FailureFile);
+                File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(record, Json));
+                File.Move(path + ".tmp", path, overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>失敗の記録を消す（取り込みに成功したとき）。</summary>
+    public void ClearFailure()
+    {
+        lock (_lock)
+        {
+            try
+            {
+                File.Delete(Path.Combine(Root, FailureFile));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private HashSet<string> MissingSet(int size)
     {
         if (_missing.TryGetValue(size, out var set))
@@ -334,16 +443,82 @@ public sealed class ImageMsoCache
         }
     }
 
-    private static byte[]? TryRead(string path)
+    /// <summary>
+    /// 画像を読む。0 バイトや PNG でないファイル（書き込みの途中で電源が落ちた、ほかのソフトが壊したなど）は
+    /// キャッシュにないものとして扱い、消して取り直させる。残しておくと「取り込み済み」とみなされて、二度と取り直されないため。
+    /// ロックの中で呼ぶ。
+    /// </summary>
+    private byte[]? TryRead(string path, int size)
     {
         try
         {
-            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var bytes = File.ReadAllBytes(path);
+            if (IsPng(bytes))
+            {
+                return bytes;
+            }
+
+            DeleteBad(path, size);
+            return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 読めなければキャッシュにないものとして扱い、Excel から取り直させる
             return null;
+        }
+    }
+
+    /// <summary>使える画像のファイルがあるか（先頭の 8 バイトだけ読む）。壊れていれば消す。ロックの中で呼ぶ。</summary>
+    private bool HasValidImage(string path, int size)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            Span<byte> head = stackalloc byte[8];
+            int read;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                read = stream.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
+            }
+
+            if (read == head.Length && head.SequenceEqual(PngSignature))
+            {
+                return true;
+            }
+
+            DeleteBad(path, size);
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPng(ReadOnlySpan<byte> bytes) => bytes.Length > PngSignature.Length && bytes[..PngSignature.Length].SequenceEqual(PngSignature);
+
+    private void DeleteBad(string path, int size)
+    {
+        try
+        {
+            File.Delete(path);
+            if (_imageCounts.TryGetValue(size, out var n))
+            {
+                _imageCounts[size] = Math.Max(0, n - 1);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 消せなくても、キャッシュにないものとして扱うことに変わりはない
         }
     }
 

@@ -178,6 +178,110 @@ public class BmpDecoderTests
     }
 }
 
+public class BmpDecoderFuzzTests
+{
+    /// <summary>壊れた入力では FormatException だけが出ること（範囲外の読み取りなどで別の例外を出さない）。</summary>
+    private static void OnlyFormatOrOk(byte[] data)
+    {
+        try
+        {
+            BmpDecoder.Decode(data);
+        }
+        catch (FormatException)
+        {
+        }
+    }
+
+    [Theory]
+    [InlineData(0x7FFFFFFF)]
+    [InlineData(0x7FFFFFF0)]
+    [InlineData(0x7FFFFFF3)]
+    [InlineData(int.MinValue)]
+    [InlineData(-1)]
+    [InlineData(41)]
+    [InlineData(52)]
+    [InlineData(124)]
+    public void ヘッダーの大きさが壊れていてもFormatExceptionになる(int headerSize)
+    {
+        var bmp = BmpDecoderTests.Bmp(2, 2, 32, (x, y) => [1, 2, 3, 4], compression: 3, masks: [0xFF0000, 0xFF00, 0xFF]);
+        BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(14), headerSize);
+        OnlyFormatOrOk(bmp);
+
+        var dib = BmpDecoderTests.Bmp(2, 2, 32, (x, y) => [1, 2, 3, 4], fileHeader: false);
+        BinaryPrimitives.WriteInt32LittleEndian(dib, headerSize);
+        OnlyFormatOrOk(dib);
+    }
+
+    [Fact]
+    public void ヘッダーの大きさが0x7FFFFFFF近くならFormatException()
+    {
+        var bmp = BmpDecoderTests.Bmp(2, 2, 24, (x, y) => [1, 2, 3]);
+        BinaryPrimitives.WriteInt32LittleEndian(bmp.AsSpan(14), 0x7FFFFFFF);
+
+        Assert.Throws<FormatException>(() => BmpDecoder.Decode(bmp));
+    }
+
+    [Fact]
+    public void でたらめなバイト列はFormatExceptionだけを出す()
+    {
+        var random = new Random(12345);
+        for (var i = 0; i < 3000; i++)
+        {
+            var data = new byte[random.Next(0, 200)];
+            random.NextBytes(data);
+            if (data.Length >= 2 && random.Next(2) == 0)
+            {
+                data[0] = (byte)'B';
+                data[1] = (byte)'M';
+            }
+
+            OnlyFormatOrOk(data);
+        }
+    }
+
+    [Fact]
+    public void 正しいBMPのヘッダーの一部を壊してもFormatExceptionだけを出す()
+    {
+        var random = new Random(678);
+        var samples = new[]
+        {
+            BmpDecoderTests.Bmp(3, 2, 24, (x, y) => [1, 2, 3]),
+            BmpDecoderTests.Bmp(2, 2, 32, (x, y) => [1, 2, 3, 4], compression: 3, masks: [0xFF0000, 0xFF00, 0xFF]),
+            BmpDecoderTests.Bmp(4, 2, 8, (x, y) => [(byte)x], palette: new byte[16]),
+            BmpDecoderTests.Bmp(5, 3, 1, (x, y) => [(byte)(x & 1)], palette: new byte[8], fileHeader: false),
+        };
+        foreach (var sample in samples)
+        {
+            for (var i = 0; i < 2000; i++)
+            {
+                var data = (byte[])sample.Clone();
+                var edits = random.Next(1, 4);
+                for (var e = 0; e < edits; e++)
+                {
+                    // ヘッダーの範囲（先頭 60 バイト）を中心に壊す。32 ビットの値ごと極端な値にすることもある
+                    var at = random.Next(0, Math.Min(60, data.Length - 4));
+                    if (random.Next(3) == 0)
+                    {
+                        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(at), random.Next(4) switch { 0 => int.MaxValue, 1 => int.MinValue, 2 => -1, _ => random.Next() });
+                    }
+                    else
+                    {
+                        data[at] = (byte)random.Next(256);
+                    }
+                }
+
+                // 末尾を切ることもある
+                if (random.Next(4) == 0)
+                {
+                    data = data[..random.Next(0, data.Length)];
+                }
+
+                OnlyFormatOrOk(data);
+            }
+        }
+    }
+}
+
 public class BgraAlphaTests
 {
     [Fact]

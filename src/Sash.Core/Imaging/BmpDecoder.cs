@@ -38,6 +38,20 @@ public static class BmpDecoder
     /// <summary>BMP を読む。読めない形式・壊れたデータは <see cref="FormatException"/>。</summary>
     public static BmpImage Decode(ReadOnlySpan<byte> data)
     {
+        try
+        {
+            return DecodeCore(data);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IndexOutOfRangeException or OverflowException)
+        {
+            // 長さの確認は DecodeCore で済ませているが、見落としがあっても呼び出し側には FormatException だけを返す
+            // （取り込みでは 1 件の壊れた画像で、まとまり全体を失敗させないため）
+            throw new FormatException($"BMP を読めませんでした（{ex.GetType().Name}）。", ex);
+        }
+    }
+
+    private static BmpImage DecodeCore(ReadOnlySpan<byte> data)
+    {
         // OLE のピクチャを IPersistStream.Save で書くと、先頭に "lt\0\0" とデータの長さ（4 バイト）が付く
         if (data.Length >= 8 && data[0] == (byte)'l' && data[1] == (byte)'t' && data[2] == 0 && data[3] == 0)
         {
@@ -62,14 +76,14 @@ public static class BmpDecoder
             dibStart = 0;
         }
 
-        Require(data, dibStart + 4);
+        Require(data, (long)dibStart + 4);
         var headerSize = BinaryPrimitives.ReadInt32LittleEndian(data[dibStart..]);
         if (headerSize != 12 && headerSize < 40)
         {
             throw new FormatException($"BMP のヘッダーの大きさが不正です（{headerSize}）。");
         }
 
-        Require(data, dibStart + headerSize);
+        Require(data, (long)dibStart + headerSize);
         var h = data[dibStart..];
         int width, height, bitCount, compression = BiRgb, clrUsed = 0;
         if (headerSize == 12)
@@ -130,7 +144,7 @@ public static class BmpDecoder
             else
             {
                 var maskCount = compression == BiAlphaBitfields ? 4 : 3;
-                Require(data, afterHeader + maskCount * 4);
+                Require(data, (long)afterHeader + maskCount * 4);
                 rMask = BinaryPrimitives.ReadUInt32LittleEndian(data[afterHeader..]);
                 gMask = BinaryPrimitives.ReadUInt32LittleEndian(data[(afterHeader + 4)..]);
                 bMask = BinaryPrimitives.ReadUInt32LittleEndian(data[(afterHeader + 8)..]);
@@ -152,7 +166,7 @@ public static class BmpDecoder
         if (bitCount <= 8)
         {
             var count = clrUsed is > 0 and <= 256 ? clrUsed : 1 << bitCount;
-            Require(data, afterHeader + count * entrySize);
+            Require(data, (long)afterHeader + (long)count * entrySize);
             palette = new byte[256 * 4];
             for (var i = 0; i < count; i++)
             {
@@ -233,7 +247,11 @@ public static class BmpDecoder
         return PngEncoder.EncodeBgra(image.Bgra, image.Width, image.Height);
     }
 
-    private static void Require(ReadOnlySpan<byte> data, int length)
+    /// <summary>
+    /// 長さが足りるか確かめる。long で受けるのは、壊れたヘッダー（大きさが 0x7FFFFFFF 近く）を足したときに
+    /// int があふれて負になり、確認をすり抜けて範囲外を読みにいかないようにするため。
+    /// </summary>
+    private static void Require(ReadOnlySpan<byte> data, long length)
     {
         if (data.Length < length)
         {
@@ -260,6 +278,8 @@ public static class BmpDecoder
         var shift = System.Numerics.BitOperations.TrailingZeroCount(mask);
         var max = mask >> shift;
         var v = (value & mask) >> shift;
-        return max == 255 ? (byte)v : (byte)((v * 255 + max / 2) / max);
+
+        // マスクが 32 ビットいっぱいなど壊れていても、掛け算があふれないよう 64 ビットで計算する
+        return max == 255 ? (byte)v : (byte)(((ulong)v * 255 + max / 2) / max);
     }
 }

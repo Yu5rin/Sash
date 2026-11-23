@@ -76,6 +76,16 @@ describe('検索', () => {
   const sample = [icon('save'), icon('save_arrow_right'), icon('document_save'), icon('arrow_sync'), icon('arrow_clockwise'), icon('folder'), icon('folder_open'), icon('table'), icon('table_add', 'M0 0z', 0), icon('upload')];
   const names = (q: string, variant?: 'regular' | 'filled') => searchIcons(sample, q, variant).map((i) => i.name);
 
+  it('Object.prototype にある名前（constructor・__proto__・toString など）でも落ちない', () => {
+    for (const q of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf', 'constructor save', '__proto__ 保存']) {
+      expect(() => names(q)).not.toThrow();
+      expect(() => searchIcons(all, q)).not.toThrow();
+    }
+    expect(names('constructor')).toEqual([]);
+    expect(names('tostring')).toEqual([]);
+    expect(jaToEnglish('constructor')).toEqual([]);
+  });
+
   it('空の検索は名前順の全件', () => {
     expect(names('')).toEqual([...sample.map((i) => i.name)].sort());
   });
