@@ -193,6 +193,8 @@ publish/
 # Note: Comment the next line if you want to checkin your web deploy settings,
 # but database connection strings (with potential passwords) will be unencrypted
 *.pubxml
+# 例外: リリースで使う発行プロファイルだけは管理に入れる（CI が -p:PublishProfile=win-x64 で参照する。接続文字列などは含まない）
+!src/Sash.App/Properties/PublishProfiles/win-x64.pubxml
 *.publishproj
 
 # Microsoft Azure Web App publish settings. Comment the next line if you want to
