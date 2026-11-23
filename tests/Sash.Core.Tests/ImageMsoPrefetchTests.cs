@@ -288,6 +288,12 @@ public class ImageMsoPrefetchTests
         Assert.Equal(0, cache.ReadFailure()!.Method);
         Assert.Equal("none", new ImageMsoPrefetch(new ImageMsoCache(dir.Path), null, () => "16.0.19029").GetStatus().State);
 
+        // 2 は Sash から（別のプロセスから）GetImageMso を呼んでいたころの記録。Excel の中で取り出す 3 では当てはめない
+        Assert.Equal(3, ImageMsoFailureRecord.CurrentMethod);
+        cache.WriteFailure(new ImageMsoFailureRecord("16.0.19029", DateTimeOffset.Now, "打ち切り", 2));
+        Assert.Equal(2, new ImageMsoCache(dir.Path).ReadFailure()!.Method);
+        Assert.Equal("none", new ImageMsoPrefetch(new ImageMsoCache(dir.Path), null, () => "16.0.19029").GetStatus().State);
+
         // いまの取り出し方で失敗した記録なら、同じ版では自動で始めない
         cache.WriteFailure(new ImageMsoFailureRecord("16.0.19029", DateTimeOffset.Now, "打ち切り", ImageMsoFailureRecord.CurrentMethod));
         Assert.Equal("failed", new ImageMsoPrefetch(new ImageMsoCache(dir.Path), null, () => "16.0.19029").GetStatus().State);

@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Sash.Core;
 using Sash.Core.Excel;
-using Sash.Core.Imaging;
 using static Sash.Core.Localization.Text;
 
 namespace Sash.Excel;
@@ -89,26 +88,48 @@ public sealed class ExcelService : IDisposable
     /// <summary>imageMso の一括の取り込みのために Sash が起動した、見えない Excel。取り込みが終わったら閉じる。</summary>
     private dynamic? _bulkApp;
 
-    /// <summary>取り込み用の Excel に開いた作業用のブック。ブックが 1 つもないと GetImageMso が E_UNEXPECTED を返すため。</summary>
+    /// <summary>取り込み用の Excel に開いた作業用のブック。imageMso を取り出す VBA モジュールを入れる先（保存せずに閉じる）。</summary>
     private object? _bulkScratch;
 
-    /// <summary>取り込み専用の Excel で取れず、利用者が開いている Excel を借りているか（借りた Excel は終わらせない）。</summary>
-    private bool _bulkBorrowed;
+    /// <summary>作業用のブックに入れた VBA モジュール（VBComponent）。片付けで取り除く。</summary>
+    private object? _bulkModule;
 
-    /// <summary>HBITMAP を直接読む方法が使えるか（1 = 使える、-1 = 使えない、0 = まだ分からない）。COM スレッドだけが触る。</summary>
-    private int _handlePath;
+    /// <summary>Application.Run に渡す名前（'ブック名'!モジュール.関数）。</summary>
+    private string? _bulkMacro;
+
+    /// <summary>VBA と受け渡しする一時フォルダ（%TEMP%\Sash\imagemso\&lt;guid&gt;）。片付けで消す。</summary>
+    private string? _bulkTempDir;
+
+    /// <summary>一時フォルダの中の、まとまりごとのフォルダの番号。</summary>
+    private int _bulkBatch;
+
+    /// <summary>今回の取り込みで取り込み専用の Excel を起動し直した回数。</summary>
+    private int _bulkRestarts;
+
+    /// <summary>今回の取り込みの集計（ログに残すため）。</summary>
+    private BulkStats _bulkStats;
+
+    /// <summary>
+    /// Sash が起動した取り込み専用の Excel のプロセスの番号（分からなければ 0）と起動した時刻。
+    /// 応答しなくなったときに、このプロセスだけを終わらせるために覚える。タイマーや UI のスレッドからも読む。
+    /// </summary>
+    private int _bulkPid;
+
+    private long _bulkPidStartTicks;
+
+    /// <summary>取り込み専用の Excel の準備の最中なら 1（準備が終わらないときのタイマーが見る）。</summary>
+    private int _bulkStarting;
+
+    /// <summary>準備が時間切れになり、プロセスを終わらせたなら 1。</summary>
+    private int _startTimedOut;
 
     /// <summary>終了処理に入ったか。片付けた後に、取り込みの続きが Excel を起動し直さないようにする。</summary>
     private volatile bool _disposing;
 
-    /// <summary>
-    /// 一括の取り込みの最中か（BeginAsync から EndAsync まで）。その間の表示のための要求はキャッシュだけで答える。
-    /// 要求のたびに見えない Excel を起動・終了すると、取り込みと COM のスレッドを取り合って両方が遅くなるため。
-    /// </summary>
-    private volatile bool _bulkActive;
-
     /// <summary>マクロを実行中なら 1（<see cref="RunMacroAsync"/>）。ほかの Excel 連携をすぐに断るために、COM のスレッドの外から読む。</summary>
     private int _macroRunning;
+
+    private readonly record struct BulkStats(int Found, int Missing, int Failed);
 
     public ExcelService(ImageMsoCache iconCache)
     {
@@ -1028,46 +1049,6 @@ public sealed class ExcelService : IDisposable
         ReleaseOwnedApp(app);
     }
 
-    /// <summary>一括の取り込みのために起動した Excel を片付ける（扱いは <see cref="ReleaseHelperIfIdle"/> と同じ）。COM スレッドで呼ぶ。</summary>
-    private void ReleaseBulkApp()
-    {
-        var app = _bulkApp;
-        _bulkApp = null;
-        CloseBulkScratch();
-        if (_bulkBorrowed)
-        {
-            // 利用者の Excel は借りただけなので、終わらせたり表示を変えたりしない
-            _bulkBorrowed = false;
-            return;
-        }
-
-        ReleaseOwnedApp(app);
-    }
-
-    /// <summary>作業用のブックを保存せずに閉じる。</summary>
-    private void CloseBulkScratch()
-    {
-        var wb = _bulkScratch;
-        _bulkScratch = null;
-        if (wb is null)
-        {
-            return;
-        }
-
-        try
-        {
-            ((dynamic)wb).Close(false);
-        }
-        catch (Exception ex) when (IsComFailure(ex))
-        {
-            // Excel が先に終わっていたなど。閉じられなくても取り込みには関係しない
-        }
-        finally
-        {
-            Release(wb);
-        }
-    }
-
     private static void ReleaseOwnedApp(object? owned)
     {
         if (owned is null)
@@ -1105,204 +1086,247 @@ public sealed class ExcelService : IDisposable
     }
 
     /// <summary>
-    /// imageMso を PNG で返す（仕様書 §17.7）。キャッシュにあればそれを返し、Excel には触れない（取り込み済みなら Excel を起動しない）。
-    /// 存在しない名前は null。Excel が忙しい・画像にできないなど一時的に取れなかった名前は結果に含めない
-    /// （null にすると UI が「存在しない名前」と判定してしまうため）。キャッシュの読み込みは COM のスレッドの外で行い、
-    /// 一括の取り込みの最中でもすぐ返せるようにする。
+    /// imageMso を PNG で返す（仕様書 §17.7）。**キャッシュだけを引き、Excel には触れない。**
+    /// 存在しない名前（キャッシュに「存在しない」と記録済み）は null、キャッシュにない名前は結果に含めない
+    /// （null にすると UI が「存在しない名前」と判定してしまうため。UI は 60 秒後に取り直す）。
+    /// 以前はキャッシュにない名前を起動中の Excel から 1 件ずつ取っていたが、実機では Sash（別のプロセス）から呼んだ
+    /// GetImageMso は E_UNEXPECTED を返し、画像は取れなかった。Excel の中で取り出せるのは一括の取り込み
+    /// （<see cref="CreateBulkSource"/>）だけなので、足りない名前は UI が出す取り込みの状態（「アイコンを取り込む」）から取り込んでもらう。
     /// </summary>
     public async Task<Dictionary<string, byte[]?>> GetImageMsoAsync(IReadOnlyList<string> names, int size)
     {
         var lookup = await Task.Run(() => _iconCache.Lookup(names ?? [], size)).ConfigureAwait(false);
-
-        // 一括の取り込みの最中はキャッシュだけで答える。足りない名前は結果に含めず、取り込みが終わったら UI が取り直す
-        // マクロの実行中も、COM のスレッドがふさがっているのでキャッシュだけで答える（並べると、マクロが終わるまで返せないため）
-        if (lookup.Misses.Count == 0 || _bulkActive || IsMacroRunning)
+        if (lookup.Misses.Count > 0)
         {
-            return lookup.Found;
-        }
-
-        var fetched = await _com.InvokeAsync(() => FetchOnDemand(lookup.Misses, size)).ConfigureAwait(false);
-        foreach (var (name, png) in fetched)
-        {
-            lookup.Found[name] = png;
+            _onceLog.Write("ondemand:cacheonly", $"imageMso: キャッシュにない名前は 1 件ずつは取らない（一括の取り込みで取る。例：{lookup.Misses[0]}）");
         }
 
         return lookup.Found;
     }
 
-    /// <summary>キャッシュになかった名前を、起動中の Excel（なければ見えない Excel）から取る。COM スレッドで呼ぶ。</summary>
-    private Dictionary<string, byte[]?> FetchOnDemand(IReadOnlyList<string> names, int size)
-    {
-        var result = new Dictionary<string, byte[]?>(StringComparer.Ordinal);
-
-        // 待っている間に一括の取り込みが始まっていたら、Excel を起動せずに返す（理由は GetImageMsoAsync と同じ）
-        if (_bulkActive || _disposing)
-        {
-            return result;
-        }
-
-        dynamic? bars = null;
-        try
-        {
-            foreach (var name in names)
-            {
-                if (bars is null)
-                {
-                    try
-                    {
-                        bars = HelperApp().CommandBars;
-                    }
-                    catch (Exception ex) when (IsComFailure(ex) || ex is TypeLoadException or ObjectDisposedException)
-                    {
-                        // Excel を起動できない。残りの名前は結果に含めない
-                        _onceLog.Write($"helper:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: Excel に接続できなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-                        break;
-                    }
-                }
-
-                var r = ExtractOne(bars, name, size);
-                switch (r.Kind)
-                {
-                    case ImageMsoFetchKind.Found:
-                        result[name] = r.Png;
-                        _iconCache.Store(name, size, r.Png!);
-                        break;
-                    case ImageMsoFetchKind.Missing:
-                        result[name] = null;
-                        _iconCache.MarkMissing(name, size);
-                        break;
-                    default:
-                        // 名前がないわけではない。結果に含めず、次の機会に取り直させる
-                        break;
-                }
-            }
-        }
-        finally
-        {
-            ReleaseHelperIfIdle();
-        }
-
-        return result;
-    }
-
     /// <summary>
     /// 一括の取り込み（<see cref="ImageMsoPrefetch"/>）で使う取り出し口。利用者が使っている Excel を何千回も呼んで
-    /// 重くしないよう、取り込み専用の見えない Excel を起動し、終わったら閉じる。
+    /// 重くしないよう、取り込み専用の見えない Excel を起動し、作業用のブックに一時的な VBA モジュールを入れて
+    /// Excel の中で取り出させ、終わったら閉じる。
     /// </summary>
     public IImageMsoBatchSource CreateBulkSource() => new BulkSource(this);
 
     private sealed class BulkSource(ExcelService owner) : IImageMsoBatchSource
     {
-        public Task<string?> BeginAsync(CancellationToken cancellationToken)
+        public Task<string?> BeginAsync(CancellationToken cancellationToken) => owner._com.InvokeAsync(() =>
         {
-            // COM のスレッドに積む前に立てる。後から積まれる表示の要求が、Excel を起動しにいかないように
-            owner._bulkActive = true;
-            return owner._com.InvokeAsync(owner.StartBulkApp);
-        }
+            // 起動し直しの回数は取り込みごとに数える（取り込みのたびに 1 回までやり直せる）
+            owner._bulkRestarts = 0;
+            owner._bulkStats = default;
+            return owner.StartBulkApp();
+        });
 
         public Task<IReadOnlyList<ImageMsoFetchResult>> FetchAsync(IReadOnlyList<string> names, int size, CancellationToken cancellationToken) =>
             owner._com.InvokeAsync(() => owner.FetchBulk(names, size, cancellationToken));
 
         public async Task EndAsync()
         {
-            try
+            var end = owner._com.InvokeAsync(() =>
             {
-                await owner._com.InvokeAsync(() =>
-                {
-                    owner.ReleaseBulkApp();
-                    return true;
-                }).ConfigureAwait(false);
-            }
-            finally
+                var s = owner._bulkStats;
+                owner.Log?.Invoke($"imageMso: 取り込み専用の Excel での取り出しの集計：画像 {s.Found} 件、存在しない名前 {s.Missing} 件、取り出せなかった {s.Failed} 件、起動し直し {owner._bulkRestarts} 回");
+                owner.ReleaseBulkApp(force: false);
+                return true;
+            });
+
+            // COM のスレッドが Excel の応答を待ったまま戻らないと、取り込みが「実行中」のまま終わらなくなる。
+            // 待つのは一定の時間までにし、それでも終わらなければ Sash が起動した Excel だけを終わらせる
+            if (await Task.WhenAny(end, Task.Delay(EndLimit)).ConfigureAwait(false) != end)
             {
-                owner._bulkActive = false;
+                owner.Log?.Invoke($"imageMso: 取り込み専用の Excel の片付けが {EndLimit.TotalSeconds:0} 秒で終わらないため、Sash が起動したその Excel を終わらせる");
+                owner.KillBulkProcess();
+                return;
             }
+
+            await end.ConfigureAwait(false);
         }
     }
 
-    /// <summary>取り込み専用の見えない Excel を起動し、版（Version と Build。例：16.0.19029）を返す。COM スレッドで呼ぶ。</summary>
+    /// <summary>取り込み専用の Excel の準備（起動・作業用のブック・モジュール・試しの取り出し）にかけてよい時間。</summary>
+    private static readonly TimeSpan StartLimit = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 準備の途中で 1 つの呼び出しが戻らないときに、Sash が起動した Excel を終わらせるまでの時間。
+    /// メッセージ フィルターは断られた呼び出しを 10 秒までやり直すので、それより長く、<see cref="StartLimit"/> より少し長くする。
+    /// </summary>
+    private static readonly TimeSpan StartWatchdog = TimeSpan.FromSeconds(40);
+
+    /// <summary>片付けを待つ時間。</summary>
+    private static readonly TimeSpan EndLimit = TimeSpan.FromSeconds(45);
+
+    /// <summary>1 回の取り込みで、取り込み専用の Excel を起動し直してよい回数（起動と失敗を繰り返し続けないため）。</summary>
+    private const int MaxBulkRestarts = 1;
+
+    private static string TrustRequiredMessage => L(
+        "Excel の「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにすると、組み込みアイコンを取り込めます（Excel の［ファイル］→［オプション］→［トラスト センター］→［トラスト センターの設定］→［マクロの設定］）。オンにしてから、設定の「アイコン」で取り込み直してください。",
+        "Turn on \"Trust access to the VBA project object model\" in Excel to import the built-in icons (File > Options > Trust Center > Trust Center Settings > Macro Settings). Then import again from Settings > Icons.");
+
+    /// <summary>
+    /// 取り込み専用の見えない Excel を起動し、作業用のブックと VBA モジュールを用意して、版（Version と Build。例：16.0.19029）を返す。
+    /// COM スレッドで呼ぶ。準備が <see cref="StartLimit"/> を超えたり、途中で 1 つの呼び出しが戻らなかったりしたら、
+    /// 起動した Excel を終わらせて（Quit できなければプロセスを終わらせて）失敗を返す。
+    /// </summary>
     private string? StartBulkApp()
     {
         ObjectDisposedException.ThrowIf(_disposing, this);
-        ReleaseBulkApp();
+        ReleaseBulkApp(force: false);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Volatile.Write(ref _startTimedOut, 0);
+        Volatile.Write(ref _bulkStarting, 1);
+
+        // 呼び出しが戻らない（Excel が見えないダイアログを出しているなど）と、この COM のスレッドは止まったままになる。
+        // 別のスレッドのタイマーで、Sash が起動した Excel のプロセスだけを終わらせると、待っている呼び出しが失敗して戻ってくる
+        using var watchdog = new Timer(_ => OnStartWatchdog(), null, StartWatchdog, Timeout.InfiniteTimeSpan);
+        try
+        {
+            return StartBulkAppCore(sw);
+        }
+        catch (Exception ex) when (ex is not ObjectDisposedException)
+        {
+            var timedOut = Volatile.Read(ref _startTimedOut) != 0 || sw.Elapsed > StartLimit;
+            Log?.Invoke($"imageMso: 取り込み専用の Excel の準備に失敗（{sw.Elapsed.TotalSeconds:0.0} 秒）: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+
+            // 時間切れなら Excel は応答しないので、Quit などを待たずにプロセスを終わらせる
+            ReleaseBulkApp(force: timedOut);
+            if (timedOut)
+            {
+                throw new UserFacingException(L(
+                    $"取り込み専用の Excel が {StartLimit.TotalSeconds:0} 秒たっても準備できなかったため、取り込みをやめました（Excel がメッセージを出しているか、起動に時間がかかっています）。",
+                    $"The Excel instance started for the import was not ready after {StartLimit.TotalSeconds:0} seconds, so the import was stopped (Excel may be showing a message or starting slowly)."), ex);
+            }
+
+            if (ex is UserFacingException)
+            {
+                throw;
+            }
+
+            throw new UserFacingException(L($"取り込み専用の Excel を準備できませんでした：{ex.Message}", $"Could not prepare Excel for the import: {ex.Message}"), ex);
+        }
+        finally
+        {
+            Volatile.Write(ref _bulkStarting, 0);
+        }
+    }
+
+    private string? StartBulkAppCore(System.Diagnostics.Stopwatch sw)
+    {
         var type = Type.GetTypeFromProgID("Excel.Application", throwOnError: true)!;
+
+        // 起動する前からある Excel のプロセス（利用者の Excel）。万一、取り違えても、これらは決して終わらせない
+        var before = ExcelProcessIds();
 
         // CreateObject と同じく、利用者の Excel とは別の Excel が起動する
         _bulkApp = Activator.CreateInstance(type)!;
         dynamic app = _bulkApp;
-        try
-        {
-            app.Visible = false;
-            app.DisplayAlerts = false;
-        }
-        catch (Exception ex) when (IsComFailure(ex))
-        {
-            // 起動した直後の設定で失敗したら、その Excel を終わらせてから失敗を返す（見えない Excel を残さない）
-            ReleaseBulkApp();
-            throw;
-        }
+        RememberBulkProcess(_bulkApp, before);
+        app.Visible = false;
+        app.DisplayAlerts = false;
 
         string? version = Safe(() => (string)app.Version);
         string? build = Safe(() => Convert.ToString((object)app.Build, System.Globalization.CultureInfo.InvariantCulture));
         var text = version is null ? null : build is null ? version : $"{version}.{build}";
-        Log?.Invoke($"imageMso の取り込みのため見えない Excel を起動（版 {text ?? "不明"}、{(Environment.Is64BitProcess ? "Sash は 64bit" : "Sash は 32bit")}）");
+        Log?.Invoke($"imageMso の取り込みのため見えない Excel を起動（版 {text ?? "不明"}、{(Environment.Is64BitProcess ? "Sash は 64bit" : "Sash は 32bit")}、プロセス {(_bulkPid == 0 ? "不明" : _bulkPid.ToString(System.Globalization.CultureInfo.InvariantCulture))}）");
+        CheckStartLimit(sw, "起動");
 
-        // 起動したてでブックが 1 つもない Excel は、GetImageMso に E_UNEXPECTED を返す（実機のログで確認）。
-        // 作業用のブックを見えないまま開き、取れるようになるまで少し待ってから取り込みを始める
-        try
-        {
-            _bulkScratch = app.Workbooks.Add();
-        }
-        catch (Exception ex) when (IsComFailure(ex))
-        {
-            Log?.Invoke($"imageMso: 作業用のブックを開けなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-        }
+        // VBA のモジュールを入れる先。見えないまま開き、終わったら保存せずに閉じる
+        _bulkScratch = app.Workbooks.Add();
+        CheckStartLimit(sw, "作業用のブック");
 
-        if (!WarmUp(app, "取り込み専用の Excel"))
-        {
-            // それでも取れなければ、利用者が開いている Excel を借りる（そちらはリボンの準備が済んでいるため）
-            var running = RunningExcel.Applications().FirstOrDefault();
-            if (running is not null && WarmUp(running, "開いている Excel"))
-            {
-                ReleaseBulkApp();
-                _bulkApp = running;
-                _bulkBorrowed = true;
-                Log?.Invoke("imageMso: 取り込み専用の Excel では取れないため、開いている Excel を借りて取り込む");
-            }
-        }
+        InjectBulkModule();
+        CheckStartLimit(sw, "VBA モジュール");
 
+        ProbeBulkModule(sw);
         return text;
     }
 
-    /// <summary>
-    /// 確実にある imageMso を何度か取り出してみて、GetImageMso が使えるようになったかを確かめる。
-    /// 起動直後の Excel はリボンの準備が終わるまで E_UNEXPECTED を返すことがあるため、最大で約 5 秒待つ。
-    /// </summary>
-    private bool WarmUp(dynamic app, string which)
+    private static void CheckStartLimit(System.Diagnostics.Stopwatch sw, string step)
     {
-        Exception? last = null;
-        for (var i = 0; i < 20; i++)
+        if (sw.Elapsed > StartLimit)
         {
-            try
-            {
-                object? pic = app.CommandBars.GetImageMso("FileSave", 32, 32);
-                if (pic is not null)
-                {
-                    Release(pic);
-                    Log?.Invoke($"imageMso: {which}で取り出せることを確かめた（{i + 1} 回目）");
-                    return true;
-                }
-            }
-            catch (Exception ex) when (IsComFailure(ex) || ex is ArgumentException)
-            {
-                last = ex;
-            }
+            throw new TimeoutException($"{step}の後で {sw.Elapsed.TotalSeconds:0.0} 秒");
+        }
+    }
 
-            Thread.Sleep(250);
+    /// <summary>準備が終わらないまま <see cref="StartWatchdog"/> がたったら、Sash が起動した Excel だけを終わらせる。タイマーのスレッドで呼ぶ。</summary>
+    private void OnStartWatchdog()
+    {
+        if (Volatile.Read(ref _bulkStarting) == 0)
+        {
+            return;
         }
 
-        Log?.Invoke($"imageMso: {which}では GetImageMso が使えなかった: {(last is null ? "画像が返らない" : $"{last.GetType().Name} 0x{last.HResult:X8} {last.Message}")}");
-        return false;
+        Volatile.Write(ref _startTimedOut, 1);
+        Log?.Invoke($"imageMso: 取り込み専用の Excel の準備が {StartWatchdog.TotalSeconds:0} 秒たっても終わらないため、Sash が起動したその Excel を終わらせる");
+        KillBulkProcess();
+    }
+
+    /// <summary>
+    /// 作業用のブックに VBA モジュールを入れ、Application.Run で呼ぶ名前を決める。
+    /// 「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」がオフなら、その設定を案内する失敗にする。
+    /// </summary>
+    private void InjectBulkModule()
+    {
+        dynamic wb = _bulkScratch!;
+        dynamic project;
+        try
+        {
+            project = wb.VBProject;
+            _ = project.VBComponents.Count;
+        }
+        catch (COMException ex) when (!IsBusy(ex) && IsTrustDenied(ex))
+        {
+            Log?.Invoke($"imageMso: VBA モジュールを入れられなかった（VBA プロジェクトへのアクセスが信頼されていない）: 0x{ex.HResult:X8} {ex.Message}");
+            throw new UserFacingException(TrustRequiredMessage, ex);
+        }
+
+        dynamic component = project.VBComponents.Add(VbextStdModule);
+        _bulkModule = component;
+        component.Name = ImageMsoVbaExport.ModuleName;
+        component.CodeModule.AddFromString(ImageMsoVbaExport.ModuleSource);
+
+        // ブックの名前に ' があれば '' にする（Run の名前の書き方）
+        string bookName = wb.Name;
+        _bulkMacro = $"'{bookName.Replace("'", "''", StringComparison.Ordinal)}'!{ImageMsoVbaExport.ModuleName}.{ImageMsoVbaExport.FunctionName}";
+        Log?.Invoke($"imageMso: 作業用のブックに VBA モジュールを入れた（{_bulkMacro}）");
+    }
+
+    /// <summary>
+    /// 確実にある FileSave を Excel の中で取り出してみて、結果を記録する。起動したてで取れないことがあるので、
+    /// 準備の時間の範囲で少し待ってやり直す。取れなくても準備は失敗にしない（まとまりの取り出しで数え、続けて取れなければ打ち切る）。
+    /// </summary>
+    private void ProbeBulkModule(System.Diagnostics.Stopwatch sw)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var result = RunExport(["FileSave"], 32, countStats: false).Single();
+            if (result.Kind == ImageMsoFetchKind.Found)
+            {
+                Log?.Invoke($"imageMso: Excel の中（VBA）で FileSave を取り出せた（{attempt} 回目、{sw.Elapsed.TotalSeconds:0.0} 秒）");
+                return;
+            }
+
+            if (result.Kind == ImageMsoFetchKind.Missing)
+            {
+                // 確実にある名前が「存在しない」と返るなら、存在しないことの見分け（E_INVALIDARG）がこの PC では当てにならない。
+                // このまま続けると、すべての名前を「存在しない」とキャッシュに記録してしまい、取り直されなくなるので止める
+                throw new UserFacingException(L(
+                    "Excel が組み込みアイコン（FileSave）を「存在しない」と返したため、取り込みをやめました。詳しい理由は %AppData%\\Sash\\logs\\app.log に記録しました。",
+                    "Excel reported the built-in icon (FileSave) as missing, so the import was stopped. The details were written to %AppData%\\Sash\\logs\\app.log."));
+            }
+
+            if (attempt >= 5 || sw.Elapsed + TimeSpan.FromSeconds(1) > StartLimit)
+            {
+                Log?.Invoke($"imageMso: Excel の中（VBA）でも FileSave を取り出せなかった（{attempt} 回、{result.Kind}）。理由は直前の記録を参照");
+                return;
+            }
+
+            Thread.Sleep(500);
+        }
     }
 
     /// <summary>一括の取り込みの 1 まとまり。COM スレッドで呼ぶ。</summary>
@@ -1311,9 +1335,8 @@ public sealed class ExcelService : IDisposable
         ObjectDisposedException.ThrowIf(_disposing, this);
         if (_bulkApp is null || !IsAlive(_bulkApp))
         {
-            // 取り込み中に Excel が終わった（利用者がタスク マネージャーで終わらせたなど）。1 回だけ起動し直す
-            Log?.Invoke("imageMso の取り込み用の Excel が応答しないため、起動し直す");
-            StartBulkApp();
+            // 取り込み中に Excel が終わった（利用者がタスク マネージャーで終わらせたなど）か、応答しない
+            RestartBulkApp("imageMso の取り込み用の Excel が応答しないため、起動し直す");
         }
         else
         {
@@ -1323,289 +1346,354 @@ public sealed class ExcelService : IDisposable
             dynamic current = _bulkApp!;
             int? count = SafeValue(() => (int)current.Workbooks.Count);
 
-            // 作業用のブックは数に入れない。借りている利用者の Excel は、ブックがあって当然なので見ない
-            if (!_bulkBorrowed && count > (_bulkScratch is null ? 0 : 1))
+            // 作業用のブックは数に入れない
+            if (count > (_bulkScratch is null ? 0 : 1))
             {
-                Log?.Invoke("imageMso の取り込み用の Excel でブックが開かれたため、その Excel を利用者に引き渡し、別の Excel で続ける");
-                StartBulkApp(); // 中で ReleaseBulkApp が、ブックの入った Excel を見えるようにして引き渡す
+                RestartBulkApp("imageMso の取り込み用の Excel でブックが開かれたため、その Excel を利用者に引き渡し、別の Excel で続ける");
             }
         }
 
-        dynamic bars = _bulkApp!.CommandBars;
-        var results = new List<ImageMsoFetchResult>(names.Count);
-        foreach (var name in names)
+        if (ct.IsCancellationRequested)
         {
-            if (ct.IsCancellationRequested)
-            {
-                break;
-            }
+            return [];
+        }
 
-            results.Add(ExtractOne(bars, name, size));
+        // VBA のファイルの入出力は ANSI なので、ASCII でない名前は渡さない（imageMso の名前は ASCII なので、Excel にもない）
+        var results = names.Where(n => !ImageMsoVbaExport.CanSend(n)).Select(n => new ImageMsoFetchResult(n, ImageMsoFetchKind.Missing)).ToList();
+        var send = names.Where(ImageMsoVbaExport.CanSend).ToList();
+        if (send.Count > 0)
+        {
+            results.AddRange(RunExport(send, size, countStats: true));
         }
 
         return results;
     }
 
-    /// <summary>imageMso を 1 つ取り出す。COM スレッドで呼ぶ。</summary>
-    private ImageMsoFetchResult ExtractOne(dynamic bars, string name, int size)
+    /// <summary>取り込み専用の Excel を起動し直す。1 回の取り込みで <see cref="MaxBulkRestarts"/> 回まで。</summary>
+    private void RestartBulkApp(string reason)
     {
-        object? pic;
-        try
+        Log?.Invoke(reason);
+        if (++_bulkRestarts > MaxBulkRestarts)
         {
-            pic = bars.GetImageMso(name, size, size);
-        }
-        catch (Exception ex) when (ex.HResult == EInvalidArg && ex is COMException or ArgumentException)
-        {
-            // 存在しない imageMso（Excel は E_INVALIDARG を返し、.NET はそれを ArgumentException にすることもある）
-            return new ImageMsoFetchResult(name, ImageMsoFetchKind.Missing);
-        }
-        catch (Exception ex) when (IsComFailure(ex))
-        {
-            // 忙しいなど一時的な失敗
-            _onceLog.Write($"getimagemso:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: GetImageMso が失敗（{name}）: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-            return new ImageMsoFetchResult(name, ImageMsoFetchKind.Failed);
+            throw new UserFacingException(L(
+                "取り込み専用の Excel が続けて使えなくなったため、取り込みをやめました。取り込めた分は使えます。",
+                "The Excel instance used for the import stopped working repeatedly, so the import was stopped. The icons imported so far can be used."));
         }
 
-        if (pic is null)
-        {
-            _onceLog.Write("getimagemso:null", $"imageMso: GetImageMso が何も返さなかった（{name}）");
-            return new ImageMsoFetchResult(name, ImageMsoFetchKind.Failed);
-        }
+        StartBulkApp(); // 中で ReleaseBulkApp が、ブックの入った Excel を見えるようにして引き渡す
+    }
 
+    /// <summary>
+    /// 名前の一覧をファイルに書き、VBA の関数を Application.Run で呼んで、書かれた結果を読む。COM スレッドで呼ぶ。
+    /// Run が失敗したら（Excel が応答しない、マクロを実行できないなど）、そのまとまりはすべて「取り出せなかった」にする
+    /// （続けば <see cref="ImageMsoPrefetch.GiveUpAfter"/> で打ち切られ、理由はログに残る）。
+    /// </summary>
+    private List<ImageMsoFetchResult> RunExport(IReadOnlyList<string> names, int size, bool countStats)
+    {
+        var batchDir = Path.Combine(EnsureBulkTempDir(), (++_bulkBatch).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(batchDir);
+        List<ImageMsoFetchResult> results;
         try
         {
-            var png = PictureToPng(pic, size);
-            return png is null ? new ImageMsoFetchResult(name, ImageMsoFetchKind.Failed) : new ImageMsoFetchResult(name, ImageMsoFetchKind.Found, png);
+            var listPath = Path.Combine(batchDir, "names.txt");
+            ImageMsoVbaExport.WriteNameList(listPath, names);
+            try
+            {
+                object? processed = _bulkApp!.Run(_bulkMacro!, listPath, batchDir, size);
+                var count = processed is null ? (int?)null : Convert.ToInt32(processed, System.Globalization.CultureInfo.InvariantCulture);
+                if (count != names.Count)
+                {
+                    _onceLog.Write("vba-count", $"imageMso: VBA が処理した数が合わない（{count?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "なし"} / {names.Count}）");
+                }
+            }
+            catch (Exception ex) when (IsComFailure(ex) || ex is FormatException or OverflowException)
+            {
+                _onceLog.Write($"vba-run:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: VBA の関数を呼べなかった（{_bulkMacro}）: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+            }
+
+            // Run が途中で失敗しても、それまでに書かれた分は使う
+            results = ImageMsoVbaExport.ReadResults(batchDir, names, size, (key, message) => _onceLog.Write(key, message));
         }
         finally
         {
-            Release(pic);
+            TryDeleteDirectory(batchDir);
+        }
+
+        if (countStats)
+        {
+            foreach (var r in results)
+            {
+                _bulkStats = r.Kind switch
+                {
+                    ImageMsoFetchKind.Found => _bulkStats with { Found = _bulkStats.Found + 1 },
+                    ImageMsoFetchKind.Missing => _bulkStats with { Missing = _bulkStats.Missing + 1 },
+                    _ => _bulkStats with { Failed = _bulkStats.Failed + 1 },
+                };
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// 取り込みの一時フォルダ（%TEMP%\Sash\imagemso\&lt;guid&gt;）。VBA の Open は ANSI のパスしか扱えないので、
+    /// ASCII でない文字を含むときは短い名前（8.3 形式）を試す。
+    /// </summary>
+    private string EnsureBulkTempDir()
+    {
+        if (_bulkTempDir is not null && Directory.Exists(_bulkTempDir))
+        {
+            return _bulkTempDir;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "Sash", "imagemso", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        if (dir.Any(c => c > '~'))
+        {
+            var buffer = new char[1024];
+            var length = NativeMethods.GetShortPathName(dir, buffer, buffer.Length);
+            var shortPath = length > 0 && length < buffer.Length ? new string(buffer, 0, (int)length) : null;
+            if (shortPath is not null && shortPath.All(c => c <= '~'))
+            {
+                dir = shortPath;
+            }
+            else
+            {
+                _onceLog.Write("tempdir:nonascii", $"imageMso: 一時フォルダのパスに ASCII でない文字がある（VBA が開けないことがある）: {dir}");
+            }
+        }
+
+        _bulkTempDir = dir;
+        return dir;
+    }
+
+    private static void TryDeleteDirectory(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 一時フォルダなので、消せなくても取り込みには関係しない（次の取り込みは別のフォルダを使う）
         }
     }
 
     /// <summary>
-    /// GetImageMso が返す IPictureDisp（32bit のビットマップ）を、アルファを保ったまま PNG にする。次の順に試す。
-    /// 1. QueryInterface で IPicture を取り、SaveAsFile でメモリ上のストリームに BMP を書かせて読む（COM が中身を運ぶ）。
-    /// 2. IPersistStream.Save で同じように書かせて読む。
-    /// 3. IPicture を取れなかったときだけ、Handle（HBITMAP）を GetDIBits で読む。
-    /// HBITMAP を先に試さないのは、GDI のハンドルがプロセスごとのものだから。Excel は別のプロセスで動くのがふつうで、
-    /// その値がたまたまこのプロセスの 32x32 のビットマップを指していると、別の画像をキャッシュに書いてしまう。
-    /// どれも失敗したら null。理由ごとに最初の 1 回だけログに残す。
+    /// 一括の取り込みのために起動した Excel を片付ける。COM スレッドで呼ぶ。
+    /// 入れた VBA モジュールを取り除き、作業用のブックを保存せずに閉じてから、ブックがなければ Quit する。
+    /// 利用者がブックを開いていたら、見えるようにして引き渡す（Quit しない）。Quit が断られたら、
+    /// 最後の手段として Sash が起動したその Excel のプロセスだけを終わらせる（利用者の Excel は終わらせない）。
+    /// force が true（応答しないと分かっている）なら、呼び出しを待たずにプロセスを終わらせる。
     /// </summary>
-    private byte[]? PictureToPng(object picture, int size)
+    private void ReleaseBulkApp(bool force)
     {
-        var noPicture = false;
-        foreach (var (via, save) in new (string, Func<object, byte[]?>)[] { ("IPicture.SaveAsFile", p => SaveViaPicture(p, out noPicture)), ("IPersistStream.Save", SaveViaPersistStream) })
-        {
-            var bmp = save(picture);
-            if (bmp is null)
-            {
-                continue;
-            }
-
-            try
-            {
-                var png = BmpDecoder.ToPng(bmp, out var image);
-                _onceLog.Write($"bmp:{via}:{image.BitCount}:{image.Compression}", $"imageMso: {via} で受け取った（{image.Describe()}、{bmp.Length} バイト）");
-                return png;
-            }
-            catch (Exception ex) when (ex is FormatException or ArgumentException or IndexOutOfRangeException or OverflowException)
-            {
-                // 1 件の壊れた画像で、まとまり全体を失敗させない（この名前だけを「画像にできなかった」にする）
-                _onceLog.Write($"bmpformat:{via}:{ex.GetType().Name}:{ex.Message}", $"imageMso: {via} の BMP を読めなかった: {ex.GetType().Name} {ex.Message}（先頭 {Convert.ToHexString(bmp.AsSpan(0, Math.Min(32, bmp.Length)))}、{bmp.Length} バイト）");
-            }
-        }
-
-        if (!noPicture || _handlePath < 0)
-        {
-            return null;
-        }
-
+        var app = _bulkApp;
+        _bulkApp = null;
+        _bulkMacro = null;
         try
         {
-            var png = PngFromHandle(picture, size, out var reason);
-            if (png is not null)
+            if (force)
             {
-                if (_handlePath == 0)
+                KillBulkProcess();
+                Release(_bulkModule);
+                Release(_bulkScratch);
+                _bulkModule = null;
+                _bulkScratch = null;
+                return;
+            }
+
+            RemoveBulkModule();
+            CloseBulkScratch();
+            if (app is null)
+            {
+                return;
+            }
+
+            dynamic a = app;
+            int? count = SafeValue(() => (int)a.Workbooks.Count);
+            if (count is null or 0)
+            {
+                // ブックがない（か、応答せず数が分からない）。Sash が起動したままの Excel なので終わらせる
+                try
                 {
-                    Log?.Invoke("imageMso: IPicture を取れなかったので、HBITMAP から直接読んだ");
+                    a.Quit();
                 }
-
-                _handlePath = 1;
-                return png;
+                catch (Exception ex) when (IsComFailure(ex))
+                {
+                    Log?.Invoke($"imageMso: 取り込み専用の Excel を Quit できなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+                    Release(app);
+                    app = null;
+                    KillBulkProcess();
+                }
             }
-
-            if (_handlePath == 0)
+            else
             {
-                // 一度読めなかったら、この PC では使えないとみなして以後は試さない
-                _handlePath = -1;
-            }
-
-            _onceLog.Write($"handle:{reason}", $"imageMso: HBITMAP から読めなかった（{reason}）");
-        }
-        catch (Exception ex) when (IsComFailure(ex) || ex is OverflowException)
-        {
-            _onceLog.Write($"handle:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: Handle を読めなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-        }
-
-        return null;
-    }
-
-    /// <summary>Handle（HBITMAP）を同じプロセスのものとして読む。読めなければ null と理由。</summary>
-    private static byte[]? PngFromHandle(object picture, int size, out string reason)
-    {
-        dynamic pic = picture;
-        var hbitmap = new IntPtr((int)pic.Handle);
-        if (hbitmap == IntPtr.Zero)
-        {
-            reason = "Handle=0";
-            return null;
-        }
-
-        if (NativeMethods.GetObject(hbitmap, Marshal.SizeOf<NativeMethods.BITMAP>(), out var bmp) == 0)
-        {
-            reason = "GetObject=0";
-            return null;
-        }
-
-        int w = bmp.bmWidth;
-        int h = bmp.bmHeight;
-
-        // 別のプロセスのハンドルの値が、たまたまこのプロセスの別のビットマップを指している、という取り違えを防ぐ
-        if (w != size || Math.Abs(h) != size)
-        {
-            reason = $"size={w}x{h}";
-            return null;
-        }
-
-        h = Math.Abs(h);
-        var bits = new byte[w * h * 4];
-        var header = new NativeMethods.BITMAPINFOHEADER
-        {
-            biSize = Marshal.SizeOf<NativeMethods.BITMAPINFOHEADER>(),
-            biWidth = w,
-            biHeight = -h, // 上の行から
-            biPlanes = 1,
-            biBitCount = 32,
-        };
-        var hdc = NativeMethods.GetDC(IntPtr.Zero);
-        try
-        {
-            if (NativeMethods.GetDIBits(hdc, hbitmap, 0, (uint)h, bits, ref header, 0) == 0)
-            {
-                reason = "GetDIBits=0";
-                return null;
+                // 利用者のブックが入っている。見えるようにして引き渡す（警告の表示も元に戻す）
+                Log?.Invoke($"imageMso: 取り込み専用の Excel にブックが {count} 個あるため、Quit せずに利用者に引き渡す");
+                try
+                {
+                    a.DisplayAlerts = true;
+                    a.Visible = true;
+                    a.UserControl = true;
+                }
+                catch (Exception ex) when (IsComFailure(ex))
+                {
+                    Log?.Invoke($"imageMso: 取り込み専用の Excel を引き渡せなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+                }
             }
         }
         finally
         {
-            NativeMethods.ReleaseDC(IntPtr.Zero, hdc);
+            Release(app);
+            Volatile.Write(ref _bulkPid, 0);
+            if (_bulkTempDir is { } dir)
+            {
+                _bulkTempDir = null;
+                TryDeleteDirectory(dir);
+            }
         }
-
-        BgraAlpha.Normalize(bits);
-        reason = string.Empty;
-        return PngEncoder.EncodeBgra(bits, w, h);
     }
 
-    /// <summary>IPicture.SaveAsFile で BMP を書かせる。取れなければ null（理由はログへ）。noPicture は IPicture を取れなかったこと。</summary>
-    private byte[]? SaveViaPicture(object picture, out bool noPicture)
+    /// <summary>入れた VBA モジュールを取り除く（作業用のブックは保存せずに閉じるので、残らないための念のため）。</summary>
+    private void RemoveBulkModule()
     {
-        noPicture = false;
-        IOlePicture ole;
+        var module = _bulkModule;
+        _bulkModule = null;
+        if (module is null)
+        {
+            return;
+        }
+
         try
         {
-            ole = (IOlePicture)picture;
-        }
-        catch (Exception ex) when (ex is InvalidCastException or COMException)
-        {
-            noPicture = true;
-            _onceLog.Write($"ipicture:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: IPicture を取得できなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-            return null;
-        }
-
-        return SaveToMemory("IPicture.SaveAsFile", stream => ole.SaveAsFile(stream, true, out _));
-    }
-
-    /// <summary>IPersistStream.Save で書かせる（"lt\0\0" と長さの後に BMP が続く）。取れなければ null。</summary>
-    private byte[]? SaveViaPersistStream(object picture)
-    {
-        IOlePersistStream persist;
-        try
-        {
-            persist = (IOlePersistStream)picture;
-        }
-        catch (Exception ex) when (ex is InvalidCastException or COMException)
-        {
-            _onceLog.Write($"ipersist:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: IPersistStream を取得できなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-            return null;
-        }
-
-        return SaveToMemory("IPersistStream.Save", stream => persist.Save(stream, false));
-    }
-
-    /// <summary>HGLOBAL のストリームに書かせて、そのバイト列を返す。</summary>
-    private byte[]? SaveToMemory(string via, Func<System.Runtime.InteropServices.ComTypes.IStream, int> save)
-    {
-        System.Runtime.InteropServices.ComTypes.IStream? stream = null;
-        try
-        {
-            var hr = NativeMethods.CreateStreamOnHGlobal(IntPtr.Zero, true, out stream);
-            if (hr != 0)
-            {
-                _onceLog.Write($"stream:{hr:X8}", $"imageMso: CreateStreamOnHGlobal が失敗: 0x{hr:X8}");
-                return null;
-            }
-
-            hr = save(stream);
-            if (hr != 0)
-            {
-                _onceLog.Write($"save:{via}:{hr:X8}", $"imageMso: {via} が失敗: 0x{hr:X8}");
-                return null;
-            }
-
-            stream.Stat(out var stat, 1); // STATFLAG_NONAME
-            hr = NativeMethods.GetHGlobalFromStream(stream, out var hglobal);
-            if (hr != 0)
-            {
-                _onceLog.Write($"hglobal:{hr:X8}", $"imageMso: GetHGlobalFromStream が失敗: 0x{hr:X8}");
-                return null;
-            }
-
-            var length = Math.Min(stat.cbSize, (long)NativeMethods.GlobalSize(hglobal).ToUInt64());
-            if (length is <= 0 or > 16 * 1024 * 1024)
-            {
-                _onceLog.Write($"length:{via}", $"imageMso: {via} が書いた長さが不正: {stat.cbSize}");
-                return null;
-            }
-
-            var ptr = NativeMethods.GlobalLock(hglobal);
-            if (ptr == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            try
-            {
-                var bytes = new byte[length];
-                Marshal.Copy(ptr, bytes, 0, (int)length);
-                return bytes;
-            }
-            finally
-            {
-                NativeMethods.GlobalUnlock(hglobal);
-            }
+            dynamic wb = _bulkScratch!;
+            wb.VBProject.VBComponents.Remove(module);
         }
         catch (Exception ex) when (IsComFailure(ex))
         {
-            _onceLog.Write($"save:{via}:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: {via} が失敗: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-            return null;
+            Log?.Invoke($"imageMso: VBA モジュールを取り除けなかった（作業用のブックは保存せずに閉じる）: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
         }
         finally
         {
-            if (stream is not null)
+            Release(module);
+        }
+    }
+
+    /// <summary>作業用のブックを保存せずに閉じる。</summary>
+    private void CloseBulkScratch()
+    {
+        var wb = _bulkScratch;
+        _bulkScratch = null;
+        if (wb is null)
+        {
+            return;
+        }
+
+        try
+        {
+            ((dynamic)wb).Close(false);
+        }
+        catch (Exception ex) when (IsComFailure(ex))
+        {
+            // Excel が先に終わっていたなど。閉じられなくても取り込みには関係しない
+        }
+        finally
+        {
+            Release(wb);
+        }
+    }
+
+    /// <summary>いま動いている Excel のプロセスの番号。</summary>
+    private static HashSet<int> ExcelProcessIds()
+    {
+        var ids = new HashSet<int>();
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName("EXCEL"))
+        {
+            using (p)
             {
-                Marshal.ReleaseComObject(stream);
+                ids.Add(p.Id);
             }
+        }
+
+        return ids;
+    }
+
+    /// <summary>
+    /// 起動した Excel のプロセスを、ウィンドウ（Application.Hwnd）から調べて覚える。最後の手段で終わらせるのはこのプロセスだけ。
+    /// 起動する前からあったプロセス（利用者の Excel）だったら覚えない（決して終わらせない）。
+    /// </summary>
+    private void RememberBulkProcess(object owned, HashSet<int> before)
+    {
+        dynamic app = owned;
+        Volatile.Write(ref _bulkPid, 0);
+        long hwnd = SafeValue(() => (long)app.Hwnd) ?? 0;
+        if (hwnd == 0 || NativeMethods.GetWindowThreadProcessId(new IntPtr(hwnd), out var pid) == 0 || pid == 0)
+        {
+            Log?.Invoke("imageMso: 取り込み専用の Excel のプロセスを調べられなかった（応答しなくなっても終わらせられない）");
+            return;
+        }
+
+        if (before.Contains((int)pid))
+        {
+            Log?.Invoke($"imageMso: 起動した Excel が既存のプロセス {pid} と同じだったため、終わらせる対象にしない");
+            return;
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById((int)pid);
+            Volatile.Write(ref _bulkPidStartTicks, process.StartTime.Ticks);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            Volatile.Write(ref _bulkPidStartTicks, 0);
+        }
+
+        Volatile.Write(ref _bulkPid, (int)pid);
+    }
+
+    /// <summary>
+    /// Sash が起動した取り込み専用の Excel のプロセスを終わらせる（最後の手段）。どのスレッドからも呼べる。
+    /// 番号が使い回されていないか（名前が EXCEL で、起動した時刻が同じか）を確かめてから終わらせる。
+    /// </summary>
+    private void KillBulkProcess()
+    {
+        var pid = Volatile.Read(ref _bulkPid);
+        var started = Volatile.Read(ref _bulkPidStartTicks);
+        if (pid == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            if (!string.Equals(process.ProcessName, "EXCEL", StringComparison.OrdinalIgnoreCase) || (started != 0 && process.StartTime.Ticks != started))
+            {
+                Log?.Invoke($"imageMso: プロセス {pid} は取り込み専用の Excel ではなくなっていたため、終わらせない");
+                return;
+            }
+
+            process.Kill();
+            process.WaitForExit(5000);
+            Log?.Invoke($"imageMso: 応答しない取り込み専用の Excel（プロセス {pid}）を終わらせた");
+        }
+        catch (ArgumentException)
+        {
+            // すでに終わっている
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            Log?.Invoke($"imageMso: 取り込み専用の Excel（プロセス {pid}）を終わらせられなかった: {ex.GetType().Name} {ex.Message}");
         }
     }
 
@@ -1690,12 +1778,18 @@ public sealed class ExcelService : IDisposable
             // _helperApp と _bulkApp は COM のスレッドだけが書くので、ここ（UI のスレッド）で null かどうかを見て
             // 飛ばすことはしない。起動の途中（StartBulkApp の実行中）でも、片付けはその後ろに積まれて必ず走る。
             // _disposing を先に立てたので、片付けの後に新しい Excel は起動されない
-            _com.InvokeAsync(() =>
+            var release = _com.InvokeAsync(() =>
             {
                 ReleaseHelperIfIdle();
-                ReleaseBulkApp();
+                ReleaseBulkApp(force: false);
                 return true;
-            }).Wait(TimeSpan.FromSeconds(10));
+            });
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                // COM のスレッドが応答しない Excel を待ったまま。取り込み専用の Excel を残さないよう、
+                // Sash が起動したそのプロセスだけを終わらせる（利用者の Excel には触れない）
+                KillBulkProcess();
+            }
         }
         catch (AggregateException)
         {
