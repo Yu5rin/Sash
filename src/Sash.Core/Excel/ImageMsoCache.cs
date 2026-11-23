@@ -29,7 +29,16 @@ public sealed record ImageMsoManifest(
 /// <param name="ExcelVersion">失敗したときの Excel の版（<see cref="ImageMsoCache.NormalizeExcelVersion"/> の形）。分からなければ null。</param>
 /// <param name="FailedAt">失敗した日時。</param>
 /// <param name="Message">利用者に見せた理由。</param>
-public sealed record ImageMsoFailureRecord(string? ExcelVersion, DateTimeOffset FailedAt, string? Message);
+/// <param name="Method">失敗したときの取り出し方の版（<see cref="ImageMsoFailureRecord.CurrentMethod"/>）。古い記録にはないので 0。</param>
+public sealed record ImageMsoFailureRecord(string? ExcelVersion, DateTimeOffset FailedAt, string? Message, int Method = 0)
+{
+    /// <summary>
+    /// いまの取り出し方の版。取り出し方を直したら上げる。古い取り出し方で失敗した記録は当てはめず、もう一度自動で試す
+    /// （直したのに「前に失敗したから」と自動で始めないままになるのを防ぐ）。
+    /// 2：作業用のブックを開き、GetImageMso が使えるまで待ってから取り込む（ブックのない Excel が E_UNEXPECTED を返したため）。
+    /// </summary>
+    public const int CurrentMethod = 2;
+}
 
 /// <summary>キャッシュを引いた結果。Found は見つかった画像（存在しない名前は null）、Misses はキャッシュにない名前。</summary>
 public sealed record ImageMsoLookup(Dictionary<string, byte[]?> Found, IReadOnlyList<string> Misses);

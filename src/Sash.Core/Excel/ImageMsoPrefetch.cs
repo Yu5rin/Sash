@@ -209,6 +209,11 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
     /// </summary>
     private bool FailureApplies(ImageMsoFailureRecord record)
     {
+        if (record.Method < ImageMsoFailureRecord.CurrentMethod)
+        {
+            return false;
+        }
+
         var current = ImageMsoCache.NormalizeExcelVersion(SafeCurrentVersion());
         var recorded = ImageMsoCache.NormalizeExcelVersion(record.ExcelVersion);
         return current is null || recorded is null || string.Equals(current, recorded, StringComparison.Ordinal);
@@ -349,7 +354,7 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
             if (failure is not null)
             {
                 // 失敗をファイルに残し、次の起動から同じ版の Excel では自動で始めない（設定画面からは始められる）
-                cache.WriteFailure(new ImageMsoFailureRecord(ImageMsoCache.NormalizeExcelVersion(SafeCurrentVersion()) ?? version, DateTimeOffset.Now, failure));
+                cache.WriteFailure(new ImageMsoFailureRecord(ImageMsoCache.NormalizeExcelVersion(SafeCurrentVersion()) ?? version, DateTimeOffset.Now, failure, ImageMsoFailureRecord.CurrentMethod));
             }
 
             lock (_gate)
