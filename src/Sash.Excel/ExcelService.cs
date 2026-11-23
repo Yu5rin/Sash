@@ -1302,6 +1302,7 @@ public sealed class ExcelService : IDisposable
         dynamic component = project.VBComponents.Add(VbextStdModule);
         _bulkModule = component;
         component.Name = ImageMsoVbaExport.ModuleName;
+        ClearModule(component);
         component.CodeModule.AddFromString(ImageMsoVbaExport.ModuleSource);
 
         // 確認用の小さな関数を、別のモジュールに入れる。これが呼べて本体が呼べなければ本体のコンパイルの問題、
@@ -1309,6 +1310,7 @@ public sealed class ExcelService : IDisposable
         // このモジュールは取り除かない（作業用のブックは保存せずに閉じるので残らない）
         dynamic ping = project.VBComponents.Add(VbextStdModule);
         ping.Name = "SashImageMsoPing";
+        ClearModule(ping);
         ping.CodeModule.AddFromString("Public Function SashPing() As Long\r\n    SashPing = 1\r\nEnd Function\r\n");
         Release(ping);
 
@@ -1318,6 +1320,21 @@ public sealed class ExcelService : IDisposable
         string bookName = wb.Name;
         _bulkMacro = ResolveMacroName(bookName);
         Log?.Invoke($"imageMso: 作業用のブックに VBA モジュールを入れた（{_bulkMacro}）");
+    }
+
+    /// <summary>
+    /// 追加したばかりのモジュールに Excel が自動で書いた行を消す。VBE の「変数の宣言を強制する」がオンだと
+    /// 先頭に Option Explicit が入り、こちらのコードの Option Explicit と重なって「Option ステートメントは既に
+    /// 存在します」というコンパイルエラーになる（実機で確認）。
+    /// </summary>
+    private static void ClearModule(dynamic component)
+    {
+        dynamic code = component.CodeModule;
+        int lines = code.CountOfLines;
+        if (lines > 0)
+        {
+            code.DeleteLines(1, lines);
+        }
     }
 
     /// <summary>
