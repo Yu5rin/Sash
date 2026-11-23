@@ -582,3 +582,11 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-muted); border: 1
 .library-actions .fav.on { color: var(--warning); }
 .library-item .fav.on { display: inline-flex; }
 .path-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; font-size: 12px; }
+
+/* ---- 更新 ---- */
+
+.update-banner { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-size: 12px; padding: 2px 10px; }
+.update-banner[hidden] { display: none; }
+.modal-message { white-space: pre-line; }
+.settings-group { display: flex; flex-direction: column; gap: 8px; }
+.settings-group label { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 8px; }

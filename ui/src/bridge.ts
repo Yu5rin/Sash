@@ -72,6 +72,29 @@ export interface Settings {
   language: 'ja' | 'en';
   /** アイコンライブラリの場所（表示用。変更は library.chooseFolder で行う）。 */
   iconLibraryPath: string;
+  updateCheckOnStartup: boolean;
+  /** 更新の確認先。空なら GitHub のリリース。 */
+  updateSource: string;
+}
+
+export interface UpdateCheckResult {
+  status: 'upToDate' | 'available' | 'error' | 'disabled';
+  current: string;
+  latest: string | null;
+  notes: string | null;
+  canInstall: boolean;
+  reason: string | null;
+  pageUrl: string | null;
+  source: string;
+  managedByAdmin: boolean;
+}
+
+export interface UpdateStatus {
+  current: string;
+  checkOnStartup: boolean;
+  source: string;
+  managedByAdmin: boolean;
+  logPath: string;
 }
 
 export interface LibraryIconDto {
@@ -106,7 +129,7 @@ export interface VbaModuleDto {
 
 /** 要求の種類ごとの payload と応答の型。 */
 export interface HostApi {
-  'app.ready': { req: undefined; res: { initialFile: string | null } };
+  'app.ready': { req: undefined; res: { initialFile: string | null; updatedFrom?: string | null; version?: string } };
   'app.info': { req: undefined; res: AppInfo };
   'app.close': { req: undefined; res: null };
   'file.open': { req: { path?: string } | undefined; res: OpenedDocument | null };
@@ -120,6 +143,10 @@ export interface HostApi {
   'excel.apply': { req: { path: string; parts: PartToSave[]; saveIfDirty: boolean; activateTab?: string }; res: ApplyResult };
   'excel.imageMso': { req: { names: string[]; size: number }; res: Record<string, string | null> };
   'excel.labels': { req: { ids: string[] }; res: Record<string, string> };
+  'update.check': { req: undefined; res: UpdateCheckResult };
+  'update.install': { req: undefined; res: null };
+  'update.status': { req: undefined; res: UpdateStatus };
+  'update.openPage': { req: { url: string }; res: null };
   'library.list': { req: undefined; res: { root: string; icons: LibraryIconDto[] } };
   'library.get': { req: { id: string }; res: LibraryIconDetail | null };
   'library.save': { req: { name: string; tags: string[]; png: string; source?: string; sourceName?: string; sourceContentType?: string; options?: unknown }; res: { id: string } };
@@ -233,7 +260,7 @@ const sampleXml = `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/
 `;
 
 const mock = {
-  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)') } as Settings,
+  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '' } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
     const r = (v: unknown) => Promise.resolve(v as HostApi[K]['res']);
     switch (type) {
@@ -270,6 +297,10 @@ const mock = {
         return r({});
       case 'recipes.list':
         return r([]);
+      case 'update.status':
+        return r({ current: 'dev', checkOnStartup: false, source: 'https://github.com/Yu5rin/Sash', managedByAdmin: false, logPath: '' });
+      case 'update.check':
+        return r({ status: 'upToDate', current: 'dev', latest: null, notes: null, canInstall: false, reason: null, pageUrl: 'https://github.com/Yu5rin/Sash/releases/latest', source: 'https://github.com/Yu5rin/Sash', managedByAdmin: false });
       case 'library.list':
         return r({ root: t('(ブラウザ実行中)'), icons: [] });
       case 'vba.read':

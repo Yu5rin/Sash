@@ -42,6 +42,12 @@ public sealed record AppSettings
     /// <summary>画面の言語（ja / en）。</summary>
     public string Language { get; init; } = "ja";
 
+    /// <summary>起動時に更新を確認する。</summary>
+    public bool UpdateCheckOnStartup { get; init; } = true;
+
+    /// <summary>更新の確認先。空なら GitHub のリリース。社内の共有フォルダや https の latest.json も指定できる。</summary>
+    public string UpdateSource { get; init; } = "";
+
     /// <summary>最近使ったファイル（新しい順）。</summary>
     public IReadOnlyList<string> RecentFiles { get; init; } = [];
 }
