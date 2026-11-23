@@ -108,7 +108,8 @@ export function openAboutDialog(): void {
       h('dt', null, 'Excel'), h('dd', null, app.info.excelInstalled ? t('見つかりました') : t('見つかりません（ファイルの編集のみ）')),
       h('dt', null, t('ライセンス')), h('dd', null, 'MIT License'),
       h('dt', null, t('配布元')), h('dd', null, link(REPO_URL, 'github.com/Yu5rin/Sash'))),
-    h('p', { class: 'muted small' }, t('idMso / imageMso の一覧は、Microsoft の office-fluent-ui-command-identifiers（MIT License）を元にしています。')));
+    h('p', { class: 'muted small' }, t('idMso / imageMso の一覧は、Microsoft の office-fluent-ui-command-identifiers（MIT License）を元にしています。')),
+    h('p', { class: 'muted small' }, t('アイコン集は、Microsoft の Fluent UI System Icons（MIT License）を元にしています。')));
   const m = openModal(t('バージョン情報'), content, { size: 'sm', key: 'about', footer: [link(RELEASES_URL, t('リリースノート'), 'left'), h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))] });
 }
 

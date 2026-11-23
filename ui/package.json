@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fluent-icons": "node scripts/build-fluent-icons.mjs"
   },
   "devDependencies": {
+    "@fluentui/svg-icons": "1.1.347",
     "jsdom": "26.1.0",
     "typescript": "5.9.3",
     "vite": "7.2.4",

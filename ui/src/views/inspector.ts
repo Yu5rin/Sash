@@ -8,7 +8,7 @@ import { copyText, notify, runEdit } from '../clipboard';
 import { openCatalog } from '../dialogs/catalogDialog';
 import { openLibrary } from '../dialogs/libraryDialog';
 import { h, svg } from '../dom';
-import { applyLibraryIcon, openIconDialog } from '../icon/iconDialog';
+import { applyLibraryIcon, openFluentIcons, openIconDialog } from '../icon/iconDialog';
 import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, samePath, setAttr, suggestId, usedIds, type Path } from '../model';
 import type { ImageEntry } from '../store';
@@ -683,6 +683,23 @@ function iconRow(el: Element, key: string): HTMLElement {
         { class: 'insp-inline wrap' },
         img?.edit ? h('button', { type: 'button', class: 'small', title: t('元画像と設定から加工し直す'), onclick: () => openEditor(img) }, t('加工し直す')) : null,
         h('button', { type: 'button', class: 'small', onclick: () => openEditor() }, t('新しく作る')),
+        // 同梱のアイコン集から選び、アイコンエディタで PNG にして設定する（Excel がなくても見栄えのよいアイコンを付けられるように）
+        h('button', {
+          type: 'button',
+          class: 'small',
+          title: t('同梱のアイコン集（Fluent UI System Icons）から選ぶ。Excel がなくても使えます'),
+          onclick: () =>
+            openFluentIcons(
+              (pick) =>
+                openIconDialog(path, undefined, undefined, {
+                  fluent: pick,
+                  onClose: (applied) => {
+                    if (!applied) cancelPending();
+                  },
+                }),
+              (picked) => !picked && cancelPending(),
+            ),
+        }, t('アイコン集')),
         h('button', {
           type: 'button',
           class: 'small',

@@ -1,0 +1,39 @@
+/* アイコン集（Fluent）のダイアログ。色はアプリのテーマの変数だけを使い、明暗どちらでも読めるようにする。 */
+
+.fluent-picker { min-height: 0; }
+.fluent-toolbar { display: flex; gap: var(--sp-2); align-items: center; }
+.fluent-toolbar .fluent-search { flex: 1; min-width: 0; }
+.fluent-toolbar .segmented button { height: var(--ctl-h); padding: 0 12px; }
+
+.fluent-colors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* 共通のボタンの :hover などで背景が上書きされないよう、詳細度を上げて色を固定する */
+.fluent-colors button.fluent-swatch,
+.fluent-colors button.fluent-swatch:hover,
+.fluent-colors button.fluent-swatch:active { width: 22px; height: 22px; min-width: 0; padding: 0; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--swatch); }
+.fluent-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
+.fluent-colors input[type="color"] { width: 32px; height: 24px; padding: 0 2px; }
+
+.fluent-main { display: flex; gap: var(--sp-3); flex: 1; min-height: 0; }
+.fluent-grid-wrap { flex: 1; min-width: 0; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); padding: 4px; }
+.fluent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 2px; align-content: start; outline: none; }
+.fluent-item { display: flex; align-items: center; justify-content: center; height: 44px; border-radius: 4px; cursor: pointer; color: var(--text); }
+.fluent-item svg { width: 24px; height: 24px; }
+.fluent-item:hover { background: var(--hover-bg); }
+.fluent-item:focus-visible, .fluent-item:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+.fluent-item.selected { background: var(--sel-bg); box-shadow: inset 0 0 0 1px var(--sel-border); }
+.fluent-item.selected:focus { box-shadow: inset 0 0 0 2px var(--focus); }
+.fluent-more { display: block; margin: var(--sp-2) auto; }
+.fluent-more[hidden] { display: none; }
+.fluent-empty { grid-column: 1 / -1; }
+
+.fluent-preview { width: 300px; flex: none; display: flex; flex-direction: column; gap: var(--sp-2); overflow: auto; }
+.fluent-preview h3 { margin: 0; font-size: var(--fs-sm); }
+.fluent-preview-name { font-family: Consolas, monospace; font-size: var(--fs-sm); overflow-wrap: anywhere; min-height: 1.4em; }
+.fluent-preview p { margin: 0; }
+.fluent-preview .icon-preview svg { display: block; }
+.fluent-credit { margin-top: auto !important; }
+
+@media (max-width: 640px) {
+  .fluent-main { flex-direction: column; }
+  .fluent-preview { width: auto; }
+}
