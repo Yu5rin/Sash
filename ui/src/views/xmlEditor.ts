@@ -24,6 +24,51 @@ let editor: monaco.editor.IStandaloneCodeEditor;
 let applying = false;
 let spans: ElementSpan[] = [];
 let spansFor = '';
+/** 選択中の要素の開始タグを示す飾り（範囲選択の代わり。選択してしまうと Undo のたびにタグ全体が選ばれるため）。 */
+let selectionDecorations: monaco.editor.IEditorDecorationsCollection | null = null;
+
+/** XML エディタにフォーカスを移す（Ctrl+3 / F6）。 */
+export function focus(): void {
+  editor?.focus();
+}
+
+/**
+ * 外から来た文字列の変更を、差分の部分だけ置き換えて反映する（不具合 3）。
+ * 全体を置き換えると、カーソル・選択・スクロール位置が失われ、Monaco の Undo で全体が選択されてしまう。
+ */
+export function minimalEdit(before: string, after: string): { start: number; end: number; text: string } | null {
+  if (before === after) return null;
+  let start = 0;
+  const max = Math.min(before.length, after.length);
+  while (start < max && before.charCodeAt(start) === after.charCodeAt(start)) start++;
+  let endB = before.length;
+  let endA = after.length;
+  while (endB > start && endA > start && before.charCodeAt(endB - 1) === after.charCodeAt(endA - 1)) {
+    endB--;
+    endA--;
+  }
+  return { start, end: endB, text: after.slice(start, endA) };
+}
+
+/** XML エディタでその要素を表示し、フォーカスを移す（右クリックメニューの「XML で表示」）。 */
+export function revealInXml(path: readonly number[]): void {
+  const store = app.store;
+  if (!store || !editor) return;
+  if (!store.selection || store.selection.join('.') !== path.join('.')) store.select(path, 'other');
+  revealSelection(true);
+  editor.focus();
+}
+
+/** 行を表示する（XML の構文エラーなど、要素に結びつかない問題のとき）。 */
+export function revealLine(line: number): void {
+  if (!editor) return;
+  const model = editor.getModel();
+  if (!model) return;
+  const ln = Math.max(1, Math.min(line, model.getLineCount()));
+  editor.setPosition({ lineNumber: ln, column: 1 });
+  editor.revealLineInCenterIfOutsideViewport(ln, monaco.editor.ScrollType.Smooth);
+  editor.focus();
+}
 
 export interface XmlEditorHandle {
   focus(): void;
@@ -46,11 +91,16 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
     suggestOnTriggerCharacters: true,
   });
 
-  // Undo / Redo はアプリ全体の履歴に任せる（キャンバスやツリーの操作と一つの履歴にするため）
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ, handlers.undo);
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, handlers.redo);
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ, handlers.redo);
-  editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => app.store?.format());
+  // Undo / Redo はアプリ全体の履歴に任せる（キャンバスやツリーの操作と一つの履歴にするため）。
+  // addCommand はすべてのエディタに効くキー割り当てとして登録されるので、差分ダイアログの中の Ctrl+Z まで
+  // アプリの Undo になってしまう（不具合 7）。このエディタにだけある文脈キーを条件にした操作として登録する。
+  editor.createContextKey('sashMainXml', true);
+  const action = (id: string, keybindings: number[], run: () => void) =>
+    editor.addAction({ id: `sash.${id}`, label: id, keybindings, precondition: 'sashMainXml', keybindingContext: 'sashMainXml', run });
+  action('undo', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ], handlers.undo);
+  action('redo', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ], handlers.redo);
+  action('format', [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF], () => app.store?.format());
+  selectionDecorations = editor.createDecorationsCollection();
 
   editor.onDidChangeModelContent(() => {
     if (applying) return;
@@ -71,12 +121,21 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
   const sync = (fromSelf: boolean) => {
     const store = app.store;
     if (!store) return;
-    if (!fromSelf && editor.getValue() !== store.text) {
-      applying = true;
-      const model = editor.getModel()!;
-      // setValue だと Monaco 側の履歴が残るので、全体の置き換えとして流し込む
-      model.pushEditOperations([], [{ range: model.getFullModelRange(), text: store.text }], () => null);
-      applying = false;
+    const model = editor.getModel()!;
+    const current = model.getValue();
+    if (!fromSelf && current !== store.text) {
+      const diff = minimalEdit(current, store.text);
+      if (diff) {
+        applying = true;
+        const scrollTop = editor.getScrollTop();
+        const scrollLeft = editor.getScrollLeft();
+        const range = monaco.Range.fromPositions(model.getPositionAt(diff.start), model.getPositionAt(diff.end));
+        // 変わった部分だけを置き換え、カーソルと選択は Monaco の追従に任せる（範囲を選択しない）
+        model.applyEdits([{ range, text: diff.text, forceMoveMarkers: false }]);
+        editor.setScrollTop(scrollTop);
+        editor.setScrollLeft(scrollLeft);
+        applying = false;
+      }
     }
     statusEl.hidden = store.syncError === null;
     statusEl.textContent = store.syncError ? t('同期停止中：XMLの構文を直すと再開します（{message}）', { message: store.syncError.message }) : '';
@@ -90,6 +149,7 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
     if (!c) return;
     if (c.kinds.has('doc')) sync(c.source === 'xml');
     if (c.kinds.has('selection') && c.source !== 'xml') revealSelection();
+    else if (c.kinds.has('doc') && c.source !== 'xml') revealSelection();
   });
   app.on('problems', updateMarkers);
 
@@ -120,19 +180,30 @@ function elementIndexOfPath(path: readonly number[]): number {
   });
 }
 
-function revealSelection(): void {
+function revealSelection(moveCursor = false): void {
   const store = app.store;
-  if (!store?.selection || store.syncError) return;
+  if (!store?.selection || store.syncError) {
+    selectionDecorations?.clear();
+    return;
+  }
   const span = currentSpans()[elementIndexOfPath(store.selection)];
-  if (!span) return;
+  if (!span) {
+    selectionDecorations?.clear();
+    return;
+  }
   const model = editor.getModel()!;
   const start = model.getPositionAt(span.start);
   const end = model.getPositionAt(span.startTagEnd);
+  // 範囲は選択せず、開始タグに飾りを付けて示す。入力中の人のカーソルは動かさない
+  selectionDecorations?.set([
+    { range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column), options: { className: 'sash-selected-tag', isWholeLine: false, overviewRuler: { color: '#2b7de980', position: monaco.editor.OverviewRulerLane.Center } } },
+    { range: new monaco.Range(start.lineNumber, 1, start.lineNumber, 1), options: { isWholeLine: true, className: 'sash-selected-line' } },
+  ]);
   applying = true;
-  editor.setSelection(new monaco.Selection(start.lineNumber, start.column, end.lineNumber, end.column));
+  if (moveCursor || !editor.hasTextFocus()) editor.setPosition(start);
   // 横方向には動かさず、行だけを見える位置に出す
   editor.revealLineInCenterIfOutsideViewport(start.lineNumber, monaco.editor.ScrollType.Smooth);
-  editor.setScrollLeft(0);
+  if (moveCursor) editor.setScrollLeft(0);
   applying = false;
 }
 

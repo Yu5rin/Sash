@@ -9,6 +9,8 @@ import { openModal } from './modal';
 export function openDiff(): void {
   const s = app.session;
   if (!s) return;
+  // 二重に開くと Monaco の差分エディタが2つ作られ、閉じても片方が残る
+  if (document.querySelector('.modal .diff-editor')) return;
   const parts = [...s.parts.values()];
   let current = s.active;
   const host = h('div', { class: 'diff-editor' });
@@ -28,16 +30,22 @@ export function openDiff(): void {
     summary.replaceChildren(h('span', null, same ? t('保存済みの状態から変更はありません') : t('赤：保存済みから消えた行　緑：追加・変更した行')));
     if (added.length) summary.append(h('span', { class: 'tag' }, t('追加する画像：{list}', { list: added.join(t('、')) })));
     if (removed.length) summary.append(h('span', { class: 'tag removed' }, t('削除する画像：{list}', { list: removed.join(t('、')) })));
-    for (const m of models) m.dispose();
+    const old = models;
     models = [monaco.editor.createModel(current.savedXml, 'xml'), monaco.editor.createModel(current.text, 'xml')];
     editor?.setModel({ original: models[0]!, modified: models[1]! });
+    // 古いモデルは、差し替えてから捨てる
+    for (const m of old) m.dispose();
   };
 
   const modal = openModal(t('保存済みとの差分'), h('div', { class: 'diff' }, h('div', { class: 'diff-bar' }, summary, select), host), {
     wide: true,
+    key: 'diff',
     onClose: () => {
+      // エディタを先に捨ててからモデルを捨てる（逆だと Monaco が捨てたモデルを参照して警告を出す）
       editor?.dispose();
+      editor = null;
       for (const m of models) m.dispose();
+      models = [];
     },
   });
   editor = monaco.editor.createDiffEditor(host, {

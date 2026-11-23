@@ -101,3 +101,119 @@ describe('Backstage', () => {
     expect(runBs('<tab id="t"><group id="g"/></tab>')).toContain('error:<tab> の中に <group> は置けません');
   });
 });
+
+describe('子要素の順序と個数', () => {
+  it('dialogBoxLauncher はグループの末尾に1つだけ', () => {
+    const r = run('<tab id="t"><group id="g"><dialogBoxLauncher><button id="d"/></dialogBoxLauncher><button id="b"/></group></tab>');
+    expect(r).toContain('error:<button> は <dialogBoxLauncher> より前に置いてください');
+    const two = run('<tab id="t"><group id="g"><dialogBoxLauncher><button id="d"/></dialogBoxLauncher><dialogBoxLauncher><button id="e"/></dialogBoxLauncher></group></tab>');
+    expect(two).toContain('error:<group> の中に置ける <dialogBoxLauncher> は 1 個までです');
+  });
+
+  it('splitButton は button（か toggleButton）1つと menu 1つ', () => {
+    expect(run('<tab id="t"><group id="g"><splitButton id="s"><menu id="m"/><button id="b"/></splitButton></group></tab>')).toContain('error:<button> は <menu> より前に置いてください');
+    expect(run('<tab id="t"><group id="g"><splitButton id="s"><button id="b"/></splitButton></group></tab>')).toContain('error:<splitButton> には <menu> が必要です');
+    expect(run('<tab id="t"><group id="g"><splitButton id="s"><button id="a"/><toggleButton id="b"/><menu id="m"/></splitButton></group></tab>')).toContain('error:<splitButton> の中に置ける <button / toggleButton> は 1 個までです');
+  });
+
+  it('customUI と ribbon の中の順序', () => {
+    const p = parseXml(`<customUI xmlns="${NS}"><contextMenus/><ribbon><tabs/><qat/></ribbon></customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    const r = lint(p.doc, ctx).map((x) => x.message);
+    expect(r).toContain('<ribbon> は <contextMenus> より前に置いてください');
+    expect(r).toContain('<qat> は <tabs> より前に置いてください');
+  });
+
+  it('Backstage のタブは firstColumn → secondColumn の順', () => {
+    const p = parseXml(`<customUI xmlns="${NS}"><backstage><tab id="t"><secondColumn/><firstColumn/></tab></backstage></customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx).map((x) => x.message)).toContain('<firstColumn> は <secondColumn> より前に置いてください');
+  });
+});
+
+describe('スキーマの細かな規則', () => {
+  it('メニューやボタングループの中のコントロールに size は使えない', () => {
+    const r = run('<tab id="t"><group id="g"><menu id="m"><button id="b" size="large"/></menu><buttonGroup id="bg"><button id="c" getSize="f"/></buttonGroup><button id="ok" size="large"/></group></tab>');
+    expect(r).toContain('error:<button> に size 属性は使えません');
+    expect(r).toContain('error:<button> に getSize 属性は使えません');
+    expect(r.filter((m) => /size/i.test(m))).toHaveLength(2);
+  });
+
+  it('QAT には control・button・separator だけ', () => {
+    const p = parseXml(`<customUI xmlns="${NS}"><ribbon startFromScratch="true"><qat><documentControls><button id="b"/><checkBox id="c"/></documentControls></qat></ribbon></customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx).map((x) => x.message)).toContain('<documentControls> の中に <checkBox> は置けません');
+  });
+
+  it('officeMenu は 2007 形式でだけ使える', () => {
+    const p = parseXml(`<customUI xmlns="${NS}"><ribbon><officeMenu/></ribbon></customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx).map((x) => x.message)).toContain('<officeMenu> は2007形式（customUI）でのみ使えます');
+  });
+
+  it('gallery の showInRibbon は使える。item の id は省略できる', () => {
+    expect(run('<tab id="t"><group id="g"><gallery id="ga" showInRibbon="false"><item label="A"/></gallery></group></tab>')).toEqual([]);
+  });
+
+  it('Backstage の menu の直下にボタンは置けない', () => {
+    const p = parseXml(`<customUI xmlns="${NS}"><backstage><tab id="t"><firstColumn><group id="g"><primaryItem><menu id="m"><button id="b"/></menu></primaryItem></group></firstColumn></tab></backstage></customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx).map((x) => x.message)).toContain('<menu> の中に <button> は置けません');
+  });
+
+  it('box・buttonGroup・separator に idMso は使えない', () => {
+    const r = run('<tab id="t"><group id="g"><box idMso="X"/><separator idMso="Y"/></group></tab>');
+    expect(r).toContain('error:<box> に idMso 属性は使えません');
+    expect(r).toContain('error:<separator> に idMso 属性は使えません');
+  });
+
+  it('keytip は3文字まで、maxLength は1以上', () => {
+    const r = run('<tab id="t" keytip="ABCD"><group id="g"><editBox id="e" maxLength="0"/></group></tab>');
+    expect(r).toContain('error:keytip は3文字以内で指定してください');
+    expect(r).toContain('error:maxLength は 1〜1024 の整数で指定してください');
+  });
+
+  it('invalidateContentOnDrop は2010以降', () => {
+    const p = parseXml('<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui"><ribbon><tabs><tab id="t"><group id="g"><dynamicMenu id="d" getContent="f" invalidateContentOnDrop="true"/></group></tab></tabs></ribbon></customUI>');
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, { ...ctx, version: 'office2007' }).map((x) => x.message)).toContain('invalidateContentOnDrop は2010以降の形式でのみ使えます');
+  });
+
+  it('loadImage があれば、image の値はファイル内の画像でなくてよい', () => {
+    const p = parseXml(`<customUI xmlns="${NS}" loadImage="LoadImage"><ribbon><tabs><tab id="t"><group id="g"><button id="b" image="C:\\icons\\a.png"/></group></tab></tabs></ribbon></customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx).filter((x) => x.message.includes('ファイル内にありません'))).toEqual([]);
+  });
+
+  it('日本語の id とコールバック名を受け付ける', () => {
+    expect(run('<tab id="集計" label="T"><group id="グループ" label="G"><button id="合計ボタン" onAction="Ribbon_合計_onAction"/></group></tab>')).toEqual([]);
+    expect(run('<tab id="t"><group id="g"><button id="b" onAction="Module1.Run"/><button id="c" onAction="1abc"/></group></tab>')).toEqual(['error:コールバック名「1abc」はVBAのSub名として使えません']);
+  });
+});
+
+describe('名前空間', () => {
+  it('接頭辞つきの文書でも、同じ名前空間なら正しい', () => {
+    const p = parseXml(`<mso:customUI xmlns:mso="${NS}"><mso:ribbon><mso:tabs><mso:tab id="t" label="T"/></mso:tabs></mso:ribbon></mso:customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx)).toEqual([]);
+  });
+
+  it('名前空間の違う要素はエラー', () => {
+    const p = parseXml(`<mso:customUI xmlns:mso="${NS}"><mso:ribbon><tabs/></mso:ribbon></mso:customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx).some((x) => x.message.startsWith('<tabs> の名前空間が customUI と違います'))).toBe(true);
+  });
+});
+
+describe('keytip の重複の範囲', () => {
+  it('別のタブ・メニューの中なら重複にしない', () => {
+    const r = run('<tab id="t1" keytip="A"><group id="g1"><button id="a" keytip="X"/><menu id="m" keytip="M"><button id="ma" keytip="X"/></menu></group></tab><tab id="t2" keytip="B"><group id="g2"><button id="b" keytip="X"/></group></tab>');
+    expect(r.filter((m) => m.includes('keytip'))).toEqual([]);
+  });
+
+  it('リボンのタブと Backstage のタブは別に数える', () => {
+    const p = parseXml(`<customUI xmlns="${NS}"><ribbon><tabs><tab id="t" keytip="F"/></tabs></ribbon><backstage><tab id="bt" keytip="F"/></backstage></customUI>`);
+    if (!p.ok) throw new Error(p.message);
+    expect(lint(p.doc, ctx).filter((x) => x.message.includes('keytip'))).toEqual([]);
+  });
+});

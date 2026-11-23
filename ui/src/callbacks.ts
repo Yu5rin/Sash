@@ -201,10 +201,12 @@ export async function setupRibbonHolder(): Promise<string> {
   const store = app.store;
   if (!store) return '';
   if (!store.doc.documentElement.getAttribute('onLoad')) {
-    store.edit('inspector', (doc) => {
+    const ok = store.edit('inspector', (doc) => {
       doc.documentElement.setAttribute('onLoad', defaultCallbackName(doc.documentElement, 'onLoad'));
       return [];
     }, t('onLoad の設定'));
+    // XML の構文エラーなどで onLoad を設定できなければ、VBA にも何も入れない（理由は edit が知らせている）
+    if (!ok) return '';
   }
   const onLoad = store.doc.documentElement.getAttribute('onLoad');
   if (!vba.canWrite) {

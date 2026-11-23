@@ -8,6 +8,7 @@ import { openCatalog } from '../dialogs/catalogDialog';
 import { detailToBlobs, openLibrary } from '../dialogs/libraryDialog';
 import type { LibraryIconDetail } from '../bridge';
 import { openModal } from '../dialogs/modal';
+import { notify } from '../clipboard';
 import { h } from '../dom';
 import { elementAt, pathOf, setAttr, type Path } from '../model';
 import { ID_PATTERN } from '../schema';
@@ -78,21 +79,44 @@ function defaultOptions(): IconOptions {
   };
 }
 
+export interface IconDialogOptions {
+  /** 閉じたときに呼ぶ。applied は画像を設定（追加）したか。取り消したときに呼び出し元の表示を戻すのに使う。 */
+  onClose?: (applied: boolean) => void;
+}
+
 /**
  * アイコンエディタを開く。target が null のときは、コントロールには設定せずに画像だけを作る（一括取り込み用）。
  * existing を渡すと、その画像の元画像と設定から加工し直す。
  */
-export function openIconDialog(target: Path | null, files?: FileList | File[], existing?: ImageEntry): void {
+export function openIconDialog(target: Path | null, files?: FileList | File[], existing?: ImageEntry, dialogOpts: IconDialogOptions = {}): void {
   const store = app.store;
   const el = store && target ? elementAt(store.doc, target) : null;
-  if (!store || (target && !el)) return;
+  if (!store || (target && !el)) {
+    dialogOpts.onClose?.(false);
+    return;
+  }
+  let applied = false;
+  /** ライブラリから選び直して開き直すときは、閉じた通知をそちらに引き継ぐ。 */
+  let handedOff = false;
+  // 作った object URL は閉じるときにまとめて解放する（開くたびに残り続けないように。不具合 31）
+  const objectUrls: string[] = [];
+  const objectUrl = (b: Blob) => {
+    const u = URL.createObjectURL(b);
+    objectUrls.push(u);
+    return u;
+  };
+  const reportError = (e: unknown) => {
+    const message = tr('画像を読み込めませんでした：{message}', { message: e instanceof Error ? e.message : String(e) });
+    sourceHint.textContent = message;
+    notify({ kind: 'error', message });
+  };
 
   let source: Source | null = null;
   const opts: IconOptions = { ...defaultOptions(), ...((existing?.edit?.options as Partial<IconOptions>) ?? {}) };
   let name = existing?.id ?? `img_${el?.getAttribute('id') ?? 'icon'}`;
   let dragStart: { x: number; y: number } | null = null;
 
-  const fileInput = h('input', { type: 'file', accept: ACCEPT, hidden: true, onchange: () => fileInput.files?.[0] && void loadFile(fileInput.files[0]) });
+  const fileInput = h('input', { type: 'file', accept: ACCEPT, hidden: true, onchange: () => fileInput.files?.[0] && void loadFile(fileInput.files[0]).catch(reportError) });
   const folderInput = h('input', { type: 'file', hidden: true, multiple: true, webkitdirectory: true, onchange: () => folderInput.files && void bulkImport(Array.from(folderInput.files)) });
   const sources = h(
     'div',
@@ -169,7 +193,11 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const modal = openModal(title, content, {
     wide: true,
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, tr('キャンセル')), okButton],
-    onClose: () => document.removeEventListener('paste', onPaste),
+    onClose: () => {
+      document.removeEventListener('paste', onPaste);
+      for (const u of objectUrls) URL.revokeObjectURL(u);
+      if (!handedOff) dialogOpts.onClose?.(applied);
+    },
   });
 
   // ---- 入力 ----
@@ -178,7 +206,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
     if (file) {
       e.preventDefault();
-      void loadFile(file);
+      void loadFile(file).catch(reportError);
     }
   };
   document.addEventListener('paste', onPaste);
@@ -191,8 +219,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     e.preventDefault();
     drop.classList.remove('over');
     const list = Array.from(e.dataTransfer?.files ?? []);
-    if (list.length > 1) void bulkImport(list);
-    else if (list[0]) void loadFile(list[0]);
+    if (list.length > 1) void bulkImport(list).catch(reportError);
+    else if (list[0]) void loadFile(list[0]).catch(reportError);
   });
   nameInput.addEventListener('input', () => {
     name = nameInput.value.trim();
@@ -242,7 +270,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       const selected = pickIcoEntry(entries, opts.size);
       source = { name: fileName, blob, image: await createImageBitmap(selected.blob), isSvg: false, width: selected.width, height: selected.height, ico: { entries, selected } };
     } else if (blob.type === 'image/svg+xml' || /\.svg$/i.test(fileName)) {
-      const img = await loadImage(URL.createObjectURL(new Blob([buf], { type: 'image/svg+xml' })));
+      const img = await loadImage(objectUrl(new Blob([buf], { type: 'image/svg+xml' })));
       source = { name: fileName, blob, image: img, isSvg: true, width: img.naturalWidth || 256, height: img.naturalHeight || 256 };
     } else {
       // GIF は最初のフレームが使われる
@@ -277,38 +305,43 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
         res.icons.map(async (ic) => {
           const blob = new Blob([Uint8Array.from(atob(ic.base64), (c) => c.charCodeAt(0))], { type: 'image/x-icon' });
           const entries = parseIco(await blob.arrayBuffer());
-          const thumb = entries ? URL.createObjectURL(pickIcoEntry(entries, 32).blob) : '';
-          return h('button', { type: 'button', class: 'exe-icon', title: ic.name, onclick: () => void loadBlob(blob, `${res.fileName}_${ic.name}.ico`) }, h('img', { src: thumb, width: 32, height: 32, alt: '' }));
+          const thumb = entries ? objectUrl(pickIcoEntry(entries, 32).blob) : '';
+          return h('button', { type: 'button', class: 'exe-icon', title: ic.name, onclick: () => void loadBlob(blob, `${res.fileName}_${ic.name}.ico`).catch(reportError) }, h('img', { src: thumb, width: 32, height: 32, alt: '' }));
         }),
       );
       exeList.replaceChildren(h('div', { class: 'muted small' }, tr('{file}：{n} 個', { file: res.fileName, n: res.icons.length })), ...items);
     } catch (e) {
-      sourceHint.textContent = (e as Error).message;
+      reportError(e);
     }
   }
 
   /** 組み込みアイコンを大きめのサイズで取り出し、加工の元にする。 */
   function fromImageMso(): void {
     openCatalog('imageMso', '', (msoName) => {
-      void invoke('excel.imageMso', { names: [msoName], size: 128 }).then((r) => {
-        const b64 = r[msoName];
-        if (!b64) {
-          sourceHint.textContent = tr('{name} を取り出せませんでした', { name: msoName });
-          return;
-        }
-        void loadBlob(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: 'image/png' }), `${msoName}.png`);
-      });
+      void invoke('excel.imageMso', { names: [msoName], size: 128 })
+        .then((r) => {
+          const b64 = r[msoName];
+          if (!b64) {
+            const message = tr('{name} を取り出せませんでした', { name: msoName });
+            sourceHint.textContent = message;
+            notify({ kind: 'warning', message });
+            return;
+          }
+          return loadBlob(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: 'image/png' }), `${msoName}.png`);
+        })
+        .catch(reportError);
     });
   }
 
   /** ライブラリのアイコンを元にする。元画像と設定があれば、それを読み込んで加工し直せる状態で開き直す。 */
   function fromLibrary(): void {
     void openLibrary((d) => {
+      handedOff = true;
       modal.close();
       const { png, source } = detailToBlobs(d);
       const edit = source ? { source, sourceName: d.sourceName ?? `${d.id}.png`, options: d.options ?? {} } : { source: dataUrlToBlob(png), sourceName: `${d.id}.png`, options: {} };
-      openIconDialog(target, undefined, { id: name, dataUrl: png, isNew: true, edit });
-    });
+      openIconDialog(target, undefined, { id: name, dataUrl: png, isNew: true, edit }, dialogOpts);
+    }, (m, k) => notify({ kind: k === 'error' ? 'error' : 'info', message: m }));
   }
 
   /** フォルダの画像を、今の設定でまとめて取り込む（仕様書 §6.3）。 */
@@ -319,6 +352,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       return;
     }
     const entries: ImageEntry[] = [];
+    const failed: string[] = [];
     const used = new Set(store!.images.keys());
     const bulkOpts = { ...opts, crop: null };
     for (const f of images) {
@@ -332,21 +366,28 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
         used.add(unique);
         entries.push({ id: unique, dataUrl: output.toDataURL('image/png'), isNew: true, edit: { source: f, sourceName: f.name, options: { ...bulkOpts } } });
       } catch {
-        // 読めない画像は飛ばす
+        // 読めない画像は飛ばして、最後にまとめて知らせる
+        failed.push(f.name);
       }
     }
-    store!.addImages(entries);
-    modal.close();
+    if (failed.length) notify({ kind: 'warning', message: tr('{n} 個の画像を読み込めませんでした：{list}', { n: failed.length, list: failed.slice(0, 5).join(tr('、')) + (failed.length > 5 ? '…' : '') }) });
+    if (entries.length) {
+      store!.addImages(entries);
+      applied = true;
+      modal.close();
+    }
   }
 
   function selectIco(entry: IcoEntry): void {
     if (!source?.ico) return;
-    void createImageBitmap(entry.blob).then((bmp) => {
-      source = { ...source!, image: bmp, width: entry.width, height: entry.height, ico: { entries: source!.ico!.entries, selected: entry } };
-      opts.crop = null;
-      renderIcoList();
-      render();
-    });
+    void createImageBitmap(entry.blob)
+      .then((bmp) => {
+        source = { ...source!, image: bmp, width: entry.width, height: entry.height, ico: { entries: source!.ico!.entries, selected: entry } };
+        opts.crop = null;
+        renderIcoList();
+        render();
+      })
+      .catch(reportError);
   }
 
   function renderIcoList(): void {
@@ -399,7 +440,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
           sourceContentType: src.blob.type || 'application/octet-stream',
           options: { ...opts },
         }),
-      );
+      ).catch((e: unknown) => notify({ kind: 'error', message: tr('ライブラリに保存できませんでした：{message}', { message: e instanceof Error ? e.message : String(e) }) }));
     }
     const entry: ImageEntry = { id: name, dataUrl: output.toDataURL('image/png'), isNew: true, edit: { source: source.blob, sourceName: source.name, options: { ...opts } } };
     if (!target) {
@@ -414,16 +455,17 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
         return pathOf(t);
       });
     }
+    applied = true;
     modal.close();
   }
 
   // ---- 起動時の読み込み ----
 
   if (existing?.edit) {
-    void loadBlob(existing.edit.source, existing.edit.sourceName, true);
+    void loadBlob(existing.edit.source, existing.edit.sourceName, true).catch(reportError);
   } else {
     const first = files ? Array.from(files)[0] : undefined;
-    if (first) void loadFile(first);
+    if (first) void loadFile(first).catch(reportError);
   }
 }
 

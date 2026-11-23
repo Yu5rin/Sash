@@ -9,10 +9,11 @@ import * as schema from './schema';
 import { canContainEl, defFor, titleOf } from './schema';
 import type { Source } from './store';
 import { t } from './i18n';
+import { toast, type ToastKind as ShellToastKind } from './shell/toast';
 
 // ---- 通知 ----
 
-export type ToastKind = 'info' | 'success' | 'warning' | 'error';
+export type ToastKind = ShellToastKind;
 export interface ToastOptions {
   kind: ToastKind;
   message: string;
@@ -20,37 +21,9 @@ export interface ToastOptions {
   timeout?: number;
 }
 
-// シェルの通知（shell/toast.ts）は別の担当が並行して作っている。まだない環境でもビルドが通るよう、
-// import.meta.glob で「あれば使う」形にする（ファイルがなければ空のオブジェクトになる）。
-const shellToast = Object.values(import.meta.glob<{ toast?: (o: ToastOptions) => void }>('./shell/toast.ts', { eager: true }))[0]?.toast;
-
-let fallbackTimer: number | undefined;
-
-/** 通知を出す。シェルの通知があればそれを使い、なければ #toast に出す。 */
+/** 通知を出す（シェルの通知に渡す）。ビューからはこれを通して、通知の出し方を一か所にまとめる。 */
 export function notify(o: ToastOptions): void {
-  if (shellToast) {
-    shellToast(o);
-    return;
-  }
-  const el = document.getElementById('toast');
-  if (!el) return;
-  el.replaceChildren(document.createTextNode(o.message));
-  if (o.action) {
-    const action = o.action;
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'small toast-action';
-    b.textContent = action.label;
-    b.addEventListener('click', () => {
-      el.hidden = true;
-      action.run();
-    });
-    el.append(' ', b);
-  }
-  el.className = `toast ${o.kind === 'error' ? 'error' : 'info'}`;
-  el.hidden = false;
-  window.clearTimeout(fallbackTimer);
-  fallbackTimer = window.setTimeout(() => (el.hidden = true), o.timeout ?? (o.kind === 'error' ? 8000 : 5000));
+  toast(o);
 }
 
 /** OS のクリップボードに書く。失敗したら通知する（WebView2 ではフォーカスがないと失敗することがある）。 */

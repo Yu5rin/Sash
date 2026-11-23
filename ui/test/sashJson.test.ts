@@ -25,4 +25,19 @@ describe('.sash.json', () => {
     const f = parseSash(JSON.stringify({ format: 'sash-ribbon', formatVersion: 1, parts: [{ version: 'office2010', xml: XML, images: [] }] }));
     expect(partXml(f.parts[0]!)).toBe(XML);
   });
+
+  it('中身の型が違えば理由つきで拒否する', () => {
+    const base = { format: 'sash-ribbon', formatVersion: 1 };
+    expect(() => parseSash(JSON.stringify({ ...base, parts: ['x'] }))).toThrow('1 番目のリボン定義の形式');
+    expect(() => parseSash(JSON.stringify({ ...base, parts: [{ version: 'office2010', xml: 3 }] }))).toThrow('XML');
+    expect(() => parseSash(JSON.stringify({ ...base, parts: [{ version: 'office2010', xml: XML, images: {} }] }))).toThrow('配列ではありません');
+    expect(() => parseSash(JSON.stringify({ ...base, parts: [{ version: 'office2010', xml: XML, images: [{ id: 'a' }] }] }))).toThrow('1 番目の画像');
+    expect(() => parseSash('[]')).toThrow('.sash.json');
+  });
+
+  it('画像の contentType を省略すると PNG とみなす', () => {
+    const f = parseSash(JSON.stringify({ format: 'sash-ribbon', formatVersion: 1, parts: [{ version: 'office2010', xml: XML, images: [{ id: 'a', base64: 'QUJD' }] }] }));
+    expect(f.parts[0]!.images).toEqual([{ id: 'a', contentType: 'image/png', base64: 'QUJD' }]);
+  });
 });
+

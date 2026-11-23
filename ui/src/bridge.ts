@@ -119,6 +119,16 @@ export interface LibraryIconDetail {
   options: Record<string, unknown> | null;
 }
 
+/** バックアップ 1 つ分（backup.list）。 */
+export interface BackupEntry {
+  /** バックアップのファイルのフルパス。 */
+  path: string;
+  /** 作った日時（ISO 8601）。 */
+  createdAt: string;
+  /** バイト数。 */
+  size: number;
+}
+
 export type VbaReadStatus = 'ok' | 'notOpen' | 'trustDenied' | 'locked' | 'noExcel';
 
 export interface VbaModuleDto {
@@ -158,6 +168,9 @@ export interface HostApi {
   'recipes.list': { req: undefined; res: unknown[] };
   'recipes.save': { req: Record<string, unknown>; res: null };
   'recipes.delete': { req: { id: string }; res: null };
+  'backup.list': { req: { path: string }; res: BackupEntry[] };
+  /** バックアップの中身でファイルを置き換える。終わったら UI は開き直す。 */
+  'backup.restore': { req: { path: string; backupPath: string }; res: null };
   'vba.read': { req: { path: string }; res: { status: VbaReadStatus; modules: VbaModuleDto[] } };
   'vba.insert': { req: { path: string; module: string; code: string; documentModule: boolean }; res: boolean };
   'vba.replaceLine': { req: { path: string; module: string; line: number; expected: string; replacement: string }; res: boolean };
@@ -259,6 +272,11 @@ const sampleXml = `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/
 </customUI>
 `;
 
+// ?excel を付けると Excel があるものとして、?slow を付けると保存・反映を遅くして動きを確かめられる
+const mockParams = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
+const mockExcel = mockParams.has('excel');
+const mockDelay = (ms: number) => new Promise((done) => setTimeout(done, mockParams.has('slow') ? ms : 0));
+
 const mock = {
   settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '' } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
@@ -267,11 +285,11 @@ const mock = {
       case 'app.ready':
         return r({ initialFile: null });
       case 'app.info':
-        return r({ version: 'dev', excelInstalled: false });
+        return r({ version: 'dev', excelInstalled: mockExcel });
       case 'file.open':
         return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }] });
       case 'file.save':
-        return r({ backup: t('(ブラウザ実行中のため保存しません)') });
+        return mockDelay(1500).then(() => r({ backup: t('(ブラウザ実行中のため保存しません)') }));
       case 'file.exportText': {
         // ブラウザ実行中はダウンロードで代用する
         const p = payload as { defaultName: string; content: string };
@@ -282,16 +300,16 @@ const mock = {
         return r(p.defaultName);
       }
       case 'file.recent':
-        return r([{ path: 'C:\\sample\\集計ツール.xlam', exists: true }]);
+        return r([{ path: 'C:\\sample\\集計ツール.xlam', exists: true }, { path: 'C:\\Users\\you\\Desktop\\古いツール.xlsm', exists: false }]);
       case 'settings.get':
         return r(this.settings);
       case 'settings.set':
         Object.assign(this.settings, payload);
         return r(this.settings);
       case 'excel.openWorkbooks':
-        return r([]);
+        return r(mockExcel ? [{ fullPath: 'C:\\sample\\集計ツール.xlam', isAddIn: true, isDirty: false }, { fullPath: 'C:\\Users\\you\\Documents\\月次レポート.xlsm', isAddIn: false, isDirty: true }] : []);
       case 'excel.apply':
-        return r({ status: 'written', message: t('ブラウザ実行中のため反映しません') });
+        return mockDelay(1500).then(() => r({ status: 'written', message: t('ブラウザ実行中のため反映しません') }));
       case 'excel.imageMso':
       case 'excel.labels':
         return r({});
@@ -305,6 +323,15 @@ const mock = {
         return r({ root: t('(ブラウザ実行中)'), icons: [] });
       case 'vba.read':
         return r({ status: 'noExcel', modules: [] });
+      case 'backup.list': {
+        // ブラウザ実行中の見た目の確認用。新しいものが先とは限らないので、並べ替えは UI 側で行う
+        const day = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        return r([
+          { path: 'C:\\Users\\you\\AppData\\Roaming\\Sash\\backups\\集計ツール_20261120.xlam', createdAt: new Date(now - 3 * day).toISOString(), size: 48213 },
+          { path: 'C:\\Users\\you\\AppData\\Roaming\\Sash\\backups\\集計ツール_20261123.xlam', createdAt: new Date(now - 60 * 60 * 1000).toISOString(), size: 49102 },
+        ]);
+      }
       default:
         return r(null);
     }
