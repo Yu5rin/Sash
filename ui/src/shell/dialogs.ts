@@ -63,9 +63,15 @@ export function openBackupDialog(): Promise<void> {
   });
 }
 
-/** ショートカットのうち、コマンドにならないもの（ペインの移動やメニューの操作）。 */
+/** ショートカットのうち、コマンドにならないもの（キャンバス・ツリーでの操作、ペインの移動、メニューの操作）。 */
 function extraShortcuts(): { group: string; title: string; keys: string }[] {
   return [
+    // キャンバスとツリーが自分で受けるキー（メニューのコマンドにはないので、ここで載せる）
+    { group: t('編集'), title: t('上へ移動'), keys: 'Alt+↑' },
+    { group: t('編集'), title: t('下へ移動'), keys: 'Alt+↓' },
+    { group: t('編集'), title: t('ラベルを編集'), keys: 'F2' },
+    { group: t('編集'), title: t('インスペクタでラベルを編集'), keys: 'Enter' },
+    { group: t('編集'), title: t('右クリックメニューを開く'), keys: 'Shift+F10' },
     { group: t('表示'), title: t('次のペインへ移る'), keys: 'F6' },
     { group: t('表示'), title: t('前のペインへ移る'), keys: 'Shift+F6' },
     { group: t('メニュー'), title: t('メニューバーへ移る'), keys: 'Alt / F10' },

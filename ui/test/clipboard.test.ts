@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { app } from '../src/app';
 import {
   allowedIndex, canMove, childTags, copy, cut, duplicate, findInsertSpot, moveSelected, paste, removeSelected, renameDuplicateIds, siblingTags,
 } from '../src/clipboard';
 import { elementAt, parseXml, pathOf, usedIds } from '../src/model';
 import { minimalEdit } from '../src/views/textDiff';
+import { clearToasts } from '../src/shell/toast';
 
 const NS = 'http://schemas.microsoft.com/office/2009/07/customui';
 const XML = `<customUI xmlns="${NS}">
@@ -39,6 +40,8 @@ function select(selector: string): void {
 function ids(): string[] {
   return Array.from(app.store!.doc.querySelectorAll('group > *')).map((e) => e.getAttribute('id') ?? e.localName);
 }
+
+afterEach(() => clearToasts());
 
 beforeEach(() => {
   app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
@@ -115,6 +118,31 @@ describe('複製・削除・移動', () => {
   it('tabs のように1つしか置けないものは複製しない', () => {
     select('tabs');
     expect(duplicate('canvas')).toBe(false);
+  });
+
+  it('最後のコントロールを複製しても、ダイアログ起動ツールの前に入る', () => {
+    select('[id="b2"]');
+    expect(duplicate('canvas')).toBe(true);
+    expect(ids()).toEqual(['b1', 'b2', 'b3', 'dialogBoxLauncher']);
+  });
+
+  it('削除の「元に戻す」付きの通知は、そのあとに別の編集や元に戻すがあったら閉じる', () => {
+    const undoToast = () => Array.from(document.querySelectorAll('.toast')).find((e) => e.querySelector('.toast-action')?.textContent === '元に戻す');
+    select('[id="b1"]');
+    expect(removeSelected('canvas')).toBe(true);
+    expect(undoToast()).toBeDefined();
+    // 選択が変わっただけなら残す
+    select('[id="b2"]');
+    expect(undoToast()).toBeDefined();
+    // 別の編集をしたら、押しても削除は取り消されないので閉じる
+    app.store!.edit('inspector', (d) => { d.querySelector('[id="b2"]')!.setAttribute('label', 'X'); }, 'test');
+    expect(undoToast()).toBeUndefined();
+
+    select('[id="b2"]');
+    expect(removeSelected('canvas')).toBe(true);
+    expect(undoToast()).toBeDefined();
+    app.store!.undo();
+    expect(undoToast()).toBeUndefined();
   });
 
   it('削除すると次の兄弟を選ぶ', () => {

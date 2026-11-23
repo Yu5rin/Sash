@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { app } from '../src/app';
 import { pathOf } from '../src/model';
-import { mountInspector } from '../src/views/inspector';
+import { flushPendingEdits, mountInspector } from '../src/views/inspector';
 import { mountTree } from '../src/views/tree';
 
 const NS = 'http://schemas.microsoft.com/office/2009/07/customui';
@@ -136,6 +136,53 @@ describe('インスペクタ', () => {
     const el2 = app.store!.doc.querySelector('[id="b1"]')!;
     expect(el2.getAttribute('label')).toBe('B1');
     expect(el2.hasAttribute('getLabel')).toBe(false);
+  });
+});
+
+describe('インスペクタ（確定と取り消し）', () => {
+  it('入力したまま保存などに進むときは、flushPendingEdits で入力中の値を確定する', () => {
+    select('[id="b1"]');
+    const label = field('label');
+    label.focus();
+    label.value = 'Typed';
+    flushPendingEdits();
+    expect(app.store!.doc.querySelector('[id="b1"]')!.getAttribute('label')).toBe('Typed');
+    expect(app.dirty).toBe(true);
+  });
+
+  it('フォーカスが欄にないとき・値が変わっていないときは何もしない', () => {
+    select('[id="b1"]');
+    const before = app.store!.text;
+    flushPendingEdits();
+    field('label').focus();
+    flushPendingEdits();
+    expect(app.store!.text).toBe(before);
+    expect(app.store!.canUndo).toBe(false);
+  });
+
+  it('編集を断られたら（XML の構文エラー中）、欄を元の値に戻す', () => {
+    select('[id="b1"]');
+    // 構文エラーにする（インスペクタは最後に読めた文書を出したまま）
+    app.store!.setText(app.store!.text.replace('</customUI>', '</customU'));
+    expect(app.store!.syncError).not.toBeNull();
+    const label = field('label');
+    label.value = 'Refused';
+    label.dispatchEvent(new Event('change'));
+    expect(app.store!.doc.querySelector('[id="b1"]')!.getAttribute('label')).toBe('B1');
+    expect(field('label').value).toBe('B1');
+    expect(field('label').dataset['orig']).toBe('B1');
+  });
+
+  it('真偽値を矢印キーで選び直すと、選んだ項目にフォーカスが移る', async () => {
+    select('[id="b1"]');
+    const group = () => insp.querySelector<HTMLElement>('[data-attr="visible"]')!;
+    const active = () => group().querySelector<HTMLButtonElement>('button.active')!;
+    active().focus();
+    active().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(app.store!.doc.querySelector('[id="b1"]')!.getAttribute('visible')).toBe('true');
+    expect(active().textContent).toBe('はい');
+    expect(document.activeElement).toBe(active());
   });
 });
 

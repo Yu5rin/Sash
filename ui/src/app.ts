@@ -33,6 +33,10 @@ class App {
     this.listeners.get(event)!.add(listener);
   }
 
+  off(event: AppEvent, listener: (detail?: Change) => void): void {
+    this.listeners.get(event)?.delete(listener);
+  }
+
   emit(event: AppEvent, detail?: Change): void {
     for (const l of this.listeners.get(event) ?? []) l(detail);
   }

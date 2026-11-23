@@ -68,7 +68,9 @@ public sealed record UpdateSource(UpdateSourceKind Kind, string Location)
             }
 
             var builder = new UriBuilder(uri) { Path = uri.AbsolutePath.TrimEnd('/') + "/" + ManifestFileName };
-            return new UpdateSource(UpdateSourceKind.Manifest, builder.Uri.ToString());
+            // ToString() は %20 などをほどいた表示用の文字列を返すので、空白や日本語を含むパスで別の URL になってしまう。
+            // 要求に使う、エスケープしたままの AbsoluteUri を使う
+            return new UpdateSource(UpdateSourceKind.Manifest, builder.Uri.AbsoluteUri);
         }
 
         // フォルダは完全なパス（C:\… か \\server\share\…）だけを受け付ける。

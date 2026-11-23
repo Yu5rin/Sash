@@ -186,4 +186,84 @@ public class RibbonPackageTests
     [Fact]
     public void ないファイルには保存しない() =>
         Assert.Throws<FileNotFoundException>(() => RibbonPackage.SaveCustomUI(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".xlsm"), CustomUIVersion.Office2010, "<customUI/>"));
+
+    // ---- 置き換えに対応していない場所（NAS・Samba・WebDAV）への保存 ----
+
+    [Theory]
+    [InlineData(unchecked((int)0x80070032))] // ERROR_NOT_SUPPORTED
+    [InlineData(unchecked((int)0x80070001))] // ERROR_INVALID_FUNCTION
+    [InlineData(unchecked((int)0x80131620))] // HResult を持たない IOException の既定値（COR_E_IO）
+    public void 置き換えがIOExceptionで失敗したら上書きで書く(int hresult)
+    {
+        var dir = Directory.CreateTempSubdirectory("sash-replace-");
+        try
+        {
+            var temp = Path.Combine(dir.FullName, "new.tmp");
+            var target = Path.Combine(dir.FullName, "book.xlsm");
+            File.WriteAllText(temp, "new");
+            File.WriteAllText(target, "old");
+
+            RibbonPackage.ReplaceFile(temp, target, (_, _) => throw new IOException("not supported", hresult));
+
+            Assert.Equal("new", File.ReadAllText(target));
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0x80070020))] // ERROR_SHARING_VIOLATION
+    [InlineData(unchecked((int)0x80070021))] // ERROR_LOCK_VIOLATION
+    public void 共有違反とロック違反は上書きに切り替えずにそのまま投げる(int hresult)
+    {
+        var dir = Directory.CreateTempSubdirectory("sash-replace-");
+        try
+        {
+            var temp = Path.Combine(dir.FullName, "new.tmp");
+            var target = Path.Combine(dir.FullName, "book.xlsm");
+            File.WriteAllText(temp, "new");
+            File.WriteAllText(target, "old");
+
+            var ex = Assert.Throws<IOException>(() => RibbonPackage.ReplaceFile(temp, target, (_, _) => throw new IOException("locked", hresult)));
+
+            // 呼び出し側（Excel への反映の RetryOnLock）が待ってやり直せるよう、元の HResult のまま届く
+            Assert.Equal(hresult, ex.HResult);
+            Assert.Equal("old", File.ReadAllText(target));
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ファイルがないときは上書きに切り替えない()
+    {
+        Assert.False(RibbonPackage.ShouldFallBackToCopy(new FileNotFoundException("x")));
+        Assert.False(RibbonPackage.ShouldFallBackToCopy(new DirectoryNotFoundException("x")));
+        Assert.True(RibbonPackage.ShouldFallBackToCopy(new IOException("x")));
+    }
+
+    [Fact]
+    public void 置き換えに対応していない環境では上書きで書く()
+    {
+        var dir = Directory.CreateTempSubdirectory("sash-replace-");
+        try
+        {
+            var temp = Path.Combine(dir.FullName, "new.tmp");
+            var target = Path.Combine(dir.FullName, "book.xlsm");
+            File.WriteAllText(temp, "new");
+            File.WriteAllText(target, "old");
+
+            RibbonPackage.ReplaceFile(temp, target, (_, _) => throw new PlatformNotSupportedException());
+
+            Assert.Equal("new", File.ReadAllText(target));
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
 }

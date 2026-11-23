@@ -24,4 +24,7 @@ export const en: Readonly<Record<string, string>> = {
   'ログのフォルダを開く': 'Open log folder',
   'Sash を {from} から {to} に更新しました': 'Sash was updated from {from} to {to}',
   '更新を確認': 'Check for updates',
+  'ラベルを編集': 'Edit label',
+  'インスペクタでラベルを編集': 'Edit label in the Inspector',
+  '右クリックメニューを開く': 'Open the context menu',
 };

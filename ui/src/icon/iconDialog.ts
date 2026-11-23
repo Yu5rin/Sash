@@ -13,7 +13,7 @@ import { h } from '../dom';
 import { elementAt, pathOf, setAttr, type Path } from '../model';
 import { ID_PATTERN } from '../schema';
 import { t as tr } from '../i18n';
-import type { ImageEntry } from '../store';
+import { reportRefusal, type ImageEntry } from '../store';
 import {
   adjustBrightness, cornerColor, fitRect, keyOutColor, monochrome, opaqueBounds, parseHex, parseIco, pickIcoEntry,
   replaceColor, shapeMask, sharpen, squareCrop, toHex, type IcoEntry, type Rgb,
@@ -92,6 +92,13 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const store = app.store;
   const el = store && target ? elementAt(store.doc, target) : null;
   if (!store || (target && !el)) {
+    dialogOpts.onClose?.(false);
+    return;
+  }
+  // XML の構文エラー中は、コントロールに設定できない（確定で断られる）。画像を作り込んでから断られないよう、開く前に断る。
+  // 一覧から開いたとき（target なし）は画像だけを作り直すので、そのまま開く
+  if (target && store.syncError) {
+    reportRefusal(tr('XMLに構文エラーがあるため、この操作はできません。先にXMLエディタでエラーを直してください'));
     dialogOpts.onClose?.(false);
     return;
   }
@@ -428,6 +435,22 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
 
   function confirm(): void {
     if (!source || !validateName()) return;
+    const entry: ImageEntry = { id: name, dataUrl: output.toDataURL('image/png'), isNew: true, edit: { source: source.blob, sourceName: source.name, options: { ...opts } } };
+    if (!target) {
+      store!.addImage(entry);
+    } else {
+      const ok = store!.addImageAndApply(entry, (doc) => {
+        const t = elementAt(doc, target);
+        if (!t) return undefined;
+        setAttr(t, 'imageMso', null);
+        setAttr(t, 'getImage', null);
+        setAttr(t, 'image', name);
+        return pathOf(t);
+      });
+      // 断られたとき（XML の構文エラー中など）は、作った画像を捨てないようダイアログを開いたままにする。
+      // ライブラリにも保存しない（ブックには入っていないのに、入ったように見えてしまうため）
+      if (!ok) return;
+    }
     if (saveToLibrary.checked) {
       const src = source;
       void src.blob.arrayBuffer().then((buf) =>
@@ -441,19 +464,6 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
           options: { ...opts },
         }),
       ).catch((e: unknown) => notify({ kind: 'error', message: tr('ライブラリに保存できませんでした：{message}', { message: e instanceof Error ? e.message : String(e) }) }));
-    }
-    const entry: ImageEntry = { id: name, dataUrl: output.toDataURL('image/png'), isNew: true, edit: { source: source.blob, sourceName: source.name, options: { ...opts } } };
-    if (!target) {
-      store!.addImage(entry);
-    } else {
-      store!.addImageAndApply(entry, (doc) => {
-        const t = elementAt(doc, target);
-        if (!t) return undefined;
-        setAttr(t, 'imageMso', null);
-        setAttr(t, 'getImage', null);
-        setAttr(t, 'image', name);
-        return pathOf(t);
-      });
     }
     applied = true;
     modal.close();

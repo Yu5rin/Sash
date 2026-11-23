@@ -9,7 +9,7 @@ import { ask } from '../dialogs/modal';
 import { t } from '../i18n';
 import { exportSash, parseSash, partXml } from '../sashJson';
 import type { PartStore, SaveSnapshot } from '../store';
-import { tabIdToActivate } from '../views/canvas';
+import { focus as focusCanvas, tabIdToActivate } from '../views/canvas';
 import { imagesToSend } from './compat';
 import { splitPath } from './text';
 import { toast } from './toast';
@@ -43,8 +43,21 @@ function fileNameOf(path: string): string {
   return splitPath(path).name;
 }
 
+/** 入力中でまだ確定していない欄を確定する処理（インスペクタ）。main.ts で登録する。 */
+let flushPendingEdits: () => void = () => undefined;
+
+/**
+ * 書き込む前・閉じる前に、入力中の欄を確定させる処理を登録する。
+ * インスペクタの欄は change か Enter で確定するので、入力したまま Ctrl+S / F5 / × を押すと、
+ * その値が書き込む内容にも「未保存の変更」にも入らない。ビューを直接読み込まずに済むよう、外から渡す。
+ */
+export function setPendingEditFlusher(fn: () => void): void {
+  flushPendingEdits = fn;
+}
+
 /** 未保存の変更を捨ててよいか。保存を選んだら保存し、成功したら true。 */
 export async function confirmDiscard(): Promise<boolean> {
+  flushPendingEdits();
   if (!app.dirty || !app.session) return true;
   if (refuseWhileBusy()) return false;
   const r = await ask(t('未保存の変更があります'), t('「{file}」への変更を保存しますか？保存しないと、変更は失われます。', { file: fileNameOf(app.session.path) }), [
@@ -75,6 +88,9 @@ export async function openFile(path?: string, opts: { force?: boolean } = {}): P
   if (!doc) return false;
   if (!path && !opts.force && !(await confirmDiscard())) return false;
   app.open(doc);
+  // 開いたらキャンバスにフォーカスを移す（ホームのボタンやファイルの選択にフォーカスが残ったままだと、
+  // 矢印キーで要素を選べず、まずキャンバスをクリックしなければならないため）
+  focusCanvas();
   const s = app.session!;
   if (s.created) toast({ kind: 'info', message: t('このブックにはリボン定義がないので、customUI14 を新しく作りました') });
   else if (s.parts.size >= 2) toast({ kind: 'info', message: t('customUI と customUI14 の両方があります。2010以降のExcelは customUI14 を優先します') });
@@ -90,14 +106,34 @@ export async function closeFile(): Promise<boolean> {
   return true;
 }
 
-/** Sash を終わる。 */
-export async function quit(): Promise<void> {
+let quitting = false;
+
+/**
+ * Sash を終わる。閉じる手続きに進んだら true、やめた（キャンセル・保存の失敗・実行中）なら false。
+ * 確認の途中でもう一度呼ばれたら（× を続けて押したなど）、同じ確認を二重に出さずに false を返す。
+ */
+export async function quit(): Promise<boolean> {
+  if (quitting) return false;
   if (busy !== null) {
     refuseWhileBusy();
-    return;
+    return false;
   }
-  if (!(await confirmDiscard())) return;
-  await invoke('app.close').catch((e: Error) => toast({ kind: 'error', message: e.message }));
+  quitting = true;
+  try {
+    if (!(await confirmDiscard())) return false;
+    await invoke('app.close');
+    return true;
+  } catch (e) {
+    toast({ kind: 'error', message: (e as Error).message });
+    return false;
+  } finally {
+    quitting = false;
+  }
+}
+
+/** 終わるのを確かめている途中か（ウィンドウの × で、確認の答えを待っている間）。 */
+export function isQuitting(): boolean {
+  return quitting;
 }
 
 interface Prepared {
@@ -141,6 +177,7 @@ async function confirmErrors(action: 'save' | 'apply'): Promise<boolean> {
 }
 
 export async function save(): Promise<boolean> {
+  flushPendingEdits();
   const s = app.session;
   if (!s) return false;
   if (refuseWhileBusy()) return false;
@@ -168,6 +205,7 @@ export async function save(): Promise<boolean> {
 let hintShown = false;
 
 export async function applyToExcel(): Promise<void> {
+  flushPendingEdits();
   const s = app.session;
   if (!s) return;
   if (refuseWhileBusy()) return;
@@ -236,6 +274,7 @@ export async function restoreBackup(backupPath: string): Promise<boolean> {
 // ---- .sash.json の書き出し・読み込み ----
 
 export async function exportSashFile(): Promise<void> {
+  flushPendingEdits();
   const s = app.session;
   if (!s) return;
   const name = fileNameOf(s.path);

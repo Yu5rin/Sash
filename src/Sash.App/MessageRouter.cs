@@ -564,7 +564,16 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             ThrowIfOpenElsewhere(target, L("Excelでこのブックが開かれているため戻せません。Excelでブックを閉じてからやり直してください。", "This workbook is open in Excel and cannot be restored. Close it in Excel and try again."));
         }
 
-        return new { backup = service.Restore(req.BackupPath, target) };
+        try
+        {
+            return new { backup = service.Restore(req.BackupPath, target) };
+        }
+        catch (IOException ex) when (IsSharingViolation(ex))
+        {
+            // 共通の文言は「反映（F5）を使う」を勧めるが、復元は反映では代われないので、閉じてからのやり直しだけを案内する
+            throw new UserFacingException(L("ブックかバックアップが別のプログラム（Excelなど）で開かれているため、戻せません。開いているプログラムでファイルを閉じてからやり直してください。",
+                "The workbook or the backup is open in another program (such as Excel) and cannot be restored. Close the file in that program and try again."), ex);
+        }
     }
 
     private ExcelService RequireExcel() =>

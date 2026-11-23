@@ -74,6 +74,12 @@ public class UpdateSourceTests
         Assert.Equal(text, s.Location);
     }
 
+    [Theory]
+    [InlineData("https://intra.example.com/社内 ツール/sash/", "https://intra.example.com/%E7%A4%BE%E5%86%85%20%E3%83%84%E3%83%BC%E3%83%AB/sash/latest.json")]
+    [InlineData("https://intra.example.com/my%20tools/", "https://intra.example.com/my%20tools/latest.json")]
+    public void フォルダのURLに足すlatest_jsonはエスケープしたままのURLにする(string text, string expected) =>
+        Assert.Equal(expected, UpdateSource.Parse(text).Location);
+
     [Fact]
     public void クエリの付いたURLもパスで判断する()
     {

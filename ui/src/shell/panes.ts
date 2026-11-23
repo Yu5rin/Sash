@@ -8,9 +8,10 @@ import { focus as focusXml } from '../views/xmlEditor';
 import { focus as focusBottom } from '../views/bottom';
 import type { LayoutHandle, PaneKey } from '../layout';
 
-export type PaneId = 'canvas' | 'tree' | 'xml' | 'inspector' | 'bottom';
+export type PaneId = 'canvas' | 'palette' | 'tree' | 'xml' | 'inspector' | 'bottom';
 
-export const PANE_ORDER: readonly PaneId[] = ['canvas', 'tree', 'xml', 'inspector', 'bottom'];
+/** F6 で回る順。パレットも入れる（キーボードだけで部品を探して追加できるように）。 */
+export const PANE_ORDER: readonly PaneId[] = ['canvas', 'palette', 'tree', 'xml', 'inspector', 'bottom'];
 
 let layout: LayoutHandle | null = null;
 
@@ -19,14 +20,19 @@ export function initPanes(opts: { layout: LayoutHandle }): void {
 }
 
 /** ペインがどの仕切りで畳まれるか。 */
-const COLLAPSE_KEY: Readonly<Record<PaneId, PaneKey>> = { canvas: 'top', tree: 'left', xml: 'top', inspector: 'right', bottom: 'bottom' };
+const COLLAPSE_KEY: Readonly<Record<PaneId, PaneKey>> = { canvas: 'top', palette: 'left', tree: 'left', xml: 'top', inspector: 'right', bottom: 'bottom' };
 
 function paneElement(id: PaneId): HTMLElement | null {
   return document.querySelector<HTMLElement>(`[data-pane="${id}"]`);
 }
 
 /** ビューが出している focus()。選択中の項目など、ビューごとに適した場所へ移すため。 */
-const VIEW_FOCUS: Readonly<Record<PaneId, (() => void) | null>> = { canvas: focusCanvas, tree: focusTree, xml: focusXml, inspector: focusInspector, bottom: focusBottom };
+const VIEW_FOCUS: Readonly<Record<PaneId, (() => void) | null>> = { canvas: focusCanvas, palette: focusPalette, tree: focusTree, xml: focusXml, inspector: focusInspector, bottom: focusBottom };
+
+/** パレットは検索欄に移る（そこから ↓ で部品に移れる）。 */
+function focusPalette(): void {
+  document.querySelector<HTMLElement>('#palette input')?.focus();
+}
 
 /** 指定したペインにフォーカスする。畳んでいれば戻してから移る。 */
 export function focusPane(id: PaneId): void {

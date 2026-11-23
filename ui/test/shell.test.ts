@@ -98,4 +98,16 @@ describe('通知', () => {
     expect(Array.from(document.querySelectorAll('.toast')).map((e) => e.querySelector('.toast-message')!.textContent)).toEqual(['e']);
     vi.useRealTimers();
   });
+
+  it('エラーが 3 件残っていても、新しい通知はすぐには消えず、いちばん古いエラーが閉じる', () => {
+    const texts = () => Array.from(document.querySelectorAll('.toast')).map((e) => e.querySelector('.toast-message')!.textContent);
+    toast({ kind: 'error', message: 'e1' });
+    toast({ kind: 'error', message: 'e2' });
+    toast({ kind: 'error', message: 'e3' });
+    toast({ kind: 'success', message: '保存しました' });
+    expect(texts()).toEqual(['e2', 'e3', '保存しました']);
+    toast({ kind: 'error', message: 'e4' });
+    // 古いほうのエラーより、エラーでない通知を先に閉じる
+    expect(texts()).toEqual(['e2', 'e3', 'e4']);
+  });
 });

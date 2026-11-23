@@ -80,7 +80,9 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
       'aria-expanded': 'false',
       tabIndex: i === 0 ? 0 : -1,
       dataset: { menu: m.id },
-    }, ...labelWithMnemonic(m.label, m.mnemonic)),
+    // ラベルを 1 つの span にまとめる。button の gap（6px）が、下線を引いた文字の前後にも空いて
+    // 「F ile」のように割れて見えてしまうため
+    }, h('span', { class: 'menubar-label' }, ...labelWithMnemonic(m.label, m.mnemonic))),
   );
   host.replaceChildren(...buttons);
 
@@ -408,7 +410,12 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
     if (host.contains(target) || levels.some((l) => l.el.contains(target))) return;
     closeAll(false);
   }, true);
+  /** Alt だけが押されて離されたか（離したときにメニューバーへ移る）。 */
+  let altAlone = false;
   window.addEventListener('blur', () => {
+    // Alt+Tab で離れたときは Alt の keyup がこちらに届かないか、戻ってきたときに届く。
+    // 単独の Alt とみなしてメニューバーへ移らないよう、ここで忘れる
+    altAlone = false;
     if (openIndex !== null) closeAll(false);
   });
   window.addEventListener('resize', () => {
@@ -421,7 +428,6 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
   });
 
   // Alt の単独押し・F10 でメニューバーへ。Alt+文字で直接開く
-  let altAlone = false;
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Alt') {
       altAlone = !e.repeat && !e.ctrlKey && !e.shiftKey && !e.metaKey;

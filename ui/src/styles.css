@@ -471,7 +471,9 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .settings label { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: var(--sp-2); }
 .settings h3 { margin: var(--sp-2) 0 0; font-size: var(--fs-xs); color: var(--text-subtle); font-weight: 600; }
 .settings-group { display: flex; flex-direction: column; gap: var(--sp-2); }
-.settings-group label { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: var(--sp-2); }
+/* 直下の label だけにする。中の .setting（settingRow）の label まで 2 列の格子にすると、
+   チェックボックスと文言が 140px 離れて並んでしまう（設定の「更新」） */
+.settings-group > label { display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: var(--sp-2); }
 
 /* ---- 一覧のダイアログ（バックアップ・ショートカット・バージョン情報） ---- */
 

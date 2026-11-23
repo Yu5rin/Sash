@@ -27,14 +27,14 @@ import { mountBottom, showBottomTab } from './views/bottom';
 import { getCanvasMode, mountCanvas, setCanvasMode, type CanvasMode } from './views/canvas';
 import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
-import { mountInspector } from './views/inspector';
+import { flushPendingEdits, mountInspector } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
 import { mountTree } from './views/tree';
 import { mountXmlEditor, revealInXml } from './views/xmlEditor';
 import { probeInsert, setEditRefusedHandler } from './shell/compat';
 import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
 import { inTextField, runEditCommand } from './shell/editCommands';
-import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, onBusyChange, openFile, quit, save } from './shell/fileOps';
+import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
 import { mountMenubar, type MenuDef, type MenuItemDef } from './shell/menubar';
 import { cyclePane, focusPane, initPanes, toggleBottom } from './shell/panes';
@@ -183,12 +183,21 @@ function commands(): AppCommand[] {
     { id: 'tools.settings', group: G.tools, title: t('設定…'), keywords: 'settings options', run: () => void openSettings() },
     { id: 'tools.language', group: G.tools, title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
 
-    { id: 'help.shortcuts', group: G.help, title: t('キーボードショートカット'), keywords: 'keyboard shortcuts keys', run: () => openShortcutsDialog(commands()) },
+    { id: 'help.shortcuts', group: G.help, title: t('キーボードショートカット'), keywords: 'keyboard shortcuts keys', run: () => openShortcutsDialog(shortcutCommands()) },
     { id: 'help.update', group: G.help, title: t('更新を確認…'), keywords: 'update version', run: () => void checkForUpdates(true) },
     { id: 'help.releases', group: G.help, title: t('リリースノートを開く'), keywords: 'release notes', run: () => openUrl(RELEASES_URL) },
     { id: 'help.github', group: G.help, title: t('GitHub のページを開く'), keywords: 'github repository', run: () => openUrl(REPO_URL) },
     { id: 'help.about', group: G.help, title: t('バージョン情報'), keywords: 'about version license', run: openAboutDialog },
   ];
+}
+
+/**
+ * ショートカット一覧に出すコマンド。元に戻す・やり直しは、メニューでは「元に戻す：XMLの編集」のように
+ * 取り消す操作の名前を付けるが、一覧ではキーの説明なので、操作の名前だけにする。
+ */
+function shortcutCommands(): Command[] {
+  const fixed: Readonly<Record<string, string>> = { 'edit.undo': t('元に戻す'), 'edit.redo': t('やり直し') };
+  return commands().map((c) => (fixed[c.id] ? { ...c, title: fixed[c.id]! } : c));
 }
 
 function openUrl(url: string): void {
@@ -226,12 +235,16 @@ async function recentItems(): Promise<MenuItemDef[]> {
     SEP,
     {
       label: t('一覧から消す'),
-      items: () => recent.map((r): MenuItemDef => ({ label: splitPath(r.path).name, hint: r.path, run: () => void invoke('file.removeRecent', { path: r.path }) })),
+      // ホームの「最近使ったファイル」にも同じ一覧が出ているので、消したら取り直す
+      items: () => recent.map((r): MenuItemDef => ({ label: splitPath(r.path).name, hint: r.path, run: () => void invoke('file.removeRecent', { path: r.path }).then(() => home.refresh()) })),
     },
     {
       label: t('見つからないファイルを一覧から消す'),
       enabled: missing.length > 0,
-      run: () => void Promise.all(missing.map((r) => invoke('file.removeRecent', { path: r.path }))).then(() => toast({ kind: 'success', message: t('{n} 件を一覧から消しました', { n: missing.length }) })),
+      run: () => void Promise.all(missing.map((r) => invoke('file.removeRecent', { path: r.path }))).then(() => {
+        home.refresh();
+        toast({ kind: 'success', message: t('{n} 件を一覧から消しました', { n: missing.length }) });
+      }),
     },
   ];
 }
@@ -470,6 +483,8 @@ mountCanvas($('canvas'), { onImageDrop: (files, target) => {
 } });
 const xmlHandle = mountXmlEditor($('xml-editor'), $('xml-status'), { undo, redo });
 setEditorThemeHandler((dark) => xmlHandle.setTheme(dark));
+// 保存・反映・閉じる前に、インスペクタで入力中の値を確定させる
+setPendingEditFlusher(flushPendingEdits);
 mountInspector($('inspector'), {
   pickIdMso: (cur, apply) => {
     const tag = app.store?.selectedElement?.localName ?? '';
@@ -508,17 +523,37 @@ $<HTMLSelectElement>('part-switch').addEventListener('change', (e) => app.switch
 
 // ---- ショートカット ----
 
+/** 押されたキーに当たるコマンド。 */
+function commandForKey(e: KeyboardEvent): AppCommand | undefined {
+  return commands().find((c) => [c.shortcut, ...(c.altKeys ?? [])].some((k) => !!k && matchShortcut(e, k)));
+}
+
+/**
+ * 入力欄の中でも受けるコマンド（保存・反映・ペインの移動など）は、捕捉の段階（capture）で先に受ける。
+ * XML エディタ（Monaco）は自分のキー割り当て（Ctrl+K で始まる組み合わせ、F6 など）を先に処理して
+ * 既定の動作を止めるので、バブリングの段階で待っていると届かない・二重に動くことがあるため。
+ */
+window.addEventListener('keydown', (e) => {
+  if (isModalOpen() || menubar.isOpen() || e.isComposing) return;
+  const c = commandForKey(e);
+  if (!c?.inText) return;
+  e.preventDefault();
+  // Monaco などに渡ると、同じキーで別の動作（Ctrl+K の続きを待つなど）が始まってしまうので止める
+  e.stopPropagation();
+  if (c.enabled?.() ?? true) c.run();
+}, true);
+
 window.addEventListener('keydown', (e) => {
   // ダイアログ・コマンドパレット・メニューが開いている間は、それぞれのキー操作に任せる
   if (isModalOpen() || menubar.isOpen() || e.defaultPrevented || e.isComposing) return;
-  for (const c of commands()) {
-    const keys = [c.shortcut, ...(c.altKeys ?? [])].filter((k): k is string => !!k);
-    if (!keys.some((k) => matchShortcut(e, k))) continue;
-    if (!c.inText && inTextField(e.target)) return;
-    e.preventDefault();
-    if (c.enabled?.() ?? true) c.run();
-    return;
-  }
+  const c = commandForKey(e);
+  if (!c || c.inText) return;
+  if (inTextField(e.target)) return;
+  // メニューバー・ツールバー・右クリックメニューにフォーカスがあるときの Delete などは、
+  // 選択中の要素への操作として扱わない（右クリックメニューを開いたまま要素が消え、古いメニューが残ってしまう）
+  if (e.target instanceof Element && e.target.closest('#menubar, #toolbar, .ctx-menu, .menu-popup')) return;
+  e.preventDefault();
+  if (c.enabled?.() ?? true) c.run();
 });
 
 // ---- ファイルのドロップ ----
@@ -545,7 +580,14 @@ window.addEventListener('drop', (e) => {
 
 onHostEvent((e) => {
   if (e.event === 'fileDropped') void openFile(e.path);
-  if (e.event === 'closeRequested') void quit();
+  if (e.event === 'closeRequested') {
+    // 確認の途中で × がもう一度押されたら、同じ確認を二重に出さない
+    if (isQuitting()) return;
+    // 取りやめたら、ホストに知らせて次の × を受け付けてもらう（知らせないと、しばらく × が効かない）
+    void quit().then((closing) => {
+      if (!closing) void invoke('app.closeCancelled').catch(() => undefined);
+    });
+  }
 });
 
 // ---- 起動 ----

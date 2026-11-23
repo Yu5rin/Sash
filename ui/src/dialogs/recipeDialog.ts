@@ -125,7 +125,8 @@ export async function openRecipes(toast: Toast): Promise<void> {
   const apply = async () => {
     modal.close();
     try {
-      toast(await applyRecipe(selected));
+      const message = await applyRecipe(selected);
+      if (message) toast(message);
     } catch (e) {
       toast((e as Error).message, 'error');
     }
@@ -155,7 +156,7 @@ export async function openRecipes(toast: Toast): Promise<void> {
   });
 }
 
-/** レシピを挿入し、VBA も入れる（Excel で開いていなければクリップボードにコピー）。 */
+/** レシピを挿入し、VBA も入れる（Excel で開いていなければクリップボードにコピー）。知らせる文言を返す（空ならもう知らせてある）。 */
 export async function applyRecipe(recipe: Recipe): Promise<string> {
   const store = app.store;
   const s = app.session;
@@ -171,7 +172,9 @@ export async function applyRecipe(recipe: Recipe): Promise<string> {
     const target = store.selection ? allElements(doc).find((e) => samePathOf(e, store.selection!)) ?? null : null;
     return insertInstance(doc, inst, store.selection, target);
   }, t('レシピ「{title}」を挿入', { title: t(recipe.title) }));
-  // XML に入れられなかったときは、VBA だけが入って食い違わないよう、ここでやめる
+  // XML に入れられなかったときは、VBA だけが入って食い違わないよう、ここでやめる。
+  // 構文エラー中で断られたときは、store がすでに理由を知らせているので、重ねて知らせない（空の文言を返す）
+  if (!inserted && store.syncError) return '';
   if (!inserted) throw new Error(t('レシピ「{title}」を挿入できませんでした', { title: t(recipe.title) }));
   if (inst.workbookVbaConflicts.length) showConflicts(inst);
 

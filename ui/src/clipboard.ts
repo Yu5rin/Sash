@@ -3,9 +3,9 @@
 // 古い文書の要素を指したままになるため。OS のクリップボードにも、他のツールに貼れるよう XML を書く（失敗しても無視）。
 
 import { app } from './app';
-import { allowedInsertIndex, canDuplicate, childElements, createElement, elementAt, importElement, parseXml, pathOf, serialize, usedIds, type Path } from './model';
+import { allowedInsertIndex, canDuplicate, childElements, createElement, duplicateElement, elementAt, importElement, parseXml, pathOf, renameDuplicateIds, serialize, usedIds, type Path } from './model';
 import { canContainEl, defFor, titleOf } from './schema';
-import type { Source } from './store';
+import type { Change, Source } from './store';
 import { t } from './i18n';
 import { toast, type ToastKind as ShellToastKind } from './shell/toast';
 
@@ -129,29 +129,8 @@ export function cut(): boolean {
   return removeElement(el, t('「{name}」を切り取り', { name: nameOf(el) }), false);
 }
 
-/** 重なる id に数字を付けて振り直す（btnRun → btnRun2）。 */
-export function renameDuplicateIds(root: Element, used: Set<string>): Map<string, string> {
-  const renamed = new Map<string, string>();
-  const walk = (x: Element) => {
-    const id = x.getAttribute('id');
-    if (id) {
-      if (used.has(id)) {
-        const base = id.replace(/\d+$/, '') || id;
-        let n = 2;
-        while (used.has(`${base}${n}`)) n++;
-        const next = `${base}${n}`;
-        x.setAttribute('id', next);
-        renamed.set(id, next);
-        used.add(next);
-      } else {
-        used.add(id);
-      }
-    }
-    for (const c of childElements(x)) walk(c);
-  };
-  walk(root);
-  return renamed;
-}
+// 重なる id の振り直しは、複製（model.duplicateElement）と同じ決まりにするため model に置いている
+export { renameDuplicateIds };
 
 /**
  * 置く場所を探す。選択中の要素の中に置けるならその末尾、置けなければ選択中の要素の後ろ、
@@ -212,11 +191,8 @@ export function duplicate(source: Source = 'other'): boolean {
   const path = pathOf(el);
   return runEdit(source, (doc) => {
     const target = elementAt(doc, path);
-    if (!target?.parentElement) return undefined;
-    const copyEl = target.cloneNode(true) as Element;
-    renameDuplicateIds(copyEl, usedIds(doc));
-    target.parentElement.insertBefore(copyEl, target.nextElementSibling);
-    return pathOf(copyEl);
+    if (!target?.parentElement || !canDuplicate(target)) return undefined;
+    return pathOf(duplicateElement(target));
   }, t('「{name}」を複製', { name: nameOf(el) }));
 }
 
@@ -234,10 +210,25 @@ function removeElement(el: Element, label: string, offerUndo: boolean, source: S
     // 削除後の選択：次の兄弟、なければ前の兄弟、なければ親
     return next ? pathOf(next) : pathOf(parent);
   }, label);
-  if (ok && offerUndo) {
-    notify({ kind: 'info', message: t('{label}しました', { label }), action: { label: t('元に戻す'), run: () => app.store?.undo() } });
-  }
+  if (ok && offerUndo) offerUndoToast(t('{label}しました', { label }));
   return ok;
+}
+
+/**
+ * 「元に戻す」付きの通知を出す。そのあとに別の編集・元に戻す・やり直しがあったら通知を閉じる。
+ * 残しておくと、押したときに取り消されるのが削除ではなく、その後の別の操作になってしまうため。
+ */
+function offerUndoToast(message: string): void {
+  const handle = toast({ kind: 'info', message, action: { label: t('元に戻す'), run: () => app.store?.undo() } });
+  const watch = (c?: Change) => {
+    // 選択が変わっただけなら残す（削除のあとに別の要素を選ぶのはよくあるため）
+    if (c && !c.kinds.has('doc') && !c.kinds.has('images')) return;
+    app.off('store', watch);
+    app.off('session', watch);
+    handle.close();
+  };
+  app.on('store', watch);
+  app.on('session', watch);
 }
 
 export function removeSelected(source: Source = 'other'): boolean {
@@ -367,16 +358,4 @@ export function handleEditKey(e: KeyboardEvent, source: Source): boolean {
   e.stopPropagation();
   runCommand(command, source);
   return true;
-}
-
-// メニューバーやコマンドパレットからは、この CustomEvent で呼べるようにする（モジュールの依存を増やさないため）
-if (typeof window !== 'undefined') {
-  window.addEventListener('sash:command', (e) => {
-    const command = (e as CustomEvent<{ command?: string }>).detail?.command;
-    if (command === 'cut' || command === 'copy' || command === 'paste' || command === 'duplicate' || command === 'delete') {
-      // 処理したことを送り手に知らせる（送り手は defaultPrevented で、ほかの処理に回すかを決める）
-      e.preventDefault();
-      runCommand(command);
-    }
-  });
 }

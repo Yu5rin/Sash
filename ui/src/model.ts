@@ -389,22 +389,39 @@ export function moveElement(el: Element, newParent: Element, index: number): boo
   return true;
 }
 
-/** 複製する。id は重ならないよう振り直す。複製できないもの（canDuplicate が false）は例外にする。 */
-export function duplicateElement(el: Element): Element {
-  if (!canDuplicate(el)) throw new Error(tr('<{tag}> はこれ以上複製できません', { tag: el.localName }));
-  const doc = el.ownerDocument;
-  const copy = el.cloneNode(true) as Element;
-  const used = usedIds(doc);
-  const reassign = (x: Element) => {
+/** 重なる id に数字を付けて振り直す（btnRun → btnRun2）。振り直した組（元 → 新）を返す。 */
+export function renameDuplicateIds(root: Element, used: Set<string>): Map<string, string> {
+  const renamed = new Map<string, string>();
+  const walk = (x: Element) => {
     const id = x.getAttribute('id');
     if (id) {
-      const next = suggestId(x.localName, null, used);
-      used.add(next);
-      x.setAttribute('id', next);
+      if (used.has(id)) {
+        const base = id.replace(/\d+$/, '') || id;
+        let n = 2;
+        while (used.has(`${base}${n}`)) n++;
+        const next = `${base}${n}`;
+        x.setAttribute('id', next);
+        renamed.set(id, next);
+        used.add(next);
+      } else {
+        used.add(id);
+      }
     }
-    for (const c of Array.from(x.children)) reassign(c);
+    for (const c of childElements(x)) walk(c);
   };
-  reassign(copy);
+  walk(root);
+  return renamed;
+}
+
+/**
+ * 複製して、元の要素のすぐ後ろ（並び順の決まりで置ける位置）に置く。id は重ならないよう振り直す
+ * （貼り付けと同じく btn1 → btn2 のように番号を進める）。複製できないもの（canDuplicate が false）は例外にする。
+ * 編集メニューの「複製」（clipboard.duplicate）もこれを使う。
+ */
+export function duplicateElement(el: Element): Element {
+  if (!canDuplicate(el)) throw new Error(tr('<{tag}> はこれ以上複製できません', { tag: el.localName }));
+  const copy = el.cloneNode(true) as Element;
+  renameDuplicateIds(copy, usedIds(el.ownerDocument));
   const parent = el.parentElement!;
   const index = Array.prototype.indexOf.call(parent.children, el) as number;
   insertAt(parent, copy, allowedInsertIndex(parent, el.localName, index + 1) ?? index + 1);

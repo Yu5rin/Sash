@@ -6,7 +6,7 @@ import { catalog, ensureLabels, favorites, labels, recent, search, type CatalogE
 import { copyText, findInsertSpot, notify, runEdit } from '../clipboard';
 import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
-import { elementAt, pathOf } from '../model';
+import { createIn, elementAt, pathOf } from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { openModal, openOnce, type ModalHandle } from './modal';
 import { t } from '../i18n';
@@ -54,7 +54,8 @@ function insertBuiltin(c: CatalogEntry): void {
   runEdit('canvas', (doc) => {
     const parent = elementAt(doc, parentPath);
     if (!parent) return undefined;
-    const el = doc.createElementNS(doc.documentElement.namespaceURI, tag);
+    // 接頭辞付きの文書（<mso:customUI xmlns:mso=…>）でも、ほかの要素と同じ接頭辞で作る
+    const el = createIn(doc, tag);
     el.setAttribute('idMso', c.id);
     parent.insertBefore(el, parent.children[spot.index] ?? null);
     return pathOf(el);

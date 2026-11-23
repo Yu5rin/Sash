@@ -136,6 +136,19 @@ export function focus(): void {
   (first ?? hostEl).focus();
 }
 
+/**
+ * 入力中でまだ確定していない欄を確定する（保存・反映・閉じる・終了の前に呼ぶ）。
+ * 確定は change（フォーカスを外したとき）か Enter なので、入力したまま Ctrl+S / F5 を押すと、
+ * 入力した値が書き込む内容に入らず、保存したつもりの値が失われてしまうため。
+ */
+export function flushPendingEdits(): void {
+  const a = document.activeElement;
+  if (!hostEl || !(a instanceof HTMLInputElement) || !hostEl.contains(a)) return;
+  if (a.value.trim() === (a.dataset['orig'] ?? a.defaultValue)) return;
+  // textInput の change の処理（確かめてから確定）をそのまま使う
+  a.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 /** 指定した属性の入力欄にフォーカスを移す（キャンバスで Enter・F2）。なければ最初の欄。 */
 export function focusField(attr = 'label'): void {
   if (!hostEl) return;
@@ -323,8 +336,11 @@ interface TextOpts {
   /** 入力を確かめる。問題があればその理由を返す（空なら確定してよい）。 */
   validate?: (v: string) => string | null;
   inputMode?: string;
-  /** 確定する。値が変わらなければ何もしない。 */
-  apply?: (v: string) => void;
+  /**
+   * 確定する。値が変わらなければ何もしない。false（または false になる Promise）を返したら、
+   * 断られた・取りやめたとみなして、欄を確定前の値に戻す。
+   */
+  apply?: (v: string) => boolean | Promise<boolean>;
 }
 
 /** 1行の入力欄。確定は change（フォーカスを外したとき）と Enter、Esc で元の値に戻す。 */
@@ -353,10 +369,21 @@ function textInput(attr: string, value: string, opts: TextOpts = {}): { input: H
   const apply = () => {
     if (check() !== null) return;
     const v = input.value.trim();
-    if (v === (input.dataset['orig'] ?? '')) return;
+    const prev = input.dataset['orig'] ?? '';
+    if (v === prev) return;
+    // 先に orig を進めておく（確定の処理の中で change がもう一度来ても、二重に確定しないように）
     input.dataset['orig'] = v;
-    if (opts.apply) opts.apply(v);
-    else commit(attr, v || null);
+    // 断られた（構文エラー中など）・取りやめた（名前の変更の確認でキャンセル）ときは、XML は元のままなので欄も元に戻す。
+    // 戻さないと、欄だけが新しい値のまま残り、XML と食い違って見える
+    const revert = (ok: boolean) => {
+      if (ok || input.dataset['orig'] !== v) return;
+      input.dataset['orig'] = prev;
+      input.value = prev;
+      check();
+    };
+    const result = opts.apply ? opts.apply(v) : commit(attr, v || null);
+    if (typeof result === 'boolean') revert(result);
+    else void result.then(revert, () => revert(false));
   };
   input.addEventListener('input', () => {
     // 入力中は確定せず、問題だけを先に知らせる
@@ -407,7 +434,14 @@ function boolEditor(el: Element, d: AttrDef): HTMLElement {
     e.preventDefault();
     const i = options.findIndex(([v]) => v === value);
     const next = options[(i + (e.key === 'ArrowRight' ? 1 : options.length - 1)) % options.length]!;
-    commit(d.name, next[0] || null);
+    if (!commit(d.name, next[0] || null)) return;
+    // 確定すると描き直されるので、描き直した後の「選んだ項目」にフォーカスを移す（ラジオボタンと同じく、選んだものに乗る）。
+    // 描き直しは、フォーカスがインスペクタにある間は次のタスクに回るので、その後で探す
+    const fkey = `${d.name}:bool:${next[0]}`;
+    window.setTimeout(() => {
+      const target = Array.from(hostEl?.querySelectorAll<HTMLElement>('[data-fkey]') ?? []).find((n) => n.dataset['fkey'] === fkey);
+      target?.focus({ preventScroll: true });
+    }, 0);
   });
   return seg;
 }
@@ -449,8 +483,10 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
             const used = usedIds(el.ownerDocument);
             used.delete(value);
             const next = suggestId(el.localName, el.getAttribute('label'), used);
+            const before = input.value;
             input.value = next;
-            commit('id', next, { idMso: null, idQ: null });
+            // 断られたら、提案した値を欄に残さない
+            if (!commit('id', next, { idMso: null, idQ: null })) input.value = before;
           },
         }, t('提案')),
       );
@@ -481,9 +517,11 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
     placeholder: defaultCallbackName(el, attr),
     validate: callbackError,
     apply: (v) => {
-      // 名前を変えたときは、VBA 側の Sub 名も変えるかを確認する
-      if (value && v) void renameCallback(path, attr, value, v);
-      else if (commit(attr, v || null) && v) offerStub(v);
+      // 名前を変えたときは、VBA 側の Sub 名も変えるかを確認する（キャンセルしたら false が返り、欄は元に戻る）
+      if (value && v) return renameCallback(path, attr, value, v);
+      const ok = commit(attr, v || null);
+      if (ok && v) offerStub(v);
+      return ok;
     },
   });
   const status = value ? vba.statuses().find((x) => x.name === value) : undefined;
@@ -561,9 +599,9 @@ function iconRow(el: Element, key: string): HTMLElement {
       rerender();
     }
   };
-  const setMso = (v: string) => {
+  const setMso = (v: string): boolean => {
     pendingIcon = null;
-    commit('imageMso', v, { ...clear, imageMso: v }, t('アイコンを {name} に変更', { name: v }));
+    return commit('imageMso', v, { ...clear, imageMso: v }, t('アイコンを {name} に変更', { name: v }));
   };
   const openEditor = (existing?: ImageEntry) =>
     openIconDialog(path, undefined, existing, {

@@ -24,6 +24,9 @@ internal sealed class MainForm : Form
     private bool _closeConfirmed;
     private bool _uiReady;
     private bool _closePending;
+
+    /// <summary>閉じる確認を頼んだ回数。古い確認の見張り（WatchCloseAnswerAsync）が、新しい確認の待ちを解かないようにする。</summary>
+    private int _closeRequestId;
     private bool _recovering;
 
     /// <summary>表示を許すオリジン（埋め込み UI の仮想オリジン、または開発サーバー）。</summary>
@@ -85,16 +88,19 @@ internal sealed class MainForm : Form
         }
 
         _closePending = true;
+        var requestId = ++_closeRequestId;
         PostEvent(new { @event = "closeRequested" });
-        _ = WatchCloseAnswerAsync();
+        _ = WatchCloseAnswerAsync(requestId);
     }
 
     /// <summary>
     /// UI が固まっていると、閉じる確認に答えが返らず、いつまでもウィンドウを閉じられない。
     /// 少し待っても閉じられていなければ、UI の処理（JavaScript）が動いているかを確かめ、動いていなければホスト側で尋ねる。
     /// UI が自分の確認画面を出して利用者の答えを待っているだけなら、JavaScript は動いているので何もしない。
+    /// 利用者が UI の確認でキャンセルしたときは、UI が app.closeCancelled を送ってくるので、その時点で次の × を受け付ける。
+    /// ここで解くのは、その知らせが来なかったとき（UI が固まっていたなど）の代わり。
     /// </summary>
-    private async Task WatchCloseAnswerAsync()
+    private async Task WatchCloseAnswerAsync(int requestId)
     {
         try
         {
@@ -121,7 +127,11 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            _closePending = false;
+            // その後に新しい確認を頼んでいたら、そちらの待ちはそちらの見張りに任せる
+            if (requestId == _closeRequestId)
+            {
+                _closePending = false;
+            }
         }
     }
 
@@ -327,6 +337,13 @@ internal sealed class MainForm : Form
                 // 起動時に引数で渡されたファイルがあれば、UI に開かせる
                 _uiReady = true;
                 PostEvent(new HostResponse(request.Id, true, new { initialFile = _initialFile, updatedFrom = _updatedFrom, version = UpdateService.CurrentVersionText }, null));
+                return;
+
+            case "app.closeCancelled":
+                // UI の「未保存の変更があります」でキャンセルされた。待っていた答えが返ったので、次の × をすぐ受け付ける
+                // （見張りの待ち時間が過ぎるまで × が効かないように見えてしまうため）
+                _closePending = false;
+                PostEvent(new HostResponse(request.Id, true, null, null));
                 return;
 
             case "file.drop":

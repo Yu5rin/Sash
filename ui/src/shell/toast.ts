@@ -138,9 +138,12 @@ export function toast(opts: ToastOptions): ToastHandle {
   entries.push(entry);
   host.append(el);
 
-  // 多すぎるときは古いものから消す。閉じるまで残すエラーは、ほかがあればなるべく残す
+  // 多すぎるときは古いものから消す。閉じるまで残すエラーは、ほかがあればなるべく残す。
+  // いま出した通知は候補から外す（エラーが 3 件残っているときに、新しい通知が出た瞬間に消えてしまわないように）。
+  // ほかがすべてエラーなら、いちばん古いエラーを閉じる
   while (entries.length > MAX_TOASTS) {
-    const victim = entries.find((e) => e.opts.kind !== 'error') ?? entries[0]!;
+    const others = entries.filter((e) => e !== entry);
+    const victim = others.find((e) => e.opts.kind !== 'error') ?? others[0]!;
     victim.close();
   }
   schedule(entry);

@@ -149,18 +149,38 @@ public static partial class RibbonPackage
     /// 一時ファイルで本体を置き換える。File.Replace（ReplaceFile）は名前の付け替えで行うので、途中で止まっても
     /// 「半分だけ書かれたブック」が残らず、元のファイルの属性やアクセス権も引き継がれる。
     /// File.Copy での上書きは、置き換えに対応していないファイルシステムのときだけの代わりの手段。
+    /// Windows では、NAS・Samba・WebDAV など ReplaceFile に対応していない場所だと PlatformNotSupportedException ではなく
+    /// IOException になるので、それも代わりの手段に回す。ただし共有違反・ロック違反（Excel が開いているなど）は
+    /// 上書きしても同じく失敗するうえ、呼び出し側が少し待ってやり直す（RetryOnLock）ので、そのまま投げる。
+    /// 一時ファイルは呼び出し側の finally で消す（代わりの手段で写したあとも残るため）。
     /// </summary>
-    private static void ReplaceFile(string temp, string fullPath)
+    internal static void ReplaceFile(string temp, string fullPath, Action<string, string>? replace = null)
     {
         try
         {
-            File.Replace(temp, fullPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            (replace ?? ReplaceByRename)(temp, fullPath);
         }
         catch (PlatformNotSupportedException)
         {
             File.Copy(temp, fullPath, overwrite: true);
         }
+        catch (IOException ex) when (ShouldFallBackToCopy(ex))
+        {
+            File.Copy(temp, fullPath, overwrite: true);
+        }
     }
+
+    private static void ReplaceByRename(string temp, string fullPath) =>
+        File.Replace(temp, fullPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+
+    /// <summary>
+    /// File.Replace の IOException のうち、File.Copy での上書きに切り替えてよいものか。
+    /// 共有違反（ERROR_SHARING_VIOLATION = 32）・ロック違反（ERROR_LOCK_VIOLATION = 33）は、ほかのプログラムが
+    /// 開いているためなので切り替えない。ファイルやフォルダがない場合も、上書きでは直らないので切り替えない。
+    /// </summary>
+    internal static bool ShouldFallBackToCopy(IOException ex) =>
+        ex is not FileNotFoundException and not DirectoryNotFoundException
+        && ex.HResult is not unchecked((int)0x80070020) and not unchecked((int)0x80070021);
 
     internal static PackagePart WriteCustomUI(Package package, CustomUIVersion version, string xml)
     {
