@@ -5,6 +5,7 @@ import { focus as focusCanvas } from '../views/canvas';
 import { focus as focusTree } from '../views/tree';
 import { focus as focusInspector } from '../views/inspector';
 import { focus as focusXml } from '../views/xmlEditor';
+import { focus as focusBottom } from '../views/bottom';
 import type { LayoutHandle, PaneKey } from '../layout';
 
 export type PaneId = 'canvas' | 'tree' | 'xml' | 'inspector' | 'bottom';
@@ -24,8 +25,8 @@ function paneElement(id: PaneId): HTMLElement | null {
   return document.querySelector<HTMLElement>(`[data-pane="${id}"]`);
 }
 
-/** ビューが出している focus()。下部パネルにはないので、パネルの本体にフォーカスする。 */
-const VIEW_FOCUS: Readonly<Record<PaneId, (() => void) | null>> = { canvas: focusCanvas, tree: focusTree, xml: focusXml, inspector: focusInspector, bottom: null };
+/** ビューが出している focus()。選択中の項目など、ビューごとに適した場所へ移すため。 */
+const VIEW_FOCUS: Readonly<Record<PaneId, (() => void) | null>> = { canvas: focusCanvas, tree: focusTree, xml: focusXml, inspector: focusInspector, bottom: focusBottom };
 
 /** 指定したペインにフォーカスする。畳んでいれば戻してから移る。 */
 export function focusPane(id: PaneId): void {

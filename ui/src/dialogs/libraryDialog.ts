@@ -1,5 +1,6 @@
 // アイコンライブラリ（仕様書 §6.4、第3弾）。加工済みのアイコンを検索して、別のブックでも使い回す。
 
+import type { ToastKind } from '../shell/toast';
 import { invoke, type LibraryIconDetail, type LibraryIconDto } from '../bridge';
 import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
