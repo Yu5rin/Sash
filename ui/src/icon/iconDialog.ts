@@ -13,6 +13,7 @@ import { h } from '../dom';
 import { elementAt, pathOf, setAttr, type Path } from '../model';
 import { ID_PATTERN } from '../schema';
 import { t as tr } from '../i18n';
+import type { FluentPick } from '../fluent/fluentDialog';
 import { reportRefusal, type ImageEntry } from '../store';
 import {
   adjustBrightness, cornerColor, fitRect, keyOutColor, monochrome, opaqueBounds, parseHex, parseIco, pickIcoEntry,
@@ -82,6 +83,21 @@ function defaultOptions(): IconOptions {
 export interface IconDialogOptions {
   /** 閉じたときに呼ぶ。applied は画像を設定（追加）したか。取り消したときに呼び出し元の表示を戻すのに使う。 */
   onClose?: (applied: boolean) => void;
+  /** アイコン集（Fluent）で選んだアイコンを元画像にして開く。 */
+  fluent?: FluentPick;
+}
+
+/**
+ * アイコン集（Fluent）を開く。ダイアログとデータは、ここで初めて読み込む（最初の画面を重くしないため）。
+ * 読み込みに失敗したら知らせて、閉じた扱いにする。
+ */
+export function openFluentIcons(onPick: (pick: FluentPick) => void, onClose?: (picked: boolean) => void): void {
+  void import('../fluent/fluentDialog')
+    .then((m) => m.openFluentPicker(onPick, { onClose }))
+    .catch((e: unknown) => {
+      notify({ kind: 'error', message: tr('アイコン集を読み込めませんでした：{message}', { message: e instanceof Error ? e.message : String(e) }) });
+      onClose?.(false);
+    });
 }
 
 /**
@@ -130,6 +146,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     { class: 'icon-sources' },
     h('button', { type: 'button', onclick: () => fileInput.click() }, tr('ファイル')),
     h('button', { type: 'button', title: tr('EXE / DLL に埋め込まれたアイコンから選ぶ'), onclick: () => void fromExecutable() }, 'EXE / DLL'),
+    h('button', { type: 'button', title: tr('同梱のアイコン集（Fluent UI System Icons）から選ぶ。Excel がなくても使えます'), onclick: () => openFluentIcons((p) => void loadFluent(p).catch(reportError)) }, tr('アイコン集（Fluent）')),
     app.info.excelInstalled ? h('button', { type: 'button', title: tr('組み込みアイコン（imageMso）を元にする'), onclick: () => fromImageMso() }, tr('組み込みアイコン')) : null,
     h('button', { type: 'button', title: tr('アイコンライブラリから選ぶ（元画像と設定があれば加工し直せます）'), onclick: () => fromLibrary() }, tr('ライブラリ')),
     h('button', { type: 'button', title: tr('フォルダ内の画像を、今の加工設定でまとめて取り込む（コントロールには設定しません）'), onclick: () => folderInput.click() }, tr('フォルダを一括')),
@@ -152,8 +169,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   // ---- 設定の入力欄 ----
 
   const range = (key: 'padding' | 'tolerance' | 'brightness' | 'radius' | 'sharpen', min: number, max: number, unit = '') => {
-    const label = h('span', { class: 'range-value' }, `${opts[key]}${unit}`);
-    const input = h('input', { type: 'range', min, max, value: opts[key], oninput: (e: Event) => { opts[key] = Number((e.target as HTMLInputElement).value); label.textContent = `${opts[key]}${unit}`; render(); } });
+    const label = h('span', { class: 'range-value', dataset: { optValue: key, unit } }, `${opts[key]}${unit}`);
+    const input = h('input', { type: 'range', min, max, value: opts[key], dataset: { opt: key }, oninput: (e: Event) => { opts[key] = Number((e.target as HTMLInputElement).value); label.textContent = `${opts[key]}${unit}`; render(); } });
     return [input, label];
   };
   const check = (key: 'trim' | 'transparent' | 'mono' | 'replace', text: string) =>
@@ -299,6 +316,28 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     await loadBlob(file, file.name);
   }
 
+  /**
+   * アイコン集のアイコンを元にする。余白の自動カットを切り、余白を 0 にする。
+   * Fluent のアイコンは 24px の枠の中で余白まで含めて形をそろえてあるので、そのまま使うと
+   * 並べたボタンのアイコンの大きさがそろう（カットすると、小さな形ほど大きく引き伸ばされてしまう）。
+   */
+  async function loadFluent(pick: FluentPick): Promise<void> {
+    opts.trim = false;
+    opts.padding = 0;
+    syncControls();
+    await loadBlob(pick.blob, pick.fileName);
+  }
+
+  /** 設定をコードで変えたときに、入力欄の表示を合わせる。 */
+  function syncControls(): void {
+    const trim = controls.querySelector<HTMLInputElement>('[data-opt="trim"]');
+    if (trim) trim.checked = opts.trim;
+    const padding = controls.querySelector<HTMLInputElement>('input[type="range"][data-opt="padding"]');
+    if (padding) padding.value = String(opts.padding);
+    const label = controls.querySelector<HTMLElement>('[data-opt-value="padding"]');
+    if (label) label.textContent = `${opts.padding}${label.dataset['unit'] ?? ''}`;
+  }
+
   /** EXE / DLL の埋め込みアイコンを一覧にして選ばせる（社内ツールのアイコンを流用する用途）。 */
   async function fromExecutable(): Promise<void> {
     try {
@@ -407,7 +446,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
 
   function render(): void {
     if (!source) return;
-    const ratio = Math.min(256 / source.width, 256 / source.height, 1);
+    // SVG は拡大しても粗くならないので、小さなもの（アイコン集の 24px など）は 128px まで大きくして見せる
+    const ratio = source.isSvg ? Math.max(Math.min(256 / source.width, 256 / source.height, 1), Math.min(128 / source.width, 128 / source.height)) : Math.min(256 / source.width, 256 / source.height, 1);
     sourceView.width = Math.max(1, Math.round(source.width * ratio));
     sourceView.height = Math.max(1, Math.round(source.height * ratio));
     const ctx = sourceView.getContext('2d')!;
@@ -473,6 +513,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
 
   if (existing?.edit) {
     void loadBlob(existing.edit.source, existing.edit.sourceName, true).catch(reportError);
+  } else if (dialogOpts.fluent) {
+    void loadFluent(dialogOpts.fluent).catch(reportError);
   } else {
     const first = files ? Array.from(files)[0] : undefined;
     if (first) void loadFile(first).catch(reportError);

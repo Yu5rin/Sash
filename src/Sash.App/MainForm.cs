@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Sash.Core.Excel;
 using Sash.Core.Settings;
 using Sash.Excel;
 using static Sash.Core.Localization.Text;
@@ -18,7 +19,8 @@ internal sealed class MainForm : Form
 {
     private readonly WebView2 _webView = new() { Dock = DockStyle.Fill };
     private readonly MessageRouter _router;
-    private readonly Lazy<ExcelService> _excel = new(() => new ExcelService(AppPaths.ImageMsoCache));
+    private readonly ImageMsoCache _iconCache = new(AppPaths.ImageMsoCache);
+    private readonly Lazy<ExcelService> _excel;
     private readonly string? _initialFile;
     private readonly string? _updatedFrom;
     private bool _closeConfirmed;
@@ -44,11 +46,14 @@ internal sealed class MainForm : Form
         _updatedFrom = updatedFrom;
         var settings = new SettingsStore(AppPaths.Settings);
         SettingsLanguage.Apply(settings.Load());
-        _router = new MessageRouter(this, settings, new RecipeStore(AppPaths.Recipes), _excel, () => BeginInvoke(() =>
+
+        // imageMso を取れない理由（別のプロセスの Excel の HBITMAP が読めないなど）を、利用者から app.log で受け取れるようにする
+        _excel = new(() => new ExcelService(_iconCache) { Log = AppLog.Write });
+        _router = new MessageRouter(this, settings, new RecipeStore(AppPaths.Recipes), _excel, _iconCache, () => BeginInvoke(() =>
         {
             _closeConfirmed = true;
             Close();
-        }));
+        }), PostEventFromAnyThread);
 
         Text = "Sash";
         ClientSize = new Size(1440, 900);
@@ -60,6 +65,8 @@ internal sealed class MainForm : Form
         FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
         {
+            // 取り込みの途中なら止める（取り込み用の Excel は ExcelService の Dispose で閉じる）
+            _router.Shutdown();
             if (_excel.IsValueCreated)
             {
                 _excel.Value.Dispose();
@@ -307,6 +314,33 @@ internal sealed class MainForm : Form
 
     private void PostEvent(object message) =>
         _webView.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(message, HostJson.Options));
+
+    /// <summary>
+    /// ほかのスレッド（imageMso の取り込みの進み具合など）から UI へ知らせる。WebView2 は UI スレッドからしか触れないので、
+    /// UI スレッドに回してから送る。ウィンドウを閉じた後に届いた知らせは捨てる。
+    /// </summary>
+    private void PostEventFromAnyThread(object message)
+    {
+        if (IsDisposed || !IsHandleCreated)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (!IsDisposed)
+                {
+                    PostEvent(message);
+                }
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            // 確かめた直後にウィンドウが閉じられた
+        }
+    }
 
     private async void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {

@@ -108,7 +108,28 @@ export function openAboutDialog(): void {
       h('dt', null, 'Excel'), h('dd', null, app.info.excelInstalled ? t('見つかりました') : t('見つかりません（ファイルの編集のみ）')),
       h('dt', null, t('ライセンス')), h('dd', null, 'MIT License'),
       h('dt', null, t('配布元')), h('dd', null, link(REPO_URL, 'github.com/Yu5rin/Sash'))),
-    h('p', { class: 'muted small' }, t('idMso / imageMso の一覧は、Microsoft の office-fluent-ui-command-identifiers（MIT License）を元にしています。')));
+    h('p', { class: 'muted small' }, t('idMso / imageMso の一覧は、Microsoft の office-fluent-ui-command-identifiers（MIT License）を元にしています。')),
+    h('p', { class: 'muted small' }, t('アイコン集は、Microsoft の Fluent UI System Icons（MIT License）を元にしています。')),
+    h('p', null, h('button', { type: 'button', class: 'link', onclick: () => void openLicensesDialog() }, t('サードパーティのライセンス'))));
   const m = openModal(t('バージョン情報'), content, { size: 'sm', key: 'about', footer: [link(RELEASES_URL, t('リリースノート'), 'left'), h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))] });
 }
 
+/**
+ * サードパーティのライセンスの全文。MIT License は複製に許諾表示を含めることを求めるので、配布する exe の中で読めるようにする。
+ * 全文は大きい（Monaco の通知は 60KB ほど）ので、開いたときにだけ読み込む。
+ */
+export async function openLicensesDialog(): Promise<void> {
+  let list: typeof import('./licenses').THIRD_PARTY_LICENSES;
+  try {
+    list = (await import('./licenses')).THIRD_PARTY_LICENSES;
+  } catch (e) {
+    toast({ kind: 'error', message: t('ライセンスの文書を読み込めませんでした：{message}', { message: (e as Error).message }) });
+    return;
+  }
+  const content = h('div', { class: 'licenses' },
+    h('p', { class: 'modal-message' }, t('Sash は次の部品を使っています。それぞれのライセンスの全文を示します。')),
+    list.map((l) => h('section', { class: 'license-entry' },
+      h('h3', null, l.name, h('span', { class: 'muted small' }, ` — ${t(l.usage)}`)),
+      h('pre', { class: 'license-text', tabindex: 0 }, l.text.trim()))));
+  const m = openModal(t('サードパーティのライセンス'), content, { size: 'lg', key: 'licenses', footer: [h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))] });
+}

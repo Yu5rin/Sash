@@ -54,6 +54,11 @@ let flashPath: Path | null = null;
 let scrollToSelection = false;
 /** その場でラベルを編集している間は描き直さない（入力中の文字が消えるため）。 */
 let renaming = false;
+/** 枠の大きさの変化を見張る。mountCanvas が二度呼ばれても前のものを外せるよう、モジュールで持つ。 */
+let popupObserver: ResizeObserver | null = null;
+let layoutObserver: MutationObserver | null = null;
+/** 直前の描画で選んでいた要素。選択が変わったときだけ、ポップアップの中の選択肢を見える位置まで送る。 */
+let lastPopupSelection: string | null = null;
 
 export function getCanvasMode(): CanvasMode {
   return mode;
@@ -71,7 +76,15 @@ export function setCanvasMode(next: CanvasMode): void {
 /** キャンバスにフォーカスを移す（Ctrl+1 / F6）。 */
 export function focus(): void {
   hostEl?.focus({ preventScroll: true });
-  if (hostEl && app.store?.selection) nodeOf(hostEl, app.store.selection)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  revealNode(hostEl && app.store?.selection ? nodeOf(hostEl, app.store.selection) : null);
+}
+
+/** 要素を見える位置に出す。ポップアップの中の項目は、ポップアップの中だけを送る。 */
+function revealNode(node: HTMLElement | null | undefined): void {
+  if (!node) return;
+  const popup = node.closest<HTMLElement>('.rb-menu-popup');
+  if (popup) revealInPopup(popup, node);
+  else node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: FileList, target: Path) => void }): void {
@@ -82,6 +95,39 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   host.setAttribute('role', 'region');
   host.setAttribute('aria-label', tr('キャンバス'));
   const render = () => renderCanvas(host);
+  // スクロールや大きさの変更でメニューの開き口が動いたら、ポップアップも付いていかせる。
+  // スクロールするのはキャンバスの枠（.canvas-pane）なので、host ではなくその枠で捕まえる。
+  // ポップアップ自身のスクロールは無視する（置き直すと高さを測り直す間に scrollTop が 0 に戻り、長いメニューを下まで送れないため）
+  const pane = paneOf(host);
+  pane.addEventListener('scroll', (e) => {
+    if (e.target instanceof Element && e.target.closest('.rb-menu-popup')) return;
+    placePopups(host);
+  }, true);
+  window.addEventListener('resize', () => placePopups(host));
+  // スプリッターのドラッグや隣の枠を畳んだときは window の resize が来ないので、枠の大きさの変化を見張る。
+  // 左の枠を広げてもキャンバスの幅が変わらない（位置だけずれる）ことがあるので、大きさだけでなく、
+  // レイアウトの変数（--left など）とクラス（collapsed-*）を書き換える #app の属性の変化も見張る
+  popupObserver?.disconnect();
+  layoutObserver?.disconnect();
+  let queued = false;
+  const queuePlace = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      placePopups(host);
+    });
+  };
+  if (typeof ResizeObserver !== 'undefined') {
+    popupObserver = new ResizeObserver(queuePlace);
+    popupObserver.observe(pane);
+    if (pane !== host) popupObserver.observe(host);
+  }
+  const layoutRoot = host.closest<HTMLElement>('#app');
+  if (layoutRoot && typeof MutationObserver !== 'undefined') {
+    layoutObserver = new MutationObserver(queuePlace);
+    layoutObserver.observe(layoutRoot, { attributes: true, attributeFilter: ['style', 'class'] });
+  }
   app.on('session', () => {
     activeTab = null;
     resetBackstage();
@@ -287,14 +333,32 @@ function renderCanvas(host: HTMLElement): void {
   } else {
     stage = h('div', { class: 'cv-stage' }, renderRibbon(host, doc, errorPaths));
   }
+  // 描き直すとポップアップも作り直されるので、開いていたメニューごとのスクロール位置を覚えておいて戻す
+  const popupScroll = new Map<string, number>();
+  for (const popup of Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'))) {
+    popupScroll.set(popup.dataset['container'] ?? '', popup.scrollTop);
+  }
   host.replaceChildren(renderHeader(), stage, h('div', { class: 'drop-indicator', hidden: true }));
 
+  placePopups(host);
+  const selKey = store.selection ? store.selection.join('.') : null;
+  for (const popup of Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'))) {
+    const saved = popupScroll.get(popup.dataset['container'] ?? '');
+    if (saved !== undefined) popup.scrollTop = saved;
+    // 新しく開いたときと選択が変わったときだけ、選ばれた項目を見える位置へ送る。
+    // 毎回送ると、別の理由（問題一覧の更新など）で描き直すたびに、利用者が送った位置から引き戻してしまう
+    if (saved === undefined || selKey !== lastPopupSelection) {
+      const item = popup.querySelector<HTMLElement>('.rb-menu-item.selected');
+      if (item) revealInPopup(popup, item);
+    }
+  }
+  lastPopupSelection = selKey;
   known = new WeakSet(allElements(doc));
   const sel = store.selection;
   if (sel && (flashPath || scrollToSelection)) {
     const node = nodeOf(host, sel);
     if (node) {
-      node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      revealNode(node);
       if (flashPath && samePath(flashPath, sel)) {
         node.classList.add('flash');
         window.setTimeout(() => node.classList.remove('flash'), 900);
@@ -662,6 +726,75 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
   }
 }
 
+/** キャンバスのスクロールする枠。見える範囲の基準にもする。 */
+function paneOf(host: HTMLElement): HTMLElement {
+  return host.closest<HTMLElement>('.canvas-pane') ?? host;
+}
+
+/**
+ * メニューのポップアップを、開き口のすぐ下に画面基準（fixed）で置く。
+ * リボン本体は横スクロールのために overflow-x:auto にしており、CSS の決まりで縦も auto 扱いになる。
+ * そのまま absolute で置くと本体の中に閉じ込められて選択肢が隠れるため、本体の枠の外に出す。
+ * ただし置ける範囲はキャンバスの枠の中に限る。XML エディタで <menu> の中にカーソルがあると
+ * 選択が同期してポップアップが開くので、枠の外まで伸ばすと、いま打っている XML を覆ってしまうため。
+ * 入りきらない分はポップアップの中でスクロールさせる。
+ */
+function placePopups(host: HTMLElement): void {
+  const margin = 4;
+  const popups = Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'));
+  if (popups.length === 0) return;
+  const pr = paneOf(host).getBoundingClientRect();
+  const viewTop = Math.max(0, pr.top);
+  const viewBottom = Math.min(window.innerHeight, pr.bottom);
+  const viewLeft = Math.max(0, pr.left);
+  const viewRight = Math.min(window.innerWidth, pr.right);
+  for (const popup of popups) {
+    const anchor = popup.parentElement;
+    if (!anchor) continue;
+    const r = anchor.getBoundingClientRect();
+    popup.style.position = 'fixed';
+    // 開き口が枠の外へスクロールしたら、ポップアップだけが宙に浮いて残らないよう隠す
+    const anchorVisible = r.bottom > viewTop && r.top < viewBottom && r.right > viewLeft && r.left < viewRight;
+    // 高さは maxHeight を外して測らない。外すと中身が一瞬縮んで scrollTop が 0 に戻るため、
+    // 中身の高さ（scrollHeight）と枠線の分から本来の高さを出す
+    const scrollTop = popup.scrollTop;
+    const ph = popup.scrollHeight + (popup.offsetHeight - popup.clientHeight);
+    const w = popup.offsetWidth;
+    const below = viewBottom - r.bottom - margin;
+    const above = r.top - viewTop - margin;
+    // 下に入りきらず、上のほうが広ければ上に開く（Excel と同じ振る舞い）。どちらも枠の中で
+    let top: number;
+    let room: number;
+    if (ph <= below || below >= above) {
+      top = r.bottom;
+      room = below;
+    } else {
+      room = above;
+      top = r.top - Math.min(ph, above);
+    }
+    popup.style.maxHeight = ph > room ? `${Math.max(0, Math.floor(room))}px` : '';
+    popup.style.visibility = anchorVisible && room >= 24 ? '' : 'hidden';
+    const left = Math.max(viewLeft + margin, Math.min(r.left, viewRight - w - margin));
+    popup.style.top = `${top}px`;
+    popup.style.left = `${left}px`;
+    // 高さを詰めると scrollTop が切り詰められることがあるので、測る前の位置に戻す
+    popup.scrollTop = scrollTop;
+  }
+}
+
+/**
+ * ポップアップの中だけをスクロールして、項目を見える位置に出す。
+ * scrollIntoView はキャンバスの枠まで一緒にスクロールさせ、リボンがずれてしまうため使わない。
+ */
+function revealInPopup(popup: HTMLElement, item: HTMLElement): void {
+  const pr = popup.getBoundingClientRect();
+  const ir = item.getBoundingClientRect();
+  const top = pr.top + popup.clientTop;
+  const bottom = top + popup.clientHeight;
+  if (ir.top < top) popup.scrollTop -= top - ir.top;
+  else if (ir.bottom > bottom) popup.scrollTop += Math.min(ir.bottom - bottom, ir.top - top);
+}
+
 /** メニュー類が選択されているときだけ、中身を一覧で開いて選べるようにする。 */
 function menuPopup(el: Element): HTMLElement | null {
   const sel = app.store?.selection;
@@ -763,7 +896,7 @@ function selectNode(n: HTMLElement | null | undefined): boolean {
   const p = parsePath(n?.dataset['path']);
   if (!p || !app.store) return false;
   app.store.select(p, 'canvas');
-  nodeOf(hostEl!, p)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  revealNode(nodeOf(hostEl!, p));
   return true;
 }
 

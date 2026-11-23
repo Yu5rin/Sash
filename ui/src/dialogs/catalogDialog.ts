@@ -7,7 +7,8 @@ import { copyText, findInsertSpot, notify, runEdit } from '../clipboard';
 import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { createIn, elementAt, pathOf } from '../model';
-import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
+import { describePrefetch, msoIcon, msoIconsEnabled, onMsoIconsLoaded, onPrefetchStatus, prefetchStatus, startMsoPrefetch } from '../msoIcons';
+import type { IconPrefetchStatus } from '../bridge';
 import { openModal, openOnce, type ModalHandle } from './modal';
 import { t } from '../i18n';
 
@@ -39,6 +40,22 @@ const COPY_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" s
  */
 let rerenderOpen: (() => void) | null = null;
 let iconListenerAdded = false;
+
+/**
+ * アイコンを出せないときの案内（仕様書 §17.7）。取り込んでいない・取り込み中・Excel がない、の理由と、取り込みを始めるボタン。
+ * 取り込み済み（または一部でもキャッシュがあり Excel がある）なら出さない。
+ */
+export function iconBanner(st: IconPrefetchStatus | null, enabled: boolean, excelInstalled: boolean): { text: string; canStart: boolean } | null {
+  if (!st) return enabled ? null : { text: t('Excel が見つからないため、アイコンは表示できません。'), canStart: false };
+  if (st.state === 'done') return null;
+  if (st.state === 'running') return { text: t('Excel のアイコンを取り込んでいます。終わると表示されます。') + ' ' + describePrefetch(st), canStart: false };
+  if (st.state === 'unavailable' || !(st.excelInstalled ?? excelInstalled)) {
+    return st.cached > 0 ? null : { text: t('Excel が見つからないため、アイコンは表示できません。Excel のある PC で取り込むと表示されます。'), canStart: false };
+  }
+  if (st.state === 'failed') return { text: describePrefetch(st), canStart: true };
+  if (st.cached > 0) return { text: `${describePrefetch(st)} ${t('残りも取り込むと、すべてのアイコンが表示されます。')}`, canStart: true };
+  return { text: t('アイコンはまだ取り込まれていません。この PC の Excel から一度だけ取り込むと、ここに表示されます（Excel を起動しなくても表示できるようになります）。'), canStart: true };
+}
 
 /** 組み込みのコントロールを、選択中の場所に idMso の参照として置く。 */
 function insertBuiltin(c: CatalogEntry): void {
@@ -246,10 +263,27 @@ function openCatalogDialog(mode: CatalogMode, current: string, apply: (value: st
   });
 
   const hint = h('div', { class: 'catalog-hint muted' }, t('↑↓ で移動・Enter で決定・Ctrl+C で名前をコピー'));
-  const content = h('div', { class: 'catalog' }, input, mode === 'idMso' ? filters : null, results, h('div', { class: 'catalog-foot' }, status, hint));
+  const banner = h('div', { class: 'notice catalog-banner', role: 'status', hidden: true });
+  const renderBanner = () => {
+    const b = mode === 'imageMso' ? iconBanner(prefetchStatus(), msoIconsEnabled(), app.info.excelInstalled) : null;
+    banner.hidden = !b;
+    if (!b) return;
+    banner.replaceChildren(h('span', null, b.text));
+    if (b.canStart) banner.append(h('button', { type: 'button', class: 'small', onclick: () => void startMsoPrefetch(false) }, t('アイコンを取り込む')));
+  };
+  renderBanner();
+  const offBanner = onPrefetchStatus(() => {
+    if (!banner.isConnected) {
+      offBanner();
+      return;
+    }
+    renderBanner();
+  });
+  const content = h('div', { class: 'catalog' }, input, banner, mode === 'idMso' ? filters : null, results, h('div', { class: 'catalog-foot' }, status, hint));
   const dialog = openModal(mode === 'idMso' ? t('idMso を選ぶ') : t('imageMso を選ぶ'), content, {
     wide: true,
     onClose: () => {
+      offBanner();
       if (rerenderOpen === render) rerenderOpen = null;
       if (!chosen) opts.onCancel?.();
     },

@@ -6,6 +6,8 @@ import { invoke, type Settings } from '../bridge';
 import { openModal, openOnce } from '../dialogs/modal';
 import { h, svg } from '../dom';
 import { lang, t, type Lang } from '../i18n';
+import { cancelMsoPrefetch, describePrefetch, loadPrefetchStatus, onPrefetchStatus, prefetchStatus, startMsoPrefetch } from '../msoIcons';
+import type { IconPrefetchStatus } from '../bridge';
 import { renderUpdateSettings } from '../updates';
 import { select, settingRow } from './form';
 import { shellIcons } from './icons';
@@ -99,6 +101,8 @@ async function build(start: CategoryId): Promise<void> {
     icons: () => {
       const s = app.settings;
       return h('div', null,
+        settingRow(t('Excel のアイコン'), builtinIconsControl(),
+          t('組み込みのアイコン（imageMso）は、この PC の Excel から取り出し、この PC の中（%AppData%\\Sash\\cache）にだけ保存します。Office のアイコンは Microsoft の著作物のため、Sash には同梱していません。取り込んだ後は、Excel を起動しなくても表示できます。')),
         settingRow(t('アイコンの出力サイズ'), select<'32' | '64'>(String(s.iconSize) as '32' | '64', [
           { value: '32', label: '32 × 32' },
           { value: '64', label: t('64 × 64（高DPI）') },
@@ -119,6 +123,47 @@ async function build(start: CategoryId): Promise<void> {
     },
     updates: () => updateSection,
   };
+
+  /** 組み込みのアイコンの取り込みの状態とボタン。取り込み中は進み具合に合わせて書き換える。 */
+  function builtinIconsControl(): HTMLElement {
+    const text = h('span', { role: 'status', 'aria-live': 'polite' });
+    const outdated = h('div', { class: 'notice', hidden: true });
+    const buttons = h('div', { class: 'setting-row' });
+    const root = h('div', { class: 'setting-control' }, h('div', { class: 'setting-row' }, text), outdated, buttons);
+    const render = (st: IconPrefetchStatus | null) => {
+      const excel = st?.excelInstalled ?? app.info.excelInstalled;
+      text.textContent = st ? describePrefetch(st) : t('状態を確かめています…');
+      outdated.hidden = !(st?.outdated && st.state === 'done');
+      outdated.textContent = st?.outdated ? t('Excel が更新されています（{version}）。取り込み直すと、新しいアイコンも表示できます。', { version: st.currentExcelVersion ?? '' }) : '';
+      const running = st?.state === 'running';
+      // 取り込み済みなら Excel からすべて取り直す（Excel の更新で変わったアイコンも反映する）。
+      // 途中で止めたものは、取り込めた分を飛ばして続きから取り込む
+      const done = st?.state === 'done';
+      const label = done ? t('取り込み直す') : (st?.cached ?? 0) > 0 ? t('続きを取り込む') : t('取り込む');
+      buttons.replaceChildren(
+        running
+          ? h('button', { type: 'button', class: 'small', onclick: () => void cancelMsoPrefetch() }, t('中止'))
+          : h('button', {
+              type: 'button',
+              class: 'small',
+              disabled: !excel,
+              title: excel ? null : t('Excel が見つからないため、取り込めません'),
+              onclick: () => void startMsoPrefetch(done),
+            }, label),
+      );
+    };
+    render(prefetchStatus());
+    // 開いている間だけ追いかける。ダイアログを閉じたり分類を切り替えたりしたら外す
+    const off = onPrefetchStatus((st) => {
+      if (!root.isConnected) {
+        off();
+        return;
+      }
+      render(st);
+    });
+    void loadPrefetchStatus();
+    return root;
+  }
 
   const nav = h('div', { class: 'settings-nav', role: 'tablist', 'aria-orientation': 'vertical', 'aria-label': t('設定の分類') });
   const panel = h('div', { class: 'settings-panel', role: 'tabpanel', tabIndex: -1 });

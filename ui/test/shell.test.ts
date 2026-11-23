@@ -111,3 +111,54 @@ describe('通知', () => {
     expect(texts()).toEqual(['e2', 'e3', 'e4']);
   });
 });
+
+describe('通知の update', () => {
+  afterEach(() => clearToasts());
+
+  it('種類とボタンの有無が同じなら、文言だけを差し替えてボタンは作り直さない', () => {
+    const run1 = vi.fn();
+    const run2 = vi.fn();
+    const handle = toast({ kind: 'info', message: '1 / 10', timeout: 0, action: { label: '中止', run: run1 } });
+    const button = document.querySelector<HTMLButtonElement>('.toast-action')!;
+    button.focus();
+
+    handle.update({ kind: 'info', message: '2 / 10', timeout: 0, action: { label: '中止', run: run2 } });
+    expect(document.querySelector('.toast-message')!.textContent).toBe('2 / 10');
+    expect(document.querySelector('.toast-action')).toBe(button);
+    expect(document.activeElement).toBe(button);
+
+    handle.update({ kind: 'info', message: '3 / 10', timeout: 0, action: { label: 'やめる', run: run2 } });
+    expect(button.textContent).toBe('やめる');
+
+    // 押したときは、最後に渡した処理が走る
+    button.click();
+    expect(run1).not.toHaveBeenCalled();
+    expect(run2).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.toast')).toBeNull();
+  });
+
+  it('種類が変わったら描き直す', () => {
+    const handle = toast({ kind: 'info', message: '反映しています…', timeout: 0 });
+    handle.update({ kind: 'error', message: '失敗しました' });
+    const el = document.querySelector('.toast')!;
+    expect(el.classList.contains('error')).toBe(true);
+    expect(el.getAttribute('role')).toBe('alert');
+    expect(el.querySelector('.toast-message')!.textContent).toBe('失敗しました');
+  });
+});
+
+
+describe('サードパーティのライセンス', () => {
+  it('同梱する部品のライセンスの全文を持つ', async () => {
+    const { THIRD_PARTY_LICENSES } = await import('../src/shell/licenses');
+    const names = THIRD_PARTY_LICENSES.map((l) => l.name);
+    expect(names).toContain('Fluent UI System Icons');
+    expect(names).toContain('office-fluent-ui-command-identifiers');
+    for (const l of THIRD_PARTY_LICENSES) expect(l.text.length).toBeGreaterThan(500);
+    for (const name of ['Fluent UI System Icons', 'office-fluent-ui-command-identifiers', 'Monaco Editor']) {
+      const text = THIRD_PARTY_LICENSES.find((l) => l.name === name)!.text;
+      expect(text).toContain('MIT License');
+      expect(text).toContain('Permission is hereby granted');
+    }
+  });
+});

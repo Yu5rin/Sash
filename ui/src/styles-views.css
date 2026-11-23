@@ -326,3 +326,6 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .recipe-conflict { margin: var(--sp-2) 0; padding: var(--sp-2); border: 1px solid var(--warning-border); background: var(--warning-bg); border-radius: var(--radius-sm); }
 .recipe-conflict-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-1); }
 .recipe-conflict pre { background: var(--surface); }
+
+/* メニューのポップアップは canvas.ts の placePopups が画面基準で置く。XML エディタなどの上にも重ねて見せる */
+.rb-menu-popup { z-index: 40; overflow-y: auto; }

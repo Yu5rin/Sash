@@ -15,6 +15,7 @@ Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam、ほかに 
 - **インスペクタとLint**：コントロールごとに使える属性だけを表示し、入力中に検証
 - **Excelへのワンクリック反映（F5）**：保存・クローズ・書き込み・再オープンを自動化。xlamのアドインにも対応
 - **アイコン作成**：PNG / JPG / BMP / GIF / WebP / SVG / ICO / EXE / DLL / クリップボードから、リボン用PNGを作成して設定
+- **アイコン集（Fluent）**：同梱の Fluent UI System Icons（約2,900種）から、日本語でも検索して色を選び、そのままボタンのアイコンにできる（Excel がなくても使える）
 - **コールバック管理**：正しいシグネチャでVBAスタブを生成し、未実装や不一致を検出
 - **カタログ**：idMso / imageMso をあいまい検索
 - **レシピ**：よく使う構成をXMLとVBAのセットで挿入
@@ -108,3 +109,5 @@ dotnet publish src/Sash.App -p:PublishProfile=win-x64
 [MIT License](LICENSE) で公開しています。
 
 idMso の一覧（`ui/src/catalog/excelControls.json`）は、Microsoft の [office-fluent-ui-command-identifiers](https://github.com/OfficeDev/office-fluent-ui-command-identifiers)（MIT License）の Excel 分から作成しています。ライセンス文は `ui/src/catalog/` に同梱しています。
+
+アイコン集のデータ（`ui/src/fluent/fluentIcons.json`）は、Microsoft の [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons)（MIT License、npm パッケージ `@fluentui/svg-icons`）から作成しています。ライセンス文は `ui/src/fluent/LICENSE-fluentui-system-icons.txt` に同梱しています。作り直すときは `ui` で `node scripts/build-fluent-icons.mjs` を実行します。Office の imageMso の画像は同梱していません。

@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using Sash.Core;
 using Sash.Core.CustomUI;
+using Sash.Core.Excel;
 using Sash.Core.Packaging;
 using Sash.Core.Settings;
 using Sash.Core.Update;
@@ -12,9 +13,14 @@ namespace Sash.App;
 
 /// <summary>UI からの要求を種類ごとに処理する。要求と応答の型は ui/src/bridge.ts と対応させる。</summary>
 [SupportedOSPlatform("windows")]
-internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, RecipeStore recipes, Lazy<ExcelService> excel, Action closeWindow)
+internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, RecipeStore recipes, Lazy<ExcelService> excel, ImageMsoCache iconCache, Action closeWindow, Action<object> postEvent)
 {
     private static readonly bool ExcelInstalled = ExcelService.IsInstalled;
+
+    /// <summary>入っている Excel の版。取り込み済みのアイコンを作った版と違えば、取り込み直しを勧める。</summary>
+    private static readonly Lazy<string?> InstalledExcelVersion = new(() => ExcelInstalled ? ExcelEnvironment.InstalledVersion() : null);
+
+    private readonly ImageMsoPrefetch _prefetch = CreatePrefetch(iconCache, postEvent);
     private readonly UpdateService _update = new(settings);
     private UpdateRelease? _lastRelease;
 
@@ -49,6 +55,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "library.chooseFolder" => ChooseLibraryFolder(),
                 "library.toggleFavorite" => ToggleFavorite(Read<IdRequest>(body)),
                 "icons.fromExecutable" => IconsFromExecutable(),
+                "icons.prefetchStatus" => PrefetchStatus(_prefetch.GetStatus()),
+                "icons.prefetchStart" => PrefetchStart(Read<PrefetchStartRequest>(body)),
+                "icons.prefetchCancel" => PrefetchCancel(),
                 "recipes.list" => recipes.List(),
                 "recipes.save" => SaveRecipe(body),
                 "recipes.delete" => DeleteRecipe(Read<IdRequest>(body)),
@@ -608,14 +617,61 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private async Task<object> ImageMsoAsync(ImageMsoRequest req)
     {
-        if (!ExcelInstalled)
-        {
-            return new Dictionary<string, string?>();
-        }
+        var size = req.Size is >= 16 and <= 128 ? req.Size : 32;
 
-        var images = await excel.Value.GetImageMsoAsync(req.Names, req.Size is >= 16 and <= 128 ? req.Size : 32);
+        // Excel がない PC でも、前に取り込んだキャッシュ（Excel をアンインストールした、など）があれば使う。
+        // キャッシュにない名前は結果に含めない（存在しないと決めつけず、Lint の警告も出さない）
+        var images = ExcelInstalled
+            ? await excel.Value.GetImageMsoAsync(req.Names ?? [], size)
+            : await Task.Run(() => iconCache.Lookup(req.Names ?? [], size).Found);
         return images.ToDictionary(kv => kv.Key, kv => kv.Value is null ? null : Convert.ToBase64String(kv.Value));
     }
+
+    // ---- imageMso の取り込み（仕様書 §17.7） ----
+
+    private static ImageMsoPrefetch CreatePrefetch(ImageMsoCache cache, Action<object> post)
+    {
+        var prefetch = new ImageMsoPrefetch(cache, AppLog.Write, () => InstalledExcelVersion.Value);
+        prefetch.Changed += status =>
+        {
+            var dto = PrefetchStatus(status);
+            post(new { @event = "iconPrefetch", dto.State, dto.Done, dto.Total, dto.Size, dto.Failed, dto.Cached, dto.Message, dto.Cancelled });
+        };
+        return prefetch;
+    }
+
+    /// <summary>取り込みの状態を UI 向けにする。Excel がなくキャッシュもなければ unavailable（取り込めない）。</summary>
+    private static PrefetchStatusDto PrefetchStatus(ImageMsoPrefetchStatus s)
+    {
+        var state = s.State == "none" && !ExcelInstalled && s.Cached == 0 ? "unavailable" : s.State;
+        // キャッシュの版は取り込んだ Excel（Application.Version と Build）から、いまの版は EXCEL.EXE のファイルの版から読む。
+        // 形が違っても同じ Excel を「更新された」と言い続けないよう、メジャー.マイナー.ビルドにそろえて比べる
+        var current = ImageMsoCache.NormalizeExcelVersion(InstalledExcelVersion.Value);
+        var cachedVersion = ImageMsoCache.NormalizeExcelVersion(s.ExcelVersion);
+        var outdated = state == "done" && cachedVersion is not null && current is not null && !ImageMsoCache.SameExcelVersion(cachedVersion, current);
+        return new PrefetchStatusDto(state, s.Done, s.Total, s.Size, s.Failed, s.Cached, cachedVersion, s.CachedAt, s.Message, ExcelInstalled, current, outdated, s.Cancelled);
+    }
+
+    private PrefetchStatusDto PrefetchStart(PrefetchStartRequest req)
+    {
+        if (!ExcelInstalled)
+        {
+            throw new UserFacingException(L("Excel が見つからないため、アイコンを取り込めません。", "Excel was not found, so the icons cannot be imported."));
+        }
+
+        // すでに実行中なら、そのまま進み具合を返す
+        _prefetch.Start(req.Names ?? [], req.Sizes, req.Force ?? false, excel.Value.CreateBulkSource());
+        return PrefetchStatus(_prefetch.GetStatus());
+    }
+
+    private PrefetchStatusDto PrefetchCancel()
+    {
+        _prefetch.Cancel();
+        return PrefetchStatus(_prefetch.GetStatus());
+    }
+
+    /// <summary>ウィンドウを閉じるときに、取り込みを止める。</summary>
+    public void Shutdown() => _prefetch.Cancel();
 
     // ---- 要求の型 ----
 
@@ -644,6 +700,24 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     private sealed record ImageMsoRequest(IReadOnlyList<string> Names, int Size);
 
     private sealed record LabelsRequest(IReadOnlyList<string> Ids);
+
+    private sealed record PrefetchStartRequest(IReadOnlyList<string>? Names, IReadOnlyList<int>? Sizes, bool? Force);
+
+    /// <summary>icons.prefetchStatus の応答（ui/src/bridge.ts の IconPrefetchStatus）。</summary>
+    private sealed record PrefetchStatusDto(
+        string State,
+        int Done,
+        int Total,
+        int Size,
+        int Failed,
+        int Cached,
+        string? ExcelVersion,
+        DateTimeOffset? CachedAt,
+        string? Message,
+        bool ExcelInstalled,
+        string? CurrentExcelVersion,
+        bool Outdated,
+        bool Cancelled);
 
     private sealed record VbaInsertRequest(string Path, string Module, string Code, bool DocumentModule);
 

@@ -19,7 +19,7 @@ import { openLibrary } from './dialogs/libraryDialog';
 import { uiIcons } from './icons';
 import { mountLayout } from './layout';
 import { elementAt } from './model';
-import { enableMsoIcons } from './msoIcons';
+import { initMsoIcons } from './msoIcons';
 import type { ImageEntry } from './store';
 import { defFor, titleOf } from './schema';
 import { builtinRecipes } from './recipes';
@@ -33,6 +33,7 @@ import { mountTree } from './views/tree';
 import { mountXmlEditor, revealInXml } from './views/xmlEditor';
 import { probeInsert, setEditRefusedHandler } from './shell/compat';
 import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
+import { describeElement } from './elementHelp';
 import { inTextField, runEditCommand } from './shell/editCommands';
 import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
@@ -255,7 +256,10 @@ const INSERT_COMMON = ['tab', 'group', 'button', 'toggleButton', 'checkBox', 'dr
 function insertItem(tag: string): MenuItemDef {
   const store = app.store;
   const reason = store ? probeInsert(store.doc, store.selection, tag) : t('ファイルを開くと追加できます');
-  return { label: titleOf(tag), hint: reason ?? tag, enabled: reason === null, run: () => void insertNearSelection(tag) };
+  // ツールチップには何ができる部品かを出す。追加できないときは、その理由を添える
+  const desc = describeElement(tag);
+  const hint = [desc || tag, reason].filter(Boolean).join('\n');
+  return { label: titleOf(tag), hint, enabled: reason === null, run: () => void insertNearSelection(tag) };
 }
 
 const CANVAS_MODES: readonly { mode: CanvasMode; label: string }[] = [
@@ -603,7 +607,8 @@ if (settings.language && settings.language !== lang && sessionGet(LANG_SYNC_KEY)
   location.reload();
 } else {
   if (settings.language === lang) sessionSet(LANG_SYNC_KEY, null);
-  enableMsoIcons(info.excelInstalled);
+  // Excel のアイコンは、取り込み済みのキャッシュがあれば Excel がなくても出す。初めての起動なら裏で取り込みを始める（仕様書 §17.7）
+  void initMsoIcons(info.excelInstalled);
   applyTheme();
   updateChrome();
   // app.info が届いてから取り直す（Excel で開いているブックが起動時に出なかった不具合の対策）

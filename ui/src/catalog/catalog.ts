@@ -19,6 +19,18 @@ export const catalog: readonly CatalogEntry[] = (data as [string, string, string
 
 export const knownIdMso: ReadonlySet<string> = new Set(catalog.map((c) => c.id));
 
+/** 画像を持たない種類。タブ・タブの組・右クリックメニューそのものには imageMso がない。 */
+const NO_IMAGE_TYPES: ReadonlySet<string> = new Set(['tab', 'tabSet', 'contextMenu']);
+
+/**
+ * Excel から一括で取り込む imageMso の名前（仕様書 §17.7）。imageMso の名前は idMso と同じものが多いので、
+ * コマンドの一覧から画像を持ちうるものを選ぶ。グループは縮んだときにアイコンを出すので含める。
+ * 一覧にない名前は、使われたときに個別に取りに行く。
+ */
+export function imageMsoNames(): string[] {
+  return [...new Set(catalog.filter((c) => !NO_IMAGE_TYPES.has(c.type)).map((c) => c.id))];
+}
+
 const LABEL_CACHE_KEY = 'sash.catalog.labels';
 
 /** idMso → Excel での表示名。 */
