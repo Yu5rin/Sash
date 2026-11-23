@@ -1,7 +1,7 @@
 // キャンバスの使い勝手（C-1 追加直後の名前入力、C-3 組み込みタブの「…」、C-5 選択の読み上げ、C-7 グループ名）。
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { app } from '../src/app';
-import { builtinGroupName, describeSelection, mountCanvas, startRenameOf } from '../src/views/canvas';
+import { builtinGroupName, describeSelection, mountCanvas, setCanvasGrowHandler, startRenameOf } from '../src/views/canvas';
 import { elementAt, pathOf } from '../src/model';
 import { setPreview } from '../src/views/ribbonPreview';
 
@@ -128,5 +128,23 @@ describe('C-7 組み込みグループの日本語名', () => {
     expect(builtinGroupName('GroupClipboard')).toBe('クリップボード');
     expect(builtinGroupName('GroupFont')).toBe('フォント');
     expect(builtinGroupName('GroupSomethingNew')).toBe('SomethingNew');
+  });
+});
+
+describe('C-4 比べるモードの高さ', () => {
+  it('比べる枠があれば高さを広げ、閉じたら元に戻す', () => {
+    const calls: number[] = [];
+    let released = 0;
+    setCanvasGrowHandler((px) => {
+      calls.push(px);
+      return () => { released++; };
+    });
+    setPreview({ width: 1366, compare: true });
+    app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
+    expect(calls.length).toBe(1);
+    setPreview({ compare: false });
+    app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
+    expect(released).toBe(1);
+    setCanvasGrowHandler(null);
   });
 });
