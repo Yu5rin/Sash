@@ -32,7 +32,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  setPreview({ width: null, scale: 100, fit: 'fit', compare: false, keytips: false });
+  setPreview({ width: null, scale: 100, fit: 'fit', compare: false, keytips: false, keytipsAll: false });
   app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
 });
 
@@ -71,6 +71,10 @@ describe('キャンバスの幅のプレビュー', () => {
     const tip = (id: string) => host.querySelector(`[data-path="${pathOfId(id)}"] > .rb-keytip`);
     expect(tip('b1')?.classList.contains('dup')).toBe(true);
     expect(tip('b2')?.classList.contains('dup')).toBe(true);
+    // 書いていないものの「自動」は、［未設定も表示］のときだけ出す
+    expect(tip('b3')).toBeNull();
+    setPreview({ keytipsAll: true });
+    setPreviewWidth(null);
     expect(tip('b3')?.classList.contains('auto')).toBe(true);
     // 自分のタブの H は、組み込みの［ホーム］の H と重なる
     expect(host.querySelector('.rb-tab.active .rb-keytip')?.classList.contains('dup')).toBe(true);
@@ -106,6 +110,31 @@ describe('キャンバスの幅のプレビュー', () => {
     expect(compare!.querySelector('[data-path], [data-sel], [draggable="true"]')).toBeNull();
     // 編集する側の要素は一つずつ
     expect(host.querySelectorAll(`[data-path="${pathOfId('b1')}"]`)).toHaveLength(1);
+  });
+
+  it('見出しは 1 行：比べる・キーヒント・VBA で変わる表示・チェックする幅・Excel の幅は「表示」メニューにまとめる', () => {
+    setPreviewWidth(1920);
+    const header = host.querySelector<HTMLElement>('.cv-header')!;
+    expect(header.querySelector('.cv-bar, .cv-row')).toBeNull();
+    expect(header.querySelector('[data-fk="compare"]')).toBeNull();
+    expect(header.querySelector('.cv-status .cv-zoominfo')).not.toBeNull();
+    header.querySelector<HTMLButtonElement>('[data-fk="menu-view"]')!.click();
+    const pop = host.querySelector<HTMLElement>('.cv-viewpop')!;
+    expect(pop).not.toBeNull();
+    for (const fk of ['compare', 'keytips', 'keytipsAll', 'menu-dynamic', 'menu-checks', 'excelWidth']) expect(pop.querySelector(`[data-fk="${fk}"]`)).not.toBeNull();
+    // キーヒントが切ってあるうちは「未設定も表示」は選べない
+    expect(pop.querySelector<HTMLInputElement>('[data-fk="keytipsAll"]')!.disabled).toBe(true);
+    // 「VBA で変わる表示を試す…」で、同じ場所に試すメニューを開く
+    pop.querySelector<HTMLButtonElement>('[data-fk="menu-dynamic"]')!.click();
+    expect(host.querySelector('.cv-viewpop')).toBeNull();
+    expect(host.querySelectorAll('.cv-dyn-row').length).toBeGreaterThan(0);
+  });
+
+  it('自作のタブは書いた順に並べる（insertAfterMso などがないもの）', () => {
+    const many = XML.replace('<tab id="t" label="T" keytip="H">', '<tab id="t0" label="T0"><group id="g0" label="G0" /></tab><tab id="t1" label="T1"><group id="g1" label="G1" /></tab><tab id="t" label="T" keytip="H">');
+    app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: many, images: [] }] });
+    const labels = [...host.querySelectorAll('.rb-tabs-scroll .rb-tab:not(.builtin):not(.file) .rb-label')].map((x) => x.textContent);
+    expect(labels).toEqual(['T0', 'T1', 'T']);
   });
 
   it('ヒントの id は title に出さない（マウスを乗せたときのヒントと二重にしない）', () => {

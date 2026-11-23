@@ -142,3 +142,55 @@ export function applyIdReplacePlan(doc: Document, plan: IdReplacePlan, skipCallb
   for (const { el, r } of idTargets) if (el && el.getAttribute('id') === r.oldId) el.setAttribute('id', r.newId);
   for (const { el, attr, c } of cbTargets) if (el && el.getAttribute(attr) === c.oldName) el.setAttribute(attr, c.newName);
 }
+
+/** VBA の中で、置き換える前の id を文字列として書いている箇所（Case "btnRun"・InvalidateControl "btnRun" など）。 */
+export interface VbaIdLiteral {
+  module: string;
+  /** 1 から数えた行。 */
+  line: number;
+  id: string;
+  /** その行（前後の空白を除く）。 */
+  text: string;
+}
+
+/**
+ * VBA のコードから、古い id と同じ中身の文字列リテラルを探す（大文字と小文字は区別する。id は区別されるため）。
+ * コメント（文字列の外の ' 以降）は見ない。一括置換は Sub 名（宣言行）しか変えないので、
+ * Select Case control.Id や InvalidateControl に書いた id は、利用者に手で直してもらうために一覧にする。
+ */
+export function findIdLiteralsInVba(modules: readonly { name: string; code: string }[], oldIds: Iterable<string>): VbaIdLiteral[] {
+  const ids = new Set(oldIds);
+  const out: VbaIdLiteral[] = [];
+  if (ids.size === 0) return out;
+  for (const m of modules) {
+    const lines = m.code.split(/\r?\n/);
+    lines.forEach((raw, i) => {
+      // "..." の中身を順に拾う（"" は文字列の中の " ）。文字列の外の ' から後ろはコメントなので見ない
+      let j = 0;
+      while (j < raw.length) {
+        const c = raw[j];
+        if (c === "'") break;
+        if (c !== '"') {
+          j++;
+          continue;
+        }
+        let value = '';
+        j++;
+        while (j < raw.length) {
+          if (raw[j] === '"') {
+            if (raw[j + 1] === '"') {
+              value += '"';
+              j += 2;
+              continue;
+            }
+            break;
+          }
+          value += raw[j++];
+        }
+        j++;
+        if (ids.has(value)) out.push({ module: m.name, line: i + 1, id: value, text: raw.trim() });
+      }
+    });
+  }
+  return out;
+}

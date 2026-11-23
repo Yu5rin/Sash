@@ -19,11 +19,13 @@ export interface PreviewSettings {
   compareWidth: number;
   /** キーヒントを重ねて表示する。 */
   keytips: boolean;
+  /** キーヒントを書いていないコントロールにも「自動」を出す（既定はオフ。書いたものと VBA のもの・重なりだけを見せる）。 */
+  keytipsAll: boolean;
 }
 
 const KEY = 'sash.preview';
 
-const DEFAULTS: PreviewSettings = { width: null, customWidth: 1600, scale: 100, fit: 'fit', compare: false, compareWidth: 1366, keytips: false };
+const DEFAULTS: PreviewSettings = { width: null, customWidth: 1600, scale: 100, fit: 'fit', compare: false, compareWidth: 1366, keytips: false, keytipsAll: false };
 
 function load(): PreviewSettings {
   try {
@@ -39,6 +41,7 @@ function load(): PreviewSettings {
       compare: v.compare === true,
       compareWidth: num(v.compareWidth, DEFAULTS.compareWidth),
       keytips: v.keytips === true,
+      keytipsAll: v.keytipsAll === true,
     };
   } catch {
     return { ...DEFAULTS };

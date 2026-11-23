@@ -36,6 +36,8 @@ export interface CheckSection {
   /** 一覧の説明・確かめられなかった理由など。 */
   note?: string;
   items: CheckItem[];
+  /** VBA と照合できず、確かめていないコールバックの数（callbacks の分類だけ）。 */
+  unverified?: number;
 }
 
 /** キャンバスが測ったグループ 1 つ分（views/ribbonFit.ts の FitReportEntry と同じ形）。 */
@@ -141,10 +143,15 @@ export function collectChecks(input: CheckInput): CheckSection[] {
   const sections: CheckSection[] = [];
   sections.push({ id: 'problems', title: t('エラーと警告'), items: restProblems.map((p) => problemItem(p, 'must')) });
 
-  // 2. VBA にないコールバック・引数の合わないコールバック
+  // 2. VBA にないコールバック・引数の合わないコールバック。
+  // 照合できていないのにコールバックがあるなら「配ってよい」とは言えない（押すと「マクロが見つかりません」になりうる）ので、
+  // 確かめていない数を持たせ、見出しと並びで一番上に出す
+  const callbackNames = new Set<string>();
+  for (const el of elements) for (const a of Array.from(el.attributes)) if (isCallbackAttr(a.localName) && a.value) callbackNames.add(a.value);
   sections.push({
     id: 'callbacks',
     title: t('VBA にない・引数の合わないコールバック'),
+    unverified: input.vbaChecked ? 0 : callbackNames.size,
     note: input.vbaChecked ? undefined : `${t('VBA と照合していないため、数えていません。')}${input.vbaNote ? ` ${input.vbaNote}` : ''}`,
     items: input.vbaChecked
       ? callbackIssues.filter((s) => s.uses.length > 0).map((s): CheckItem => ({
@@ -161,16 +168,29 @@ export function collectChecks(input: CheckInput): CheckSection[] {
   // 収まらない（右にはみ出してボタンが見えなくなる）ものは must、畳まれるだけのもの・畳んだときのアイコンがないものは should
   const fit = input.fit;
   const fitItems: CheckItem[] = [];
+  const noIcon: FitEntry[] = [];
   for (const e of fit?.entries ?? []) {
     const name = e.label || e.id || t('(ラベルなし)');
     const base = { path: e.path, detail: detailOf(e.path), target: 'element' as const };
     if (e.clippedAt !== undefined) fitItems.push({ ...base, level: 'must', severity: 'warning', text: t('{width}で［{name}］が収まりません（目安）', { width: fit!.widthLabel(e.clippedAt), name }) });
     else if (e.collapsedAt !== undefined) fitItems.push({ ...base, level: 'should', severity: 'info', text: t('{width}で［{name}］が畳まれます（目安）', { width: fit!.widthLabel(e.collapsedAt), name }) });
-    if (e.noIcon && (e.collapsedAt !== undefined || e.clippedAt !== undefined)) fitItems.push({ ...base, level: 'should', severity: 'warning', text: t('［{name}］が畳まれたときのアイコンが未設定です', { name }) });
+    if (e.noIcon && (e.collapsedAt !== undefined || e.clippedAt !== undefined)) noIcon.push(e);
+  }
+  // 畳まれたときのアイコンがないのは、汎用のアイコンで出るだけなので参考に近い。グループごとに並べると一覧が埋まるので 1 行にまとめる
+  // （押すと最初のグループを選ぶ。問題の一覧の fitProblems と同じ形）
+  if (noIcon.length) {
+    fitItems.push({
+      level: 'should',
+      severity: 'info',
+      text: t('{n} グループで畳まれたときのアイコンが未設定です', { n: noIcon.length }),
+      detail: noIcon.map((e) => e.label || e.id || t('(ラベルなし)')).join('、'),
+      path: noIcon[0]!.path,
+      target: 'element',
+    });
   }
   sections.push({
     id: 'fit',
-    title: t('確かめる幅で畳まれる・収まらないグループ'),
+    title: t('チェックする画面の幅で畳まれる・収まらないグループ'),
     note: fit === null ? t('キャンバスで幅を選ぶと確認できます') : t('確かめた幅：{widths}（キャンバスの見積もり。実機の Excel とは少し違うことがあります）', { widths: fit.widths }),
     items: fitItems,
   });
@@ -217,7 +237,7 @@ export function collectChecks(input: CheckInput): CheckSection[] {
     ),
   });
 
-  const weight = (s: CheckSection) => (s.items.some((i) => i.level === 'must') ? 0 : s.items.some((i) => i.level === 'should') ? 1 : s.items.length ? 2 : 3);
+  const weight = (s: CheckSection) => ((s.unverified ?? 0) > 0 ? -1 : s.items.some((i) => i.level === 'must') ? 0 : s.items.some((i) => i.level === 'should') ? 1 : s.items.length ? 2 : 3);
   // 同じ重さなら上の定義順のまま（sort は安定）
   return sections.sort((a, b) => weight(a) - weight(b));
 }
@@ -232,8 +252,23 @@ export function suggestionCount(sections: readonly CheckSection[]): number {
   return sections.reduce((n, s) => n + s.items.filter((i) => i.level === 'should').length, 0);
 }
 
-/** 見出しの文言。 */
+/** VBA と照合できず、確かめていないコールバックの数。 */
+export function unverifiedCallbacks(sections: readonly CheckSection[]): number {
+  return sections.reduce((n, s) => n + (s.unverified ?? 0), 0);
+}
+
+/** 配ってよいと言えるか（確認が必要なものがなく、コールバックも照合できている）。 */
+export function readyToDistribute(sections: readonly CheckSection[]): boolean {
+  return attentionCount(sections) === 0 && unverifiedCallbacks(sections) === 0;
+}
+
+/** 見出しの文言。コールバックを照合できていなければ、ほかに何もなくても「配ってよい」とは言わない。 */
 export function summaryText(sections: readonly CheckSection[]): string {
   const n = attentionCount(sections);
+  const u = unverifiedCallbacks(sections);
+  if (u > 0) {
+    const head = t('VBA と照合できていません（コールバック {n} 件は未確認）', { n: u });
+    return n === 0 ? head : `${head}${t('。ほかに {n} 件の確認が必要です', { n })}`;
+  }
   return n === 0 ? t('配ってよい状態です') : t('{n} 件の確認が必要です', { n });
 }

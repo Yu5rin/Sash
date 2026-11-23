@@ -199,7 +199,9 @@ function mountFilter(host: HTMLElement): void {
   const input = h('input', {
     type: 'search',
     class: 'tree-filter-input',
-    placeholder: t('絞り込み（ラベル・ID・コールバック）'),
+    // 既定のペインの幅（248px）で切れないよう短くし、何で絞り込めるかはツールチップに出す
+    placeholder: t('絞り込み'),
+    title: t('ラベル・id・idMso・画像・コールバック名で絞り込みます（Ctrl+F）'),
     'aria-label': t('ツリーを絞り込む'),
     'aria-controls': host.id || undefined,
     spellcheck: false,

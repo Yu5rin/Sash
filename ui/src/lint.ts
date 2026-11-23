@@ -211,6 +211,8 @@ function lintLabelLength(el: Element, add: (s: Severity, el: Element, m: string,
   const container = holder.parentElement?.localName;
   // グループ・box・buttonGroup に直接置いたものだけ（menu・Backstage の中は対象外）
   if (container !== 'group' && container !== 'box' && container !== 'buttonGroup') return;
+  // ラベルを出さないもの（showLabel="false"）と、出すかを VBA で決めるもの（getShowLabel）は、長さで幅も行も変わらないので見ない
+  if ([el, holder].some((x) => x.getAttribute('showLabel') === 'false' || x.getAttribute('showLabel') === '0' || x.hasAttribute('getShowLabel'))) return;
   const large = holder.getAttribute('size') === 'large';
   if (large) {
     if (labelWidth(label) > LARGE_LABEL_MAX_WIDTH) add('warning', el, t('大きいボタンのラベルが長いため、Excel では2行目で切れる可能性があります'), 'label');

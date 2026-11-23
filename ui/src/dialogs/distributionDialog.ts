@@ -3,7 +3,7 @@
 
 import { app } from '../app';
 import { vba } from '../callbacks';
-import { attentionCount, collectChecks, suggestionCount, summaryText, type CheckItem, type CheckLevel, type CheckSection, type FitInput } from '../distributionCheck';
+import { collectChecks, readyToDistribute, suggestionCount, summaryText, type CheckItem, type CheckLevel, type CheckSection, type FitInput } from '../distributionCheck';
 import { h, svg } from '../dom';
 import { t } from '../i18n';
 import { uiIcons } from '../icons';
@@ -45,17 +45,17 @@ export function openDistributionCheck(opts: DistributionDialogOptions): void {
   const body = h('div', { class: 'dist-check' });
   const render = () => {
     const sections = currentChecks();
-    const n = attentionCount(sections);
+    const ok = readyToDistribute(sections);
     const m = suggestionCount(sections);
-    const header = h('div', { class: `dist-summary ${n === 0 ? 'ok' : 'attention'}`, role: 'status' },
-      svg(n === 0 ? uiIcons.info : uiIcons.warning),
+    const header = h('div', { class: `dist-summary ${ok ? 'ok' : 'attention'}`, role: 'status' },
+      svg(ok ? uiIcons.info : uiIcons.warning),
       h('div', null,
         h('strong', null, summaryText(sections)),
         h('span', { class: 'muted' }, m ? t('見直すとよいもの {n} 件', { n: m }) : t('見直すとよいものはありません'))));
     const list = sections.map((s) => {
       const count = s.items.length;
       return h('section', { class: `dist-section${count === 0 ? ' empty' : ''}` },
-        h('h3', null, h('span', null, s.title), h('span', { class: `dist-count${s.items.some((i) => i.level === 'must') ? ' must' : ''}` }, String(count))),
+        h('h3', null, h('span', null, s.title), h('span', { class: `dist-count${s.items.some((i) => i.level === 'must') || (s.unverified ?? 0) > 0 ? ' must' : ''}` }, (s.unverified ?? 0) > 0 ? t('未確認 {n}', { n: s.unverified! }) : String(count))),
         s.note ? h('p', { class: 'dist-note muted' }, s.note) : null,
         count === 0 ? null : h('ul', { class: 'dist-items' }, s.items.map((item) =>
           h('li', null, h('button', {

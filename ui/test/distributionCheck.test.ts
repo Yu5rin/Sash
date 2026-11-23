@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionCount, collectChecks, suggestionCount, summaryText, type CheckInput, type CheckSection } from '../src/distributionCheck';
+import { attentionCount, collectChecks, readyToDistribute, suggestionCount, summaryText, unverifiedCallbacks, type CheckInput, type CheckSection } from '../src/distributionCheck';
 import { lint, type Problem } from '../src/lint';
 import { parseXml } from '../src/model';
 import { matchCallbacks } from '../src/vba';
@@ -20,9 +20,11 @@ function input(d: Document, extra: Partial<CheckInput> = {}): CheckInput {
 const section = (s: CheckSection[], id: CheckSection['id']) => s.find((x) => x.id === id)!;
 
 describe('配布前チェック', () => {
-  it('問題がなければ「配ってよい状態です」', () => {
+  it('問題がなく、コールバックも照合できていれば「配ってよい状態です」', () => {
     const d = doc('<tab id="t" label="T"><group id="g" label="G" imageMso="HappyFace"><button id="b" label="実行" imageMso="MacroPlay" screentip="実行します" onAction="Run" /></group></tab>');
-    const s = collectChecks(input(d));
+    const statuses = matchCallbacks(d, [{ name: 'Module1', type: 1, code: 'Sub Run(control As IRibbonControl)\r\nEnd Sub\r\n' }]);
+    const s = collectChecks(input(d, { statuses, vbaChecked: true }));
+    expect(readyToDistribute(s)).toBe(true);
     expect(attentionCount(s)).toBe(0);
     expect(summaryText(s)).toBe('配ってよい状態です');
     expect(section(s, 'noScreentip').items).toEqual([]);
@@ -73,6 +75,20 @@ describe('配布前チェック', () => {
     expect(section(s, 'callbacks').note).toContain('Excel で開かれていません');
   });
 
+  it('コールバックがあるのに VBA と照合できていなければ、「配ってよい」とは言わず、その分類を一番上に出す', () => {
+    const d = doc('<tab id="t" label="T"><group id="g" label="G" imageMso="HappyFace"><button id="b" label="B" imageMso="X" screentip="s" onAction="Run" /><button id="c" label="C" imageMso="X" screentip="s" onAction="Run" getEnabled="En" /></group></tab>');
+    const s = collectChecks(input(d, { statuses: matchCallbacks(d, null), vbaChecked: false }));
+    expect(attentionCount(s)).toBe(0);
+    expect(unverifiedCallbacks(s)).toBe(2);
+    expect(readyToDistribute(s)).toBe(false);
+    expect(summaryText(s)).toBe('VBA と照合できていません（コールバック 2 件は未確認）');
+    expect(s[0]!.id).toBe('callbacks');
+    // ほかにも確認が必要なものがあれば添える
+    const d2 = doc('<tab id="t" label="T"><group id="g" label="G"><button id="a" label="A" imageMso="X" screentip="s" onAction="Run" /><button id="a" label="B" imageMso="X" screentip="s" /></group></tab>');
+    const s2 = collectChecks(input(d2, { vbaChecked: false }));
+    expect(summaryText(s2)).toMatch(/^VBA と照合できていません（コールバック 1 件は未確認）。ほかに \d+ 件の確認が必要です$/);
+  });
+
   it('VBA にないコールバックは must で、Lint の同じ警告は問題の分類から除く', () => {
     const d = doc('<tab id="t" label="T"><group id="g" label="G"><button id="b" label="B" imageMso="X" screentip="s" onAction="Ribbon_b_onAction" /></group></tab>');
     const statuses = matchCallbacks(d, [{ name: 'Module1', type: 1, code: 'Sub Other()\r\nEnd Sub\r\n' }]);
@@ -112,8 +128,8 @@ describe('配布前チェック', () => {
     const s = collectChecks(input(d, { fit }));
     expect(section(s, 'fit').items.map((i) => [i.level, i.text])).toEqual([
       ['should', '1366 幅で［G1］が畳まれます（目安）'],
-      ['should', '［G1］が畳まれたときのアイコンが未設定です'],
       ['must', '1280 幅で［G2］が収まりません（目安）'],
+      ['should', '1 グループで畳まれたときのアイコンが未設定です'],
     ]);
     expect(attentionCount(s)).toBe(1);
   });

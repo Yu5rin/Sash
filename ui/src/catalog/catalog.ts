@@ -46,13 +46,29 @@ function loadLabels(): [string, string][] {
 }
 
 let labelsLoading: Promise<void> | null = null;
+const labelsListeners = new Set<() => void>();
+
+/**
+ * Excel から表示名が届いたときに呼ぶ処理を登録する。キャンバスは idMso のコントロールの表示名で幅を測るので、
+ * 届いたら測った幅を捨てて描き直す（測り直さないと、表示名の長さの違いが畳まれ方の見積もりに入らないため）。
+ */
+export function onLabelsLoaded(fn: () => void): void {
+  labelsListeners.add(fn);
+}
 
 /** Excel から表示名を取得する。取得済みなら何もしない。 */
 export function ensureLabels(excelInstalled: boolean): Promise<void> {
   if (!excelInstalled || labels.size > 0) return Promise.resolve();
   labelsLoading ??= invoke('excel.labels', { ids: catalog.map((c) => c.id) })
     .then((res) => {
-      for (const [k, v] of Object.entries(res)) if (v) labels.set(k, v);
+      let changed = false;
+      for (const [k, v] of Object.entries(res)) {
+        if (v && labels.get(k) !== v) {
+          labels.set(k, v);
+          changed = true;
+        }
+      }
+      if (changed) for (const fn of labelsListeners) fn();
       try {
         localStorage.setItem(LABEL_CACHE_KEY, JSON.stringify(Object.fromEntries(labels)));
       } catch {

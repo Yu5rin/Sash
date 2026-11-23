@@ -75,4 +75,22 @@ public class ExcelWindowSizingTests
     [InlineData(2100, 3940, 1920, 3840, 96, -75)]
     public void はみ出した分だけ左端を動かす(int left, int right, int workLeft, int workRight, int dpi, double expected) =>
         Assert.Equal(expected, ExcelWindowSizing.LeftAdjustmentPoints(left, right, workLeft, workRight, dpi), 6);
+
+    [Theory]
+    // 1280 論理 px は 96dpi で 1280 物理 px、144dpi（150%）で 1920 物理 px
+    [InlineData(1280, 96, 1280)]
+    [InlineData(1280, 144, 1920)]
+    [InlineData(1092.8, 120, 1366)]
+    public void 期待する物理pxの幅(double logical, int dpi, int expected) => Assert.Equal(expected, ExcelWindowSizing.ExpectedPhysicalWidth(logical, dpi));
+
+    [Theory]
+    // 2px 以内のずれは直さない
+    [InlineData(1918, 1920, 96, 0)]
+    [InlineData(1922, 1920, 96, 0)]
+    // 16 物理 px 狭い（96dpi）→ 12pt 足す
+    [InlineData(1904, 1920, 96, 12)]
+    // 広すぎる（144dpi で 30 物理 px = 20 論理 px = 15pt）→ 15pt 引く
+    [InlineData(1950, 1920, 144, -15)]
+    public void ずれた分を直すポイント(int actual, int expected, int dpi, double points) =>
+        Assert.Equal(points, ExcelWindowSizing.CorrectionPoints(actual, expected, dpi), 6);
 }

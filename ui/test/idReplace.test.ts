@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyIdReplacePlan, planIdReplace, replaceId, type IdReplaceOptions } from '../src/idReplace';
+import { applyIdReplacePlan, findIdLiteralsInVba, planIdReplace, replaceId, type IdReplaceOptions } from '../src/idReplace';
 import { parseXml, serialize } from '../src/model';
 import { DEFAULT_NAMING } from '../src/vba';
 
@@ -81,5 +81,22 @@ describe('ID の一括置換', () => {
   it('idMso と idQ は置き換えない', () => {
     const plan = planIdReplace(doc('<button idMso="btnX" /><button idQ="x:btnY" />'), opts({}));
     expect(plan.ids).toEqual([]);
+  });
+
+  it('VBA に古い id を文字列で書いている箇所を探す（コメントの中・部分一致は数えない）', () => {
+    const code = [
+      'Sub Ribbon_onAction(control As IRibbonControl)',
+      '  Select Case control.Id',
+      '    Case "btnA": Run',
+      `    Case "btnAB" ' "btnA" はコメント`,
+      '  End Select',
+      '  ribbon.InvalidateControl "btnB"',
+      '  MsgBox "say ""btnA"""',
+      'End Sub',
+    ].join('\r\n');
+    const hits = findIdLiteralsInVba([{ name: 'modRibbon', code }], ['btnA', 'btnB']);
+    expect(hits.map((h) => [h.module, h.line, h.id])).toEqual([['modRibbon', 3, 'btnA'], ['modRibbon', 6, 'btnB']]);
+    expect(hits[0]!.text).toBe('Case "btnA": Run');
+    expect(findIdLiteralsInVba([{ name: 'm', code }], [])).toEqual([]);
   });
 });

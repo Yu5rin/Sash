@@ -95,6 +95,18 @@ public static class ExcelWindowSizing
 
         return deltaPhysical == 0 ? 0 : LogicalToPoints(PhysicalToLogical(deltaPhysical, dpi));
     }
+
+    /// <summary>合わせた後のウィンドウの幅として期待する物理 px（論理 px × dpi / 96、四捨五入）。</summary>
+    public static int ExpectedPhysicalWidth(double logicalWidth, int dpi) => (int)Math.Round(logicalWidth * (dpi > 0 ? dpi : 96) / 96.0, MidpointRounding.AwayFromZero);
+
+    /// <summary>測った幅が期待とずれたときに Application.Width へ足すポイント。差が 2px 以内なら 0（直さない）。</summary>
+    public const int TolerancePixels = 2;
+
+    public static double CorrectionPoints(int actualPhysical, int expectedPhysical, int dpi)
+    {
+        var diff = expectedPhysical - actualPhysical;
+        return Math.Abs(diff) <= TolerancePixels ? 0 : LogicalToPoints(PhysicalToLogical(diff, dpi));
+    }
 }
 
 /// <summary>ウィンドウの幅の合わせ方。</summary>

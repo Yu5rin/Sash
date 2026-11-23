@@ -9,20 +9,27 @@
 #canvas { padding: 0 var(--sp-4) var(--sp-4); }
 #canvas:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
 .cv-header {
+  /* 1 行だけなので、上に貼り付けても場所を取らない。2 行以上にすると既定のキャンバスの高さでリボンが隠れる */
   position: sticky;
   top: 0;
   z-index: 6;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--sp-1);
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
   margin: 0 calc(-1 * var(--sp-4)) var(--sp-2);
-  padding: var(--sp-2) var(--sp-4);
+  padding: var(--sp-1) var(--sp-4);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
+  /* 見出しの幅で「画面の幅」「拡大率」の文字を隠すか決める（下の @container） */
+  container-type: inline-size;
+  container-name: cv-header;
 }
-.cv-modes button { height: var(--ctl-h-sm); padding: 0 var(--sp-3); }
-.cv-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; cursor: help; border-bottom: 1px dotted var(--border-strong); }
+.cv-header > * { flex-shrink: 0; }
+.cv-modes button { height: var(--ctl-h-sm); padding: 0 var(--sp-2); font-size: var(--fs-xs); }
+.cv-spacer { flex: 1 1 auto; }
+.cv-hint { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border-strong); font-size: 11px; color: var(--text-subtle); cursor: help; }
 .cv-hint:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .cv-stage { position: relative; }
 .cv-empty { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); color: var(--text-subtle); }
@@ -99,6 +106,8 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  /* 縮ませない。「自由」の幅で枠が狭いと、グループが押しつぶされて中のボタンが重なり、隣を押してしまうため（あふれた分は横スクロール） */
+  flex-shrink: 0;
   padding: 0 4px;
   border: none;
   border-radius: var(--radius-sm);
@@ -232,6 +241,8 @@
 .ctx-item:hover, .ctx-item:focus { background: var(--hover-bg); }
 .ctx-item:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
 .ctx-item.disabled { color: var(--text-disabled); }
+.ctx-item.has-reason { height: auto; min-height: var(--ctl-h); padding-top: 4px; padding-bottom: 4px; }
+.ctx-reason { display: block; max-width: 320px; margin-top: 1px; font-size: 11px; line-height: 1.35; color: var(--text-subtle); white-space: normal; }
 .ctx-item.disabled:hover, .ctx-item.disabled:focus { background: transparent; }
 .ctx-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-shortcut { color: var(--text-subtle); font-size: var(--fs-xs); }
@@ -339,28 +350,40 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 
 /* ---- キャンバス：幅のプレビュー（canvas.ts・ribbonFit.ts） ---- */
 
-.cv-row, .cv-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); min-width: 0; }
-.cv-bar { gap: var(--sp-1) var(--sp-2); }
-.cv-width { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); }
+.cv-width { display: flex; align-items: center; flex-wrap: nowrap; gap: var(--sp-1) var(--sp-2); flex-shrink: 0; }
 .cv-field { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
-.cv-select { height: var(--ctl-h-sm); padding: 0 var(--sp-1); font-size: var(--fs-xs); }
-.cv-num { width: 6em; height: var(--ctl-h-sm); font-size: var(--fs-xs); }
-.cv-fit button { height: var(--ctl-h-sm); min-height: 0; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
-.cv-status { font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
-.cv-toggle.active, .cv-bar > .cv-menu-wrap > button.active { background: var(--sel-bg); border-color: var(--sel-border); }
-.cv-bar button { min-height: 0; }
-.cv-bar .rb-arrow { margin-left: 4px; }
+.cv-select { height: var(--ctl-h-sm); min-height: 0; padding: 0 2px; font-size: var(--fs-xs); }
+.cv-num { min-height: 0; padding: 0 4px; width: 5.5em; height: var(--ctl-h-sm); font-size: var(--fs-xs); }
+.cv-fit button { height: var(--ctl-h-sm); min-height: 0; padding: 0 var(--sp-2); font-size: var(--fs-xs); white-space: nowrap; }
+/* 状態の文字は残りの幅に入るだけ出し、あふれたら「…」で切る（全文は title） */
+.cv-header > .cv-status { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--fs-xs); color: var(--text-subtle); }
+.cv-status.warning .cv-fitinfo { color: var(--warning-text); font-weight: 600; }
+.cv-link { min-height: 0; height: auto; padding: 0; border: none; background: transparent; color: var(--accent); font-size: var(--fs-xs); text-decoration: underline; cursor: pointer; white-space: nowrap; }
+.cv-link[hidden] { display: none; }
+.cv-header button.small { min-height: 0; height: var(--ctl-h-sm); }
+.cv-viewbtn.active, .cv-viewbtn.has-on { background: var(--sel-bg); border-color: var(--sel-border); }
+.cv-viewbtn .rb-arrow { margin-left: 4px; }
 .cv-menu-wrap { position: relative; display: inline-flex; }
-.cv-disabled-wrap { display: inline-flex; cursor: not-allowed; }
-.cv-msgs { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); min-width: 0; }
-.cv-msg { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2); border-radius: var(--radius-sm); font-size: var(--fs-xs); border: 1px solid var(--border); background: var(--surface); }
-.cv-msg[hidden] { display: none; }
-.cv-msg.warning { border-color: var(--warning-border, var(--warning)); background: var(--warning-bg, var(--surface)); }
-.cv-msg.info { border-color: var(--border-strong); }
-.cv-msg button { height: 20px; min-height: 0; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
-.cv-estimate { font-size: var(--fs-xs); color: var(--text-subtle); font-style: italic; }
-
-/* 見出しのメニュー（動的な状態を試す・確かめる幅） */
+/* 「表示」は見出しの右端にあるので、メニューは右端にそろえて左へ開く（キャンバスの外にはみ出さないように） */
+.cv-viewmenu > .cv-pop { left: auto; right: 0; }
+.cv-mi { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 26px; padding: 0 var(--sp-2); border: none; border-radius: var(--radius-sm); background: transparent; text-align: left; font-size: var(--fs-xs); color: var(--text); justify-content: flex-start; }
+.cv-mi:hover:not(:disabled):not(.disabled) { background: var(--hover-bg); }
+.cv-mi.disabled, .cv-mi:disabled { color: var(--text-disabled); }
+.cv-mi-reason { margin-left: auto; color: var(--text-subtle); font-size: 11px; }
+.cv-mi-sep { height: 1px; margin: 2px 0; background: var(--border); }
+.cv-check.cv-mi { cursor: default; }
+.cv-short { display: none; }
+@container cv-header (max-width: 820px) {
+  .cv-field-label, .cv-long { display: none; }
+  .cv-short { display: inline; }
+  .cv-header { gap: 6px; }
+  .cv-width { gap: 4px; }
+  .cv-modes button { padding: 0 6px; }
+  .cv-num { width: 4em; }
+}
+/* 幅の欄は 4 桁しか入れないので、上下の矢印は出さずに幅を詰める */
+.cv-num::-webkit-inner-spin-button, .cv-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+/* 見出しのメニュー（表示・VBA で変わる表示を試す・チェックする画面の幅） */
 .cv-pop {
   position: absolute;
   top: calc(100% + 4px);
@@ -472,3 +495,8 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .rb-screentip-body { margin-top: 4px; white-space: pre-wrap; }
 .rb-screentip .dynamic { font-weight: 400; font-style: italic; color: var(--text-subtle); }
 .rb-screentip-id { margin-top: 4px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle); }
+
+/* 2つの幅を比べるときの、比べる側の見出しの知らせ */
+.cv-msg { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2); border-radius: var(--radius-sm); font-size: var(--fs-xs); border: 1px solid var(--border); background: var(--surface); }
+.cv-msg.warning { border-color: var(--warning-border, var(--warning)); background: var(--warning-bg, var(--surface)); }
+.cv-msg.info { border-color: var(--border-strong); }

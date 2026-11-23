@@ -59,7 +59,7 @@ async function build(start: CategoryId): Promise<void> {
       const s = app.settings;
       const notice = h('div', { class: 'notice', hidden: !reloadNeeded() },
         h('span', null, t('言語の変更は、画面を読み込み直すと反映されます。')),
-        h('button', { type: 'button', class: 'small', onclick: () => reloadForLanguage() }, t('今すぐ読み込み直す')));
+        h('button', { type: 'button', class: 'small', onclick: () => void reloadForLanguage() }, t('今すぐ読み込み直す')));
       return h('div', null,
         settingRow(t('言語'), h('div', { class: 'setting-control' },
           select<Lang>(s.language ?? lang, [{ value: 'ja', label: '日本語' }, { value: 'en', label: 'English' }], (v) => {

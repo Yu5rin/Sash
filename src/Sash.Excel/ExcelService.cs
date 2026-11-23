@@ -47,7 +47,8 @@ public enum VbaReadStatus
 public sealed record VbaReadResult(VbaReadStatus Status, IReadOnlyList<VbaModule> Modules);
 
 /// <summary>Excel のウィンドウの幅を合わせた結果（仕様書 §18.1）。幅はすべて論理 px、Points は Application.Width に入れた値。</summary>
-public sealed record WindowWidthResult(double Points, double LogicalWidth, double WorkAreaWidth, string? Workbook);
+/// <summary>excel.setWindowWidth の結果。ActualWidth・ExpectedWidth は物理 px（ActualWidth は測れなければ null）。</summary>
+public sealed record WindowWidthResult(double Points, double LogicalWidth, double WorkAreaWidth, string? Workbook, int? ActualWidth = null, int? ExpectedWidth = null);
 
 /// <summary>
 /// Excel との連携（仕様書 §7、§9.1）。COM は遅延バインド（dynamic）で呼び、Interop アセンブリは同梱しない。
@@ -99,6 +100,9 @@ public sealed class ExcelService : IDisposable
     /// 要求のたびに見えない Excel を起動・終了すると、取り込みと COM のスレッドを取り合って両方が遅くなるため。
     /// </summary>
     private volatile bool _bulkActive;
+
+    /// <summary>マクロを実行中なら 1（<see cref="RunMacroAsync"/>）。ほかの Excel 連携をすぐに断るために、COM のスレッドの外から読む。</summary>
+    private int _macroRunning;
 
     public ExcelService(ImageMsoCache iconCache)
     {
@@ -667,18 +671,15 @@ public sealed class ExcelService : IDisposable
         }
 
         dynamic? app = null;
-        string? workbookName = null;
+        dynamic? book = null;
         if (!string.IsNullOrEmpty(fullPath) && FindWorkbook(fullPath) is { } found)
         {
             app = found.App;
             dynamic wb = found.Workbook;
-            // アドイン（xlam）は自分のウィンドウを持たないので、そのときは Excel のいま前にあるウィンドウを使う。
-            // 普通のブックは、Excel 2013 以降（SDI）ではブックごとにウィンドウがあり、Application.Width は
-            // アクティブなウィンドウに効くので、先にそのブックのウィンドウを前にする
+            // アドイン（xlam）は自分のウィンドウを持たないので、そのときは Excel のいま前にあるウィンドウを使う
             if (SafeValue(() => (bool)wb.IsAddin) != true)
             {
-                Safe(() => { wb.Activate(); return true; });
-                workbookName = Safe(() => (string)wb.Name);
+                book = wb;
             }
         }
 
@@ -689,7 +690,10 @@ public sealed class ExcelService : IDisposable
             throw new UserFacingException(L("Excel に表示中のウィンドウがありません。ブックを開いてから、もう一度やり直してください。", "Excel has no visible window. Open a workbook and try again."));
         }
 
-        var hwnd = new IntPtr((long)app.Hwnd);
+        // 収まるかは、ブックを前に出す前に、そのブックのウィンドウ（Excel 2013 以降は Window.Hwnd がある）のモニターで確かめる。
+        // 先に前に出すと、断ったときにも利用者のアクティブなブックが変わってしまうため
+        long handle = book is not null ? SafeValue(() => (long)book!.Windows(1).Hwnd) ?? 0 : 0;
+        var hwnd = new IntPtr(handle != 0 ? handle : (long)app.Hwnd);
         // 座標を物理 px で受け取るため、呼び出しの間だけこのスレッドを Per-Monitor V2 にする
         // （プロセスは PerMonitorV2 で起動するが、COM のスレッドの DPI の扱いに頼らないため）
         var previous = NativeMethods.SetThreadDpiAwarenessContext(NativeMethods.DpiAwarenessContextPerMonitorAwareV2);
@@ -712,9 +716,37 @@ public sealed class ExcelService : IDisposable
                     $"The width {width}px (scale {scale * 100:0}%, {plan.LogicalWidth:0}px as seen by apps) is wider than the work area of the screen that shows Excel ({plan.WorkAreaLogicalWidth:0}px), so the Excel window cannot be resized. Try a wider screen or a narrower width."));
             }
 
+            // 収まると分かってから、Excel 2013 以降（SDI）ではブックごとのウィンドウを前にする（Application.Width はアクティブなウィンドウに効くため）
+            string? workbookName = null;
+            if (book is not null)
+            {
+                dynamic wb = book;
+                Safe(() => { wb.Activate(); return true; });
+                workbookName = Safe(() => (string)wb.Name);
+                hwnd = new IntPtr((long)app.Hwnd);
+            }
+
             // xlNormal（-4143）。最大化・最小化のままでは Width を入れても効かない
             app.WindowState = -4143;
             app.Width = plan.Points;
+
+            // 入れた幅になったかを GetWindowRect で測る。2px より大きくずれていたら、差の分だけ 1 回だけ直す
+            // （Width の換算が枠の分などでずれる場合に備える。直しても合わなければ、測った幅をそのまま知らせる）
+            int expected = ExcelWindowSizing.ExpectedPhysicalWidth(plan.LogicalWidth, dpi);
+            int? actual = null;
+            if (NativeMethods.GetWindowRect(hwnd, out var measured))
+            {
+                actual = measured.Right - measured.Left;
+                var correction = ExcelWindowSizing.CorrectionPoints(actual.Value, expected, dpi);
+                if (correction != 0)
+                {
+                    Safe(() => { app.Width = (double)app.Width + correction; return true; });
+                    if (NativeMethods.GetWindowRect(hwnd, out var again))
+                    {
+                        actual = again.Right - again.Left;
+                    }
+                }
+            }
 
             // 右（または左）にはみ出したら、作業領域に収まるよう左端を動かす（はみ出したままだとリボンの右端が見えない）
             if (NativeMethods.GetWindowRect(hwnd, out var rect))
@@ -726,7 +758,7 @@ public sealed class ExcelService : IDisposable
                 }
             }
 
-            return new WindowWidthResult(plan.Points, plan.LogicalWidth, plan.WorkAreaLogicalWidth, workbookName);
+            return new WindowWidthResult(plan.Points, plan.LogicalWidth, plan.WorkAreaLogicalWidth, workbookName, actual, expected);
         }
         finally
         {
@@ -737,24 +769,68 @@ public sealed class ExcelService : IDisposable
         }
     });
 
+    /// <summary>マクロを実行中か（<see cref="RunMacroAsync"/> の間）。COM のスレッドの外から読む。</summary>
+    public bool IsMacroRunning => Volatile.Read(ref _macroRunning) != 0;
+
+    /// <summary>マクロの実行中に出す文言（UI の実行中の通知と同じ）。</summary>
+    public static string MacroRunningMessage => L("Excel でマクロを実行中です（Excel 側でメッセージやエラーを閉じると戻ります）。",
+        "A macro is running in Excel (Sash continues when you close the message or error in Excel).");
+
+    /// <summary>
+    /// マクロの実行中なら、すぐに断る（COM のスレッドがマクロでふさがっているので、並べても終わるまで待たされ、
+    /// 利用者には Sash が固まったように見えるため）。要求の入り口（COM のスレッドの外）で呼ぶ。
+    /// </summary>
+    public void ThrowIfMacroRunning()
+    {
+        if (IsMacroRunning)
+        {
+            throw new UserFacingException(MacroRunningMessage + " " + L("終わってから、もう一度やり直してください。", "Try again after it finishes."));
+        }
+    }
+
     /// <summary>
     /// 開いているブックのマクロを Application.Run で実行する（「試しに押す」。仕様書 §18.4）。
-    /// リボンのコールバックは IRibbonControl を受け取る形のものが多く、Run からは IRibbonControl を渡せないので、
-    /// 引数のない Sub だけを実行する。ブックは書き換えない（IRibbonControl の代わりを差し込むためにコードを足すことはしない）。
-    /// VBA を読めるとき（信頼の設定がオン）は先に宣言を調べて断り、読めないときは実行してみて、失敗したら同じ案内を返す。
-    /// 実行の間（MsgBox を出しているあいだなど）は COM のスレッドがふさがり、ほかの Excel 連携は待たされる。
+    /// 呼べるのは、引数のない Sub と、IRibbonControl（または Object・Variant）を 1 つ受け取る Sub。後者は control に Nothing を渡す
+    /// （Application.Run からは本物の IRibbonControl を作れないため。Sub の中で control.Id などを使うと実行時エラーになる）。
+    /// それ以外の形は理由を添えて断る。ブックは書き換えない（IRibbonControl の代わりを差し込むためにコードを足すことはしない）。
+    /// VBA を読めるとき（信頼の設定がオン）は宣言から決め、読めないときは UI が XML から決めた呼び方（argument）に従う。
+    /// 実行の間（MsgBox を出しているあいだなど）は COM のスレッドがふさがるので、その間のほかの Excel 連携は
+    /// <see cref="ThrowIfMacroRunning"/> ですぐに断る。Windows 実機の Excel では確かめていない（Nothing の渡し方を含む）。
     /// </summary>
-    public Task<bool> RunMacroAsync(string fullPath, string macro) => _com.InvokeAsync(() =>
+    public async Task<bool> RunMacroAsync(string fullPath, string macro, MacroCallShape? argument = null)
+    {
+        if (string.IsNullOrEmpty(fullPath))
+        {
+            throw new UserFacingException(L("ファイルが保存されていないため、マクロを実行できません。", "The file has not been saved, so the macro cannot be run."));
+        }
+
+        var (module, procedure) = VbaProcedureLookup.Split(macro);
+        // VBA を読めないときも名前は必ず確かめる（Application.Run に渡す名前は Sash が組み立てるため、記号の混ざった名前は通さない）
+        if (!VbaProcedureLookup.IsVbaIdentifier(procedure) || (module is not null && !VbaProcedureLookup.IsVbaIdentifier(module)))
+        {
+            throw new UserFacingException(L($"マクロの名前（{macro}）が VBA の名前として正しくないため、実行できません。", $"The macro name ({macro}) is not a valid VBA name, so it cannot be run."));
+        }
+
+        if (Interlocked.CompareExchange(ref _macroRunning, 1, 0) != 0)
+        {
+            throw new UserFacingException(MacroRunningMessage);
+        }
+
+        try
+        {
+            return await _com.InvokeAsync(() => RunMacroCore(fullPath, module, procedure, argument)).ConfigureAwait(false);
+        }
+        finally
+        {
+            Volatile.Write(ref _macroRunning, 0);
+        }
+    }
+
+    private bool RunMacroCore(string fullPath, string? module, string procedure, MacroCallShape? argument)
     {
         var found = FindWorkbook(fullPath) ?? throw new UserFacingException(L("ブックがExcelで開かれていません。Excel で開いてから試してください。", "The workbook is not open in Excel. Open it in Excel, then try again."));
         var (app, wb) = found;
-        var (module, procedure) = VbaProcedureLookup.Split(macro);
-        if (procedure.Length == 0)
-        {
-            throw new UserFacingException(L("実行するマクロの名前がありません。", "No macro name was given."));
-        }
-
-        var argumentsHint = L("引数に IRibbonControl を取るマクロは、Excel のリボンから押して試してください。", "Macros that take an IRibbonControl argument must be tried from the ribbon in Excel.");
+        var shape = argument ?? MacroCallShape.NoArguments;
         bool checkedSignature = false;
         dynamic? project = TryGetProjectQuietly(wb);
         if (project is not null)
@@ -781,12 +857,17 @@ public sealed class ExcelService : IDisposable
                 throw new UserFacingException(L($"VBA に {procedure} が見つかりません。", $"{procedure} was not found in the VBA project."));
             }
 
-            if (parameters.Length > 0)
+            shape = VbaProcedureLookup.Classify(parameters, out var reason);
+            if (shape == MacroCallShape.Unsupported)
             {
-                throw new UserFacingException(L($"{procedure} は引数（{parameters}）を取るため、Sash からは実行できません。", $"{procedure} takes arguments ({parameters}), so Sash cannot run it.") + " " + argumentsHint);
+                throw new UserFacingException($"{procedure}: {reason}");
             }
 
             checkedSignature = true;
+        }
+        else if (shape == MacroCallShape.Unsupported)
+        {
+            throw new UserFacingException(L($"{procedure} は Sash から実行できない形のコールバックです。Excel のリボンから押して試してください。", $"{procedure} is a callback that Sash cannot run. Try it from the ribbon in Excel."));
         }
 
         // マクロが MsgBox などを出したときに Sash の後ろに隠れないよう、Excel を前に出す（失敗しても実行は続ける）
@@ -794,16 +875,26 @@ public sealed class ExcelService : IDisposable
         var name = VbaProcedureLookup.QualifiedName((string)wb.Name, module, procedure);
         try
         {
-            app.Run(name);
+            if (shape == MacroCallShape.RibbonControl)
+            {
+                // control As IRibbonControl に Nothing を渡す。null の DispatchWrapper は VT_DISPATCH の空（Nothing）として渡る。
+                // ただの null だと VT_EMPTY（Missing）になり、引数を省いたとみなされて「マクロを実行できません」になるため
+                app.Run(name, new DispatchWrapper(null));
+            }
+            else
+            {
+                app.Run(name);
+            }
+
             return true;
         }
         catch (COMException ex) when (!IsBusy(ex))
         {
             throw new UserFacingException(checkedSignature
                 ? L($"マクロ {procedure} の実行中にエラーが起きました：{ex.Message}", $"An error occurred while running the macro {procedure}: {ex.Message}")
-                : L($"マクロ {procedure} を実行できませんでした（{ex.Message}）。", $"Could not run the macro {procedure} ({ex.Message}).") + " " + argumentsHint, ex);
+                : L($"マクロ {procedure} を実行できませんでした（{ex.Message}）。引数の形が合っていない可能性があります。Excel のリボンから押して試してください。", $"Could not run the macro {procedure} ({ex.Message}). Its arguments may not match. Try it from the ribbon in Excel."), ex);
         }
-    });
+    }
 
     /// <summary>
     /// VBE を表示し、指定の Sub の宣言行を選ぶ（コールバック一覧から VBE の該当の Sub へ移る。仕様書 §18.5）。
@@ -836,7 +927,9 @@ public sealed class ExcelService : IDisposable
             vbe.MainWindow.Visible = true;
             dynamic pane = cm.CodePane;
             pane.Show();
-            pane.SetSelection(line, 1, line, 1);
+            // 宣言の行をまるごと選ぶ（カーソルを置くだけだと、どの行か見つけにくいため）。終わりの桁は行の長さ + 1
+            int length = SafeValue(() => ((string)cm.Lines(line, 1)).Length) ?? 0;
+            pane.SetSelection(line, 1, line, length + 1);
             // 選んだ行が見える位置に来るよう、少し上の行から表示する
             Safe(() => { pane.TopLine = Math.Max(1, line - 3); return true; });
             Safe(() => NativeMethods.SetForegroundWindow(new IntPtr((long)vbe.MainWindow.HWnd)));
@@ -984,7 +1077,8 @@ public sealed class ExcelService : IDisposable
         var lookup = await Task.Run(() => _iconCache.Lookup(names ?? [], size)).ConfigureAwait(false);
 
         // 一括の取り込みの最中はキャッシュだけで答える。足りない名前は結果に含めず、取り込みが終わったら UI が取り直す
-        if (lookup.Misses.Count == 0 || _bulkActive)
+        // マクロの実行中も、COM のスレッドがふさがっているのでキャッシュだけで答える（並べると、マクロが終わるまで返せないため）
+        if (lookup.Misses.Count == 0 || _bulkActive || IsMacroRunning)
         {
             return lookup.Found;
         }

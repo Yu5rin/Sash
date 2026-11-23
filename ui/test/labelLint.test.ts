@@ -42,4 +42,11 @@ describe('ラベルの長さ', () => {
   it('メニューの中の項目は対象にしない', () => {
     expect(run(`<menu id="m" label="M"><button id="b" label="${'あ'.repeat(30)}" /></menu>`)).toEqual([]);
   });
+
+  it('ラベルを出さないもの（showLabel="false"）と getShowLabel のものは見ない', () => {
+    expect(run('<button id="b" size="large" showLabel="false" label="あいうえおかきくけこさしすせそ" />')).toEqual([]);
+    expect(run(`<button id="b" getShowLabel="Ribbon_b_getShowLabel" label="${'あ'.repeat(25)}" />`)).toEqual([]);
+    // showLabel="true" は従来どおり見る
+    expect(run('<button id="b" size="large" showLabel="true" label="あいうえおかきくけ" />')).toEqual([`warning:${LARGE}`]);
+  });
 });

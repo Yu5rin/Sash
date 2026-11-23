@@ -122,9 +122,12 @@ describe('getFitReport と fitProblems', () => {
     const ps = fitProblems(report);
     expect(ps).toEqual([
       { severity: 'info', path: [0, 0, 1, 0], message: '1366 幅（125%）で［モード］が畳まれます（目安）' },
-      { severity: 'warning', path: [0, 0, 1, 0], message: '［モード］が畳まれたときのアイコンが未設定です' },
       { severity: 'warning', path: [0, 0, 1, 1], message: '1366 幅（125%）で［ひろい］が収まりません（目安）' },
+      // 畳まれたときのアイコンがないものは、参考として 1 行にまとめる（押すと最初のグループ）
+      { severity: 'info', path: [0, 0, 1, 0], message: '1 グループで畳まれたときのアイコンが未設定です' },
     ]);
+    const many = fitProblems({ ...report, overflowing: report.overflowing.map((e) => ({ ...e, noIcon: true })) });
+    expect(many.filter((p) => p.message.includes('アイコンが未設定'))).toEqual([{ severity: 'info', path: [0, 0, 1, 0], message: '2 グループで畳まれたときのアイコンが未設定です' }]);
     expect(fitProblems({ ...report, scale: 100 })[0]!.message).toBe('1366 幅で［モード］が畳まれます（目安）');
   });
 });

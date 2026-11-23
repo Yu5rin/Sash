@@ -335,7 +335,8 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .pane { background: var(--surface); overflow: hidden; min-width: 0; min-height: 0; }
 .left { grid-area: left; display: flex; flex-direction: column; }
 .right { grid-area: right; display: flex; flex-direction: column; }
-.center { grid-area: center; display: grid; grid-template-rows: var(--top) var(--st) minmax(0, 1fr); background: var(--bg); }
+/* 列の幅を minmax(0, 1fr) にしておかないと、中身（リボンの幅）が最小幅になり、ペインを戻したり窓を狭めたりしても縮まない */
+.center { grid-area: center; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--top) var(--st) minmax(0, 1fr); min-width: 0; background: var(--bg); }
 #app.collapsed-top .center .canvas-pane { visibility: hidden; }
 #app.xml-on-top .center .canvas-pane { order: 3; }
 #app.xml-on-top .center .xml-pane { order: 1; }

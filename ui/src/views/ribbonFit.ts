@@ -200,6 +200,7 @@ export function widthLabel(width: number, scale: number): string {
 /** 問題の一覧に出す形にする（下部パネルと配布前の確認で使う）。 */
 export function fitProblems(r: FitReport = report): FitProblem[] {
   const out: FitProblem[] = [];
+  const noIcon: FitReportEntry[] = [];
   for (const e of r.overflowing) {
     const name = e.label || e.id || t('(ラベルなし)');
     if (e.clippedAt !== undefined) {
@@ -207,9 +208,10 @@ export function fitProblems(r: FitReport = report): FitProblem[] {
     } else if (e.collapsedAt !== undefined) {
       out.push({ severity: 'info', path: e.path, message: t('{width}で［{name}］が畳まれます（目安）', { width: widthLabel(e.collapsedAt, r.scale), name }) });
     }
-    if (e.noIcon && (e.collapsedAt !== undefined || e.clippedAt !== undefined)) {
-      out.push({ severity: 'warning', path: e.path, message: t('［{name}］が畳まれたときのアイコンが未設定です', { name }) });
-    }
+    if (e.noIcon && (e.collapsedAt !== undefined || e.clippedAt !== undefined)) noIcon.push(e);
   }
+  // 畳まれたときのアイコンがなくても汎用のアイコンで出るだけなので、参考（info）にし、グループごとではなく 1 行にまとめる
+  // （一覧が埋まって大事な警告が見えなくなるため）。押すと最初のグループを選ぶ
+  if (noIcon.length) out.push({ severity: 'info', path: noIcon[0]!.path, message: t('{n} グループで畳まれたときのアイコンが未設定です', { n: noIcon.length }) });
   return out;
 }

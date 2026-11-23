@@ -20,7 +20,8 @@ class VbaState {
   /** VBA を読み直す。Excel で開いていなければ notOpen になる。 */
   async refresh(): Promise<void> {
     const s = app.session;
-    if (!s) return;
+    // ファイルのないセッション（サンプル）は、Excel で開かれていることがないので読みに行かない（空のパスを送らない）
+    if (!s || !s.path) return;
     this.loading = true;
     app.emit('vba');
     try {

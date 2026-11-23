@@ -69,6 +69,21 @@ export function openHistoryDialog(): void {
   list.querySelector<HTMLElement>('.history-row.current')?.focus();
   app.on('store', onStore);
   app.on('session', onStore);
+  // ダイアログの中でも Ctrl+Z / Ctrl+Y（Ctrl+Shift+Z）で位置を動かす。モーダルの間はアプリのショートカットが届かないため、
+  // ここで受けないと説明の「元に戻す・やり直しで行き来できます」のとおりに動かない
+  body.addEventListener('keydown', (e) => {
+    const store = app.store;
+    if (!store || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const key = e.key.toLowerCase();
+    const undo = key === 'z' && !e.shiftKey;
+    const redo = key === 'y' || (key === 'z' && e.shiftKey);
+    if (!undo && !redo) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { index } = store.history();
+    store.goTo(index + (undo ? -1 : 1));
+    list.querySelector<HTMLElement>('.history-row.current')?.focus();
+  });
   list.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     const items = Array.from(list.querySelectorAll<HTMLElement>('.history-row'));

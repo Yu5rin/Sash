@@ -68,3 +68,12 @@
 /* ---- インスペクタ：動的（getVisible / getEnabled） ---- */
 .insp-dynamic { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--fs-xs); }
 .insp-dynamic-badge { padding: 0 6px; border-radius: 8px; background: var(--info-bg); color: var(--info-text); border: 1px solid var(--info-border); font-size: 11px; }
+/* ID の一括置換：VBA で直す必要がある箇所 */
+.idr-warn { color: var(--warning-text); font-weight: 600; }
+.idr-vba { margin: 0; padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.idr-vba.warn { color: var(--warning-text); background: var(--warning-bg); }
+.idr-vba-title { margin: 0 0 2px; font-weight: 600; }
+.idr-vba p { margin: 0 0 var(--sp-1); }
+.idr-vba ul { margin: 0; padding-left: var(--sp-4); }
+.idr-vba li { display: flex; gap: var(--sp-2); }
+.idr-loc { flex-shrink: 0; color: var(--text-subtle); font-family: var(--font-mono); }

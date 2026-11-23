@@ -112,7 +112,8 @@ export function csvCell(value: string): string {
  */
 export function toCsv(rows: readonly ControlRow[], headers: readonly string[] = controlHeaders()): string {
   const lines = [headers, ...rows.map((r) => CONTROL_COLUMNS.map((c) => r[c]))].map((cells) => cells.map(csvCell).join(','));
-  return `﻿${lines.join('\r\n')}\r\n`;
+  // BOM は見えない文字なので、エディタで消えたり見落としたりしないよう \uFEFF と書く
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
 }
 
 /**

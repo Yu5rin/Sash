@@ -51,7 +51,7 @@ import { openHistoryDialog } from './dialogs/historyDialog';
 import type { CheckItem } from './distributionCheck';
 import { controlRows, toCsv, toTsv } from './controlList';
 import { copyText } from './clipboard';
-import { canRevealInVbe, checkRunnable, revealInVbe, runMacroFor, runSelectedMacro } from './vbaReveal';
+import { canRevealInVbe, revealInVbe, runMacroDisabledReason, runMacroFor, runSelectedMacro } from './vbaReveal';
 import { callbacksAt } from './vba';
 
 // ---- 文言 ----
@@ -171,10 +171,14 @@ function copyControlList(): void {
   copyText(toTsv(rows), t('{n} 件のコントロールをコピーしました。Excel のセルに貼り付けられます', { n: rows.length }));
 }
 
-/** 選択中のコントロールのマクロを実行できるか（メニューを無効にする条件）。 */
+/** ファイルのあるセッションか（サンプルはパスが空で、バックアップ・VBA・反映の対象にならない）。 */
+function hasFile(): boolean {
+  return !!app.session?.path;
+}
+
+/** 選択中のコントロールのマクロを試せるか（メニューを無効にする条件）。呼べない形のものも、理由が分かるよう無効で出す。 */
 function canRunMacro(): boolean {
-  const el = app.store?.selectedElement ?? null;
-  return !!el?.hasAttribute('onAction') && app.info.excelInstalled && !!app.session?.path;
+  return runMacroDisabledReason(app.store?.selectedElement ?? null) === '';
 }
 
 /** 選択中の要素のコールバックのうち、VBE で表示できる最初のもの。 */
@@ -209,7 +213,7 @@ function commands(): AppCommand[] {
     // 保存と反映は、実行中でも押せるようにしておき、押されたら「終わるまでお待ちください」と知らせる（黙って無視しない）
     { id: 'file.save', group: G.file, title: t('保存'), shortcut: 'Ctrl+S', keywords: 'save', inText: true, enabled: has, run: () => void save() },
     { id: 'file.close', group: G.file, title: t('閉じる'), shortcut: 'Ctrl+W', keywords: 'close ホームに戻る', inText: true, enabled: () => has() && idle(), run: () => void closeFile() },
-    { id: 'file.backup', group: G.file, title: t('バックアップから復元…'), keywords: 'backup restore 戻す', enabled: () => has() && idle(), run: () => void openBackupDialog() },
+    { id: 'file.backup', group: G.file, title: t('バックアップから復元…'), keywords: 'backup restore 戻す', enabled: () => has() && idle() && hasFile(), run: () => void openBackupDialog() },
     { id: 'file.export', group: G.file, title: t('.sash.json として書き出す…'), keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
     { id: 'file.import', group: G.file, title: t('.sash.json を読み込む…'), keywords: 'import json', enabled: has, run: importSashFile },
     { id: 'file.exportControls', group: G.file, title: t('コントロール一覧を CSV で書き出す…'), keywords: 'export csv controls list 一覧 書き出し', enabled: has, run: () => void exportControlList() },
@@ -240,13 +244,13 @@ function commands(): AppCommand[] {
     { id: 'view.problems', group: G.view, title: t('問題の一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('problems'); } },
     { id: 'view.callbacks', group: G.view, title: t('コールバックの一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('callbacks'); } },
     { id: 'view.images', group: G.view, title: t('アイコンの一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('images'); } },
-    ...WIDTH_CHOICES_ALL.map((w): AppCommand => ({ id: `view.width.${w ?? 'free'}`, group: G.view, title: t('リボンの幅：{w}', { w: widthChoiceLabel(w) }), keywords: 'ribbon width preview 幅 プレビュー', enabled: has, run: () => changePreview({ width: w }) })),
+    ...WIDTH_CHOICES_ALL.map((w): AppCommand => ({ id: `view.width.${w ?? 'free'}`, group: G.view, title: t('画面の幅：{w}', { w: widthChoiceLabel(w) }), keywords: 'ribbon width preview 幅 プレビュー', enabled: has, run: () => changePreview({ width: w }) })),
     ...SCALE_CHOICES.map((sc): AppCommand => ({ id: `view.scale.${sc}`, group: G.view, title: t('拡大率：{s}%', { s: sc }), keywords: 'scale dpi zoom 拡大率', enabled: has, run: () => changePreview({ scale: sc }) })),
-    { id: 'view.fit.fit', group: G.view, title: t('リボンを枠に収めて表示'), keywords: 'fit preview 収める', enabled: has, run: () => changePreview({ fit: 'fit' }) },
-    { id: 'view.fit.actual', group: G.view, title: t('リボンを等倍で表示'), keywords: 'actual size preview 等倍', enabled: has, run: () => changePreview({ fit: 'actual' }) },
+    { id: 'view.fit.fit', group: G.view, title: t('リボンの全体を表示'), keywords: 'fit preview 収める 全体', enabled: has, run: () => changePreview({ fit: 'fit' }) },
+    { id: 'view.fit.actual', group: G.view, title: t('リボンを実寸で表示'), keywords: 'actual size preview 等倍 実寸', enabled: has, run: () => changePreview({ fit: 'actual' }) },
     { id: 'view.keytips', group: G.view, title: t('キーヒントの表示を切り替える'), keywords: 'keytip alt キーヒント', enabled: has, run: () => changePreview({ keytips: !currentPreview().keytips }) },
     { id: 'view.collapseSides', group: G.view, title: t('左右のペインを一時的に畳む'), keywords: 'collapse panes wide 広く', enabled: has, run: collapseSidePanes },
-    { id: 'view.fitExcel', group: G.view, title: t('Excel のウィンドウをプレビューの幅に合わせる'), keywords: 'excel window width 幅 合わせる', enabled: () => has() && app.info.excelInstalled && currentPreview().width !== null, run: () => void fitExcelToPreview() },
+    { id: 'view.fitExcel', group: G.view, title: t('Excel をプレビューの幅にする'), keywords: 'excel window width 幅 合わせる', enabled: () => has() && app.info.excelInstalled && currentPreview().width !== null, run: () => void fitExcelToPreview() },
     { id: 'view.theme.system', group: G.view, title: t('テーマをシステムに合わせる'), keywords: 'theme system', run: () => void updateSettings({ theme: 'system' }) },
     { id: 'view.theme.light', group: G.view, title: t('ライトテーマにする'), keywords: 'theme light', run: () => void updateSettings({ theme: 'light' }) },
     { id: 'view.theme.dark', group: G.view, title: t('ダークテーマにする'), keywords: 'theme dark', run: () => void updateSettings({ theme: 'dark' }) },
@@ -262,11 +266,11 @@ function commands(): AppCommand[] {
 
     { id: 'tools.apply', group: G.tools, title: t('Excelへ反映'), shortcut: 'F5', keywords: 'apply reload', inText: true, enabled: has, run: () => void applyToExcel() },
     { id: 'tools.distCheck', group: G.tools, title: t('配布前チェック…'), keywords: 'check distribute release 配布 確認 チェック', enabled: has, run: () => void openOnce('distributionCheck', () => openDistributionCheck({ onNavigate: navigateToCheck })) },
-    { id: 'tools.runMacro', group: G.tools, title: t('マクロを Excel で実行'), keywords: 'run macro test 試しに押す 実行', enabled: () => has() && canRunMacro(), run: () => void runSelectedMacro() },
+    { id: 'tools.runMacro', group: G.tools, title: t('マクロを Excel で試す'), keywords: 'run macro test 試しに押す 実行 試す', enabled: () => has() && canRunMacro(), run: () => void runSelectedMacro() },
     { id: 'vba.reveal', group: 'VBA', title: t('選択中のコントロールのコールバックを VBE で表示'), keywords: 'vbe vba open procedure 開く', enabled: () => has() && revealableCallback() !== null, run: () => { const n = revealableCallback(); if (n) void revealInVbe(n); } },
     { id: 'tools.replaceIds', group: G.tools, title: t('ID の一括置換…'), keywords: 'id rename replace prefix 置換', enabled: has, run: () => openIdReplaceDialog() },
     { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
-    { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
+    { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
     { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
@@ -366,27 +370,25 @@ function previewMenuItems(): MenuItemDef[] {
   const p = currentPreview();
   const on = has();
   return [
-    { label: t('リボンの幅'), enabled: on, items: () => WIDTH_CHOICES_ALL.map((w): MenuItemDef => ({ label: widthChoiceLabel(w), checked: p.width === w, run: () => changePreview({ width: w }) })) },
+    { label: t('画面の幅'), enabled: on, items: () => WIDTH_CHOICES_ALL.map((w): MenuItemDef => ({ label: widthChoiceLabel(w), checked: p.width === w, run: () => changePreview({ width: w }) })) },
     { label: t('拡大率'), enabled: on, items: () => SCALE_CHOICES.map((sc): MenuItemDef => ({ label: `${sc}%`, checked: p.scale === sc, run: () => changePreview({ scale: sc }) })) },
     {
       label: t('表示のしかた'), enabled: on, items: () => [
-        { label: t('枠に収める'), checked: p.fit === 'fit', run: () => changePreview({ fit: 'fit' }) },
-        { label: t('等倍'), checked: p.fit === 'actual', run: () => changePreview({ fit: 'actual' }) },
+        { label: t('全体を表示'), checked: p.fit === 'fit', run: () => changePreview({ fit: 'fit' }) },
+        { label: t('実寸'), checked: p.fit === 'actual', run: () => changePreview({ fit: 'actual' }) },
       ],
     },
     { label: t('キーヒントを表示'), enabled: on, checked: p.keytips, run: () => changePreview({ keytips: !p.keytips }) },
     cmd('view.collapseSides'),
-    cmd('view.fitExcel', undefined, { hint: p.width === null ? t('リボンの幅を選ぶと使えます') : app.info.excelInstalled ? undefined : t('Excel が見つからないため使えません') }),
+    cmd('view.fitExcel', undefined, { hint: p.width === null ? t('画面の幅を選ぶと使えます') : app.info.excelInstalled ? undefined : t('Excel が見つからないため使えません') }),
   ];
 }
 
-/** 「マクロを Excel で実行」が使えないときの理由（メニューのツールチップ）。 */
+/** 「マクロを Excel で試す」が使えないときの理由（メニューのツールチップ）。 */
 function runMacroHint(): string | undefined {
-  if (!app.info.excelInstalled) return t('Excel が見つからないため使えません');
   const el = app.store?.selectedElement ?? null;
-  if (!el?.hasAttribute('onAction')) return t('onAction のあるコントロールを選ぶと使えます');
-  const c = checkRunnable(el);
-  return c.ok ? t('引数のない Sub だけを実行できます（IRibbonControl を受け取るものは Excel のリボンから押してください）') : c.reason;
+  if (app.info.excelInstalled && !el?.hasAttribute('onAction')) return t('onAction のあるコントロールを選ぶと使えます');
+  return runMacroDisabledReason(el) || t('引数のない Sub と、IRibbonControl を 1 つ受け取る Sub を実行できます（control には Nothing を渡します）');
 }
 
 const MENUS: MenuDef[] = [
@@ -399,7 +401,7 @@ const MENUS: MenuDef[] = [
       cmd('file.save'),
       cmd('file.close'),
       SEP,
-      cmd('file.backup'),
+      cmd('file.backup', undefined, { hint: app.session && !hasFile() ? t('サンプルにはバックアップがありません') : undefined }),
       cmd('file.export'),
       cmd('file.import'),
       {
@@ -497,7 +499,7 @@ const MENUS: MenuDef[] = [
       SEP,
       cmd('tools.runMacro', undefined, { hint: runMacroHint() }),
       cmd('vba.reveal'),
-      cmd('vba.refresh'),
+      cmd('vba.refresh', undefined, { hint: app.session && !hasFile() ? t('サンプルは Excel で開かれていないため、VBA と照合できません') : undefined }),
       cmd('vba.insert'),
       cmd('vba.holder'),
       SEP,
@@ -647,10 +649,10 @@ setElementMenuHooks({
   revealInXml: (p) => revealInXml(p),
   // Excel 連携の項目（仕様書 §18.4・§18.5）。使えないときは理由が分かるよう、隠さずに無効で出す
   extraItems: (path, el) => {
-    const items: { label: string; disabled?: boolean; run?: () => void }[] = [];
+    const items: { label: string; disabled?: boolean; reason?: string; run?: () => void }[] = [];
     if (el.hasAttribute('onAction')) {
-      const check = checkRunnable(el);
-      items.push({ label: t('マクロを Excel で実行'), disabled: !app.info.excelInstalled || !app.session?.path || !check.ok, run: () => void runMacroFor(el) });
+      const reason = runMacroDisabledReason(el);
+      items.push({ label: t('マクロを Excel で試す'), disabled: reason !== '', reason: reason || undefined, run: () => void runMacroFor(el) });
     }
     const store = app.store;
     const name = store ? callbacksAt(store.doc, path).map((c) => c.name).find(canRevealInVbe) : undefined;

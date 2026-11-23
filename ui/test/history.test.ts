@@ -85,3 +85,26 @@ describe('操作の履歴', () => {
     ]);
   });
 });
+
+describe('操作の履歴のダイアログ', () => {
+  it('ダイアログの中で Ctrl+Z / Ctrl+Y を押すと、位置が動く', async () => {
+    const { app } = await import('../src/app');
+    const { openHistoryDialog } = await import('../src/dialogs/historyDialog');
+    app.open({ path: 'C:\\t\\h.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
+    const store = app.store!;
+    for (let i = 1; i <= 3; i++) store.edit('inspector', (doc) => void doc.querySelector('button')!.setAttribute('label', String(i)), `ラベル ${i}`);
+    openHistoryDialog();
+    const dialog = document.querySelector<HTMLElement>('.history-dialog')!;
+    const press = (key: string, shiftKey = false) => document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true, shiftKey, bubbles: true, cancelable: true }));
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    press('z');
+    expect(app.store!.history().index).toBe(2);
+    press('z');
+    expect(app.store!.history().index).toBe(1);
+    expect(dialog.querySelector('.history-row.current .history-num')?.textContent).toBe('1');
+    press('y');
+    expect(app.store!.history().index).toBe(2);
+    press('Z', true);
+    expect(app.store!.history().index).toBe(3);
+  });
+});

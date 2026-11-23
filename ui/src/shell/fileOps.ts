@@ -61,12 +61,18 @@ export async function confirmDiscard(): Promise<boolean> {
   flushPendingEdits();
   if (!app.dirty || !app.session) return true;
   if (refuseWhileBusy()) return false;
-  // サンプルは保存できないので、「保存する」は出さずに捨ててよいかだけを聞く
-  const sample = isSampleSession();
-  const r = await ask(t('未保存の変更があります'), t('「{file}」への変更を保存しますか？保存しないと、変更は失われます。', { file: sample ? t('サンプル') : fileNameOf(app.session.path) }), [
+  // サンプルは保存できないので、「保存する」は出さずに捨ててよいかだけを聞く（「保存しない」では、保存できるように読めるため）
+  if (isSampleSession()) {
+    const d = await ask(t('未保存の変更があります'), t('サンプルへの変更は保存できません。破棄しますか？'), [
+      { value: 'discard', label: t('破棄する'), danger: true },
+      { value: 'cancel', label: t('キャンセル'), primary: true },
+    ]);
+    return d === 'discard';
+  }
+  const r = await ask(t('未保存の変更があります'), t('「{file}」への変更を保存しますか？保存しないと、変更は失われます。', { file: fileNameOf(app.session.path) }), [
     { value: 'discard', label: t('保存しない') },
-    { value: 'cancel', label: t('キャンセル'), primary: sample },
-    ...(sample ? [] : [{ value: 'save' as const, label: t('保存する'), primary: true }]),
+    { value: 'cancel', label: t('キャンセル') },
+    { value: 'save', label: t('保存する'), primary: true },
   ]);
   if (r === 'save') return save();
   return r === 'discard';

@@ -4,7 +4,7 @@
 
 import '../styles-views.css';
 import { app } from '../app';
-import { catalog, labels } from '../catalog/catalog';
+import { catalog, labels, onLabelsLoaded } from '../catalog/catalog';
 import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard';
 import { canDropInto, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
@@ -17,7 +17,6 @@ import { closeMenu, openElementMenu } from './contextMenu';
 import { focusField } from './inspector';
 import { defFor, inBackstage } from '../schema';
 import { lang, t as tr } from '../i18n';
-import { invoke } from '../bridge';
 import { notify } from '../shell/toast';
 import { openRecipes } from '../dialogs/recipeDialog';
 import { openOnce } from '../dialogs/modal';
@@ -26,6 +25,7 @@ import {
   type FitGroupInput, type FitGroupResult, type FitReportEntry, type GroupFitState,
 } from './ribbonFit';
 import { clearOverrides, getOverride, overrideCount, overrideKey, overridesSignature, preview, setOverride, setPreview, type FitMode, type PreviewSettings } from './ribbonPreview';
+import { excelWidthDisabledReason, fitExcelToPreview } from './excelWidth';
 import { attachScreentips, BUILTIN_TAB_KEYTIPS, duplicateKeytips, screentipContent, type ScreentipContent } from './ribbonTips';
 
 /** 表示する組み込みタブ（Excel の既定の並び）。 */
@@ -75,7 +75,7 @@ let lastPopupSelection: string | null = null;
 /** 畳んだグループのうち、一時的に広げて編集しているもの（パスの文字列）。幅を変えたら元に戻す。 */
 const tempExpanded = new Set<string>();
 /** 見出しで開いているメニュー。 */
-let headerMenu: 'dynamic' | 'checks' | null = null;
+let headerMenu: 'view' | 'dynamic' | 'checks' | null = null;
 /** 「動的な状態を試す」で目立たせる要素（インスペクタの「キャンバスで試す」から開いたとき）。 */
 let dynamicFocus: string | null = null;
 /** グループの幅を測っている間は、ポップアップやキーヒントを描かない（幅に関係せず、選択の検索の邪魔になるため）。 */
@@ -225,6 +225,9 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     tempExpanded.clear();
     widthCache.clear();
     headerMenu = null;
+    // 別のファイルでは、タブの欄の位置を前のファイルから引き継がない
+    resetTabScroll = true;
+    lastActiveTabKey = null;
     known = new WeakSet();
     if (mode !== 'ribbon') setCanvasMode('ribbon');
     render();
@@ -248,6 +251,11 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   });
   app.on('problems', render);
   onMsoIconsLoaded(render);
+  // Excel の表示名が届いたら、表示名で描いた幅が変わるので測り直す
+  onLabelsLoaded(() => {
+    widthCache.clear();
+    render();
+  });
   // 確かめる幅を変えたら測り直す
   window.addEventListener('sash:fitsettings', render);
   // 表示 メニュー（shell/previewCommands.ts）からの切り替え。detail は { width?, scale?, mode?, keytips? }
@@ -399,7 +407,9 @@ function collectTabs(doc: Document): TabEntry[] {
     const entry: TabEntry = { key: pathOf(x).join('.'), label: labelOf(x), builtin: false, el: x, idMso: null };
     const after = x.getAttribute('insertAfterMso');
     const before = x.getAttribute('insertBeforeMso');
-    const anchor = entries.findIndex((e) => e.idMso === (after ?? before));
+    // insertAfterMso / insertBeforeMso がなければ末尾に足す（null で探すと、先に足した自作のタブ（idMso が null）に当たり、並びが逆になるため）
+    const target = after ?? before;
+    const anchor = target ? entries.findIndex((e) => e.idMso === target) : -1;
     if (anchor >= 0) entries.splice(after ? anchor + 1 : anchor, 0, entry);
     else entries.push(entry);
   }
@@ -442,30 +452,34 @@ function rerender(): void {
 
 function renderHeader(fit: ViewFit | null): HTMLElement {
   const v2007 = app.store?.version === 'office2007';
-  const seg = (m: CanvasMode, label: string) =>
+  // short は見出しが狭いときに出す短い名前（CSS のコンテナークエリで切り替える）
+  const seg = (m: CanvasMode, label: string, short?: string) =>
     h('button', {
       type: 'button',
       class: mode === m ? 'active' : '',
       'aria-pressed': String(mode === m),
+      'aria-label': label,
       disabled: m !== 'ribbon' && v2007,
-      title: m !== 'ribbon' && v2007 ? tr('customUI14（2010以降）の形式でのみ使えます') : '',
+      title: m !== 'ribbon' && v2007 ? tr('customUI14（2010以降）の形式でのみ使えます') : short ? label : '',
       onclick: (e: MouseEvent) => {
         e.stopPropagation();
         setCanvasMode(m);
       },
-    }, label);
-  const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー')));
-  // 操作の説明は長いので、ツールチップに回す（幅の切り替えを並べる場所を空けるため）
-  const hint = h('span', { class: 'cv-hint', tabIndex: 0, title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー') }, tr('キー操作'));
-  if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, h('div', { class: 'cv-row' }, modes, hint));
-  return h('div', { class: 'cv-header' }, h('div', { class: 'cv-row' }, modes, renderWidthControls(), hint), renderPreviewBar(fit));
+    }, short ? [h('span', { class: 'cv-long' }, label), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, short)] : label);
+  const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'), tr('右クリック')));
+  // 操作の説明は長いので、小さな「?」のツールチップに回す（1 行に収めるため）
+  const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー') }, '?');
+  // 見出しは 1 行に収める（2 段・3 段になると、既定の高さ 260px のキャンバスでリボンが見出しの下に隠れるため）。
+  // 毎回は使わない切り替え（比べる・キーヒント・VBA で変わる表示・チェックする幅・Excel の幅）は「表示」メニューにまとめた
+  if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, modes, h('span', { class: 'cv-spacer' }), hint);
+  return h('div', { class: 'cv-header' }, modes, renderWidthControls(), renderStatus(fit), renderViewMenu(), hint);
 }
 
 function option(value: string, label: string, selected: boolean): HTMLOptionElement {
   return h('option', { value, selected }, label);
 }
 
-/** 画面の幅・拡大率・表示のしかた。 */
+/** 画面の幅・拡大率・表示のしかた（全体を表示／実寸）。 */
 function renderWidthControls(): HTMLElement {
   const p = preview();
   const choice = p.width === null ? 'free' : WIDTH_CHOICES.includes(p.width) ? String(p.width) : 'custom';
@@ -474,12 +488,11 @@ function renderWidthControls(): HTMLElement {
     {
       class: 'cv-select',
       'aria-label': tr('画面の幅'),
+      title: tr('画面の幅'),
       dataset: { fk: 'width' },
       onchange: (e: Event) => {
         const v = (e.target as HTMLSelectElement).value;
-        setPreview({ width: v === 'free' ? null : v === 'custom' ? p.customWidth : Number(v) });
-        tempExpanded.clear();
-        rerender();
+        applyPreview({ width: v === 'free' ? null : v === 'custom' ? p.customWidth : Number(v) });
       },
     },
     option('free', tr('自由'), choice === 'free'),
@@ -504,9 +517,7 @@ function renderWidthControls(): HTMLElement {
               notify(tr('画面の幅は 640〜7680 の数で入れてください'), 'warning');
               return;
             }
-            setPreview({ width: n, customWidth: n });
-            tempExpanded.clear();
-            rerender();
+            applyPreview({ width: n, customWidth: n });
           },
         })
       : null;
@@ -518,11 +529,7 @@ function renderWidthControls(): HTMLElement {
       title: p.width === null ? tr('先に「画面の幅」を選んでください') : tr('Windows の設定の「拡大/縮小」'),
       disabled: p.width === null,
       dataset: { fk: 'scale' },
-      onchange: (e: Event) => {
-        setPreview({ scale: Number((e.target as HTMLSelectElement).value) });
-        tempExpanded.clear();
-        rerender();
-      },
+      onchange: (e: Event) => applyPreview({ scale: Number((e.target as HTMLSelectElement).value) }),
     },
     SCALE_CHOICES.map((s) => option(String(s), `${s}%`, p.scale === s)),
   );
@@ -534,105 +541,122 @@ function renderWidthControls(): HTMLElement {
       disabled: p.width === null,
       title,
       dataset: { fk: `fit-${m}` },
-      onclick: () => {
-        setPreview({ fit: m });
-        rerender();
-      },
+      onclick: () => applyPreview({ fit: m }),
     }, label);
+  // 見出しが狭いときは「画面の幅」「拡大率」の文字を隠す（CSS のコンテナークエリ）。選択肢の aria-label と title は残す
   return h(
     'div',
     { class: 'cv-width' },
-    h('label', { class: 'cv-field' }, h('span', null, tr('画面の幅')), widthSel),
+    h('label', { class: 'cv-field' }, h('span', { class: 'cv-field-label' }, tr('画面の幅')), widthSel),
     custom,
-    h('label', { class: 'cv-field' }, h('span', null, tr('拡大率')), scaleSel),
+    h('label', { class: 'cv-field' }, h('span', { class: 'cv-field-label' }, tr('拡大率')), scaleSel),
     h('div', { class: 'segmented cv-fit', role: 'group', 'aria-label': tr('表示のしかた') },
-      fitSeg('fit', tr('収める'), tr('枠に収まるように縮小して表示します')),
-      fitSeg('actual', tr('等倍'), tr('実物と同じ大きさで表示し、横にスクロールします'))),
-    h('span', { class: 'cv-status', 'aria-live': 'polite' }),
+      fitSeg('fit', tr('全体を表示'), tr('枠に収まるように縮小して表示します')),
+      fitSeg('actual', tr('実寸'), tr('実物と同じ大きさで表示し、横にスクロールします'))),
   );
-}
-
-/** 2 段目：比べる・キーヒント・動的な状態・確かめる幅・Excel で確かめる、と見積もりの知らせ。 */
-function renderPreviewBar(fit: ViewFit | null): HTMLElement {
-  const p = preview();
-  const toggle = (on: boolean, label: string, title: string, fk: string, patch: () => void) =>
-    h('button', { type: 'button', class: `small cv-toggle${on ? ' active' : ''}`, 'aria-pressed': String(on), title, dataset: { fk }, onclick: () => { patch(); rerender(); } }, label);
-  const menuButton = (which: 'dynamic' | 'checks', label: string, title: string) =>
-    h('button', {
-      type: 'button',
-      class: `small${headerMenu === which ? ' active' : ''}`,
-      'aria-haspopup': 'true',
-      'aria-expanded': String(headerMenu === which),
-      title,
-      dataset: { menuButton: '1', fk: `menu-${which}` },
-      onclick: () => {
-        headerMenu = headerMenu === which ? null : which;
-        dynamicFocus = null;
-        rerender();
-      },
-    }, label, h('span', { class: 'rb-arrow', 'aria-hidden': 'true' }));
-  const dynCount = overrideCount();
-
-  const messages: HTMLElement[] = [];
-  if (fit?.builtin) {
-    messages.push(h('span', { class: 'cv-msg info' }, tr('組み込みグループの幅は再現していません。［Excelで確かめる］をお使いください')));
-  } else if (fit && (fit.clipped.length || fit.collapsed.length)) {
-    if (fit.clipped.length) messages.push(h('span', { class: 'cv-msg warning', title: fit.clipped.join('、') }, tr('この幅では右の {n} グループが収まりません', { n: fit.clipped.length })));
-    if (fit.collapsed.length) messages.push(h('span', { class: 'cv-msg info', title: fit.collapsed.join('、') }, tr('この幅では {n} グループが畳まれます', { n: fit.collapsed.length })));
-    messages.push(h('span', { class: 'cv-estimate' }, tr('目安（実機の Excel と異なる場合があります）')));
-  }
-  const lowZoom = h(
-    'span',
-    { class: 'cv-msg cv-lowzoom', hidden: true },
-    tr('50% より小さく縮めて表示しています'),
-    h('button', { type: 'button', class: 'small', onclick: () => { setPreview({ fit: 'actual' }); rerender(); } }, tr('等倍にする')),
-    // 畳むのは画面全体の枠組み（shell）の仕事なので、知らせるだけにする
-    h('button', { type: 'button', class: 'small', onclick: () => window.dispatchEvent(new CustomEvent('sash:collapseSidePanes')) }, tr('左右のペインを一時的に畳む')),
-  );
-  return h(
-    'div',
-    { class: 'cv-bar' },
-    toggle(p.compare, tr('2つの幅を比べる'), tr('下に、別の幅で描いたリボンを並べます（編集はできません）'), 'compare', () => setPreview({ compare: !p.compare })),
-    toggle(p.keytips, tr('キーヒントを表示'), tr('Alt キーを押したときに出る文字を重ねて表示します'), 'keytips', () => setPreview({ keytips: !p.keytips })),
-    h('span', { class: 'cv-menu-wrap' },
-      menuButton('dynamic', dynCount ? tr('動的な状態を試す（{n}）', { n: dynCount }) : tr('動的な状態を試す'), tr('getVisible・getEnabled・getLabel の結果を仮に決めて、見え方を試します（保存されません）')),
-      headerMenu === 'dynamic' ? renderDynamicMenu() : null),
-    h('span', { class: 'cv-menu-wrap' },
-      menuButton('checks', tr('確かめる幅'), tr('問題の一覧で、グループが畳まれないかを確かめる画面の幅')),
-      headerMenu === 'checks' ? renderChecksMenu() : null),
-    excelButton(),
-    h('span', { class: 'cv-msgs' }, messages, lowZoom),
-  );
-}
-
-/** ［Excelで確かめる］。Excel のウィンドウを選んだ幅にして、実物のリボンで確かめてもらう。 */
-function excelButton(): HTMLElement {
-  const p = preview();
-  const reason = !app.info.excelInstalled ? tr('Excel が見つからないため使えません') : p.width === null ? tr('先に「画面の幅」を選んでください') : '';
-  const button = h('button', {
-    type: 'button',
-    class: 'small',
-    disabled: reason !== '',
-    title: reason || tr('Excel のウィンドウをこの幅にして、実物のリボンで確かめます'),
-    onclick: () => {
-      if (p.width === null) return;
-      setExcelWindowWidth(p.width, p.scale).then(
-        () => notify(tr('Excel のウィンドウを {w} 幅に合わせました', { w: p.width ?? '' }), 'success'),
-        (e: unknown) => notify(e instanceof Error ? e.message : String(e), 'error'),
-      );
-    },
-  }, tr('Excelで確かめる'));
-  // 無効のボタンにはマウスの出来事が届かず、ツールチップが出ない環境があるので、外側にも理由を付ける
-  return reason ? h('span', { class: 'cv-disabled-wrap', title: reason }, button) : button;
 }
 
 /**
- * Excel のウィンドウの幅を変える（ホストの excel.setWindowWidth、仕様書 §18.1）。
- * width は画面の幅（px）、scale は Windows の拡大率（%）。path を渡さないと起動中の最初の Excel が対象になるので、
- * 開いているファイルのパスを必ず渡す。
+ * 見出しの状態の文字（Excel から見た幅・縮小率・畳まれる／収まらないグループの数）。
+ * 入りきらなければ「…」で切り、全文はツールチップで出す（見出しを 1 行に保つため）。
+ * 縮小率の部分は描き直さずに updateZoom が書き換える。
  */
-function setExcelWindowWidth(width: number, scale: number): Promise<unknown> {
-  return invoke('excel.setWindowWidth', { width, scale, path: app.session?.path || undefined });
+function renderStatus(fit: ViewFit | null): HTMLElement[] {
+  const parts: string[] = [];
+  const details: string[] = [];
+  let warn = false;
+  if (fit?.builtin) {
+    parts.push(tr('組み込みグループの幅は再現していません'));
+    details.push(tr('組み込みグループの幅は再現していません。「表示」の［Excel をプレビューの幅にする］で、実物の Excel で確かめてください'));
+  } else if (fit && (fit.clipped.length || fit.collapsed.length)) {
+    if (fit.clipped.length) {
+      warn = true;
+      parts.push(tr('右の {n} グループが収まりません', { n: fit.clipped.length }));
+      details.push(`${tr('収まらない')}: ${fit.clipped.join('、')}`);
+    }
+    if (fit.collapsed.length) {
+      parts.push(tr('{n} グループが畳まれます', { n: fit.collapsed.length }));
+      details.push(`${tr('畳まれる')}: ${fit.collapsed.join('、')}`);
+    }
+    details.push(tr('目安（実機の Excel と異なる場合があります）'));
+  }
+  const status = h(
+    'span',
+    { class: `cv-status${warn ? ' warning' : ''}`, 'aria-live': 'polite', dataset: { detail: details.join('\n') } },
+    h('span', { class: 'cv-zoominfo' }),
+    parts.length ? h('span', { class: 'cv-fitinfo' }, parts.join('・') + tr('（目安）')) : null,
+  );
+  // 縮小が 50% を下回ったときだけ出す小さなリンク。畳むのは外枠（shell）の仕事なので、知らせるだけにする
+  const low = h('button', {
+    type: 'button',
+    class: 'cv-link cv-lowzoom',
+    hidden: true,
+    title: tr('50% より小さく縮めて表示しています。左右のペインを一時的に畳むと大きく表示できます（［実寸］で実物の大きさにもできます）'),
+    onclick: () => window.dispatchEvent(new CustomEvent('sash:collapseSidePanes')),
+  }, tr('ペインを畳む'));
+  return [status, low];
+}
+
+/** 見出しの「表示 ▾」と、そこから開くメニュー（表示・VBA で変わる表示を試す・チェックする画面の幅）。 */
+function renderViewMenu(): HTMLElement {
+  const dynCount = overrideCount();
+  const open = headerMenu !== null;
+  const button = h('button', {
+    type: 'button',
+    class: `small cv-viewbtn${open ? ' active' : ''}${dynCount || preview().compare || preview().keytips ? ' has-on' : ''}`,
+    'aria-haspopup': 'true',
+    'aria-expanded': String(open),
+    title: tr('2つの幅を比べる・キーヒント・VBA で変わる表示を試す・チェックする画面の幅・Excel をプレビューの幅にする'),
+    dataset: { menuButton: '1', fk: 'menu-view' },
+    onclick: () => {
+      headerMenu = open ? null : 'view';
+      dynamicFocus = null;
+      rerender();
+    },
+  }, tr('表示'), h('span', { class: 'rb-arrow', 'aria-hidden': 'true' }));
+  const pop = headerMenu === 'view' ? renderViewMenuItems() : headerMenu === 'dynamic' ? renderDynamicMenu() : headerMenu === 'checks' ? renderChecksMenu() : null;
+  return h('span', { class: 'cv-menu-wrap cv-viewmenu' }, button, pop);
+}
+
+function renderViewMenuItems(): HTMLElement {
+  const p = preview();
+  const dynCount = overrideCount();
+  const check = (on: boolean, label: string, title: string, fk: string, patch: Partial<PreviewSettings>, disabled = false) =>
+    h('label', { class: `cv-check cv-mi${disabled ? ' disabled' : ''}`, title },
+      h('input', { type: 'checkbox', checked: on, disabled, dataset: { fk }, onchange: () => applyPreview(patch) }),
+      label);
+  const item = (label: string, fk: string, onclick: () => void, opts: { reason?: string; title?: string } = {}) =>
+    h('button', {
+      type: 'button',
+      class: 'cv-mi',
+      disabled: !!opts.reason,
+      title: opts.reason || opts.title || '',
+      dataset: { fk },
+      onclick,
+    }, h('span', null, label), opts.reason ? h('span', { class: 'cv-mi-reason' }, opts.reason) : null);
+  const excelReason = excelWidthDisabledReason();
+  return h(
+    'div',
+    { class: 'cv-pop cv-viewpop', role: 'menu', 'aria-label': tr('表示') },
+    check(p.compare, tr('2つの幅を比べる'), tr('下に、別の幅で描いたリボンを並べます（編集はできません）'), 'compare', { compare: !p.compare }),
+    check(p.keytips, tr('キーヒントを表示'), tr('Alt キーを押したときに出る文字を重ねて表示します'), 'keytips', { keytips: !p.keytips }),
+    check(p.keytipsAll, tr('未設定も表示'), tr('keytip を書いていないコントロールにも「自動」（Excel が自動で割り当てます）を出します'), 'keytipsAll', { keytipsAll: !p.keytipsAll }, !p.keytips),
+    h('div', { class: 'cv-mi-sep' }),
+    item(dynCount ? tr('VBA で変わる表示を試す…（{n}）', { n: dynCount }) : tr('VBA で変わる表示を試す…'), 'menu-dynamic', () => {
+      headerMenu = 'dynamic';
+      rerender();
+    }, { title: tr('getVisible・getEnabled・getLabel の結果を仮に決めて、見え方を試します（保存されません）') }),
+    item(tr('チェックする画面の幅…'), 'menu-checks', () => {
+      headerMenu = 'checks';
+      rerender();
+    }, { title: tr('問題の一覧で、グループが畳まれないかを確かめる画面の幅') }),
+    h('div', { class: 'cv-mi-sep' }),
+    item(tr('Excel をプレビューの幅にする'), 'excelWidth', () => {
+      headerMenu = null;
+      rerender();
+      void fitExcelToPreview();
+    }, { reason: excelReason, title: tr('Excel のウィンドウをこの幅にして、実物のリボンで確かめます') }),
+  );
 }
 
 function inRibbon(el: Element): boolean {
@@ -688,8 +712,8 @@ function renderDynamicMenu(): HTMLElement {
   });
   return h(
     'div',
-    { class: 'cv-pop cv-dyn', role: 'dialog', 'aria-label': tr('動的な状態を試す') },
-    h('div', { class: 'cv-pop-title' }, tr('動的な状態を試す')),
+    { class: 'cv-pop cv-dyn', role: 'dialog', 'aria-label': tr('VBA で変わる表示を試す') },
+    h('div', { class: 'cv-pop-title' }, tr('VBA で変わる表示を試す')),
     rows.length ? rows : h('div', { class: 'muted' }, tr('getVisible・getEnabled・getLabel を使うコントロールはありません')),
     h('div', { class: 'cv-pop-foot' },
       h('span', { class: 'muted' }, tr('保存されません。見え方を試すためのものです')),
@@ -703,8 +727,8 @@ function renderChecksMenu(): HTMLElement {
   const choices = [...new Set([...WIDTH_CHOICES, 1440, 1600, ...current])].sort((a, b) => a - b);
   return h(
     'div',
-    { class: 'cv-pop cv-checks', role: 'dialog', 'aria-label': tr('確かめる幅') },
-    h('div', { class: 'cv-pop-title' }, tr('確かめる幅')),
+    { class: 'cv-pop cv-checks', role: 'dialog', 'aria-label': tr('チェックする画面の幅') },
+    h('div', { class: 'cv-pop-title' }, tr('チェックする画面の幅')),
     h('div', { class: 'muted' }, tr('この幅でグループが畳まれる・収まらないときに、問題の一覧に出します（拡大率は「拡大率」で選んだもの）')),
     choices.map((w) =>
       h('label', { class: 'cv-check' },
@@ -756,10 +780,21 @@ function renderCanvas(host: HTMLElement): void {
   }
   // 見出しの切り替えを操作した直後に描き直しても、フォーカスがその欄に残るようにする
   const active = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement.closest<HTMLElement>('[data-fk]')?.dataset['fk'] : undefined;
+  // タブの欄の横スクロールは、描き直しても戻す（戻さないと、タブが多いときに押すたびに先頭へ戻ってしまう）
+  const tabScroll = resetTabScroll ? 0 : editableTabStrip(host)?.scrollLeft ?? 0;
+  resetTabScroll = false;
   host.replaceChildren(renderHeader(fit), stage, h('div', { class: 'drop-indicator', hidden: true }));
   if (active) Array.from(host.querySelectorAll<HTMLElement>('[data-fk]')).find((n) => n.dataset['fk'] === active)?.focus({ preventScroll: true });
 
   updateZoom(host);
+  const strip = editableTabStrip(host);
+  if (strip) {
+    strip.scrollLeft = tabScroll;
+    // 表示するタブが変わったときだけ、そのタブを欄の中で見える位置へ送る（毎回送ると、利用者が送った位置から引き戻すため）
+    const key = strip.querySelector<HTMLElement>('.rb-tab.active')?.dataset['path'] ?? strip.querySelector<HTMLElement>('.rb-tab.active')?.title ?? null;
+    if (key !== lastActiveTabKey) revealTab(strip);
+    lastActiveTabKey = key;
+  }
   placePopups(host);
   const selKey = store.selection ? store.selection.join('.') : null;
   for (const popup of Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'))) {
@@ -787,6 +822,30 @@ function renderCanvas(host: HTMLElement): void {
   }
   flashPath = null;
   scrollToSelection = false;
+}
+
+/** 直前の描画で表示していたタブ（タブの欄を送るかどうかを決める）。 */
+let lastActiveTabKey: string | null = null;
+/** 次の描画でタブの欄の位置を先頭に戻す（ファイルを開き直したとき）。 */
+let resetTabScroll = false;
+
+/** 編集する枠のタブの欄（「2つの幅を比べる」の比べる側ではないもの）。 */
+function editableTabStrip(host: HTMLElement): HTMLElement | null {
+  return Array.from(host.querySelectorAll<HTMLElement>('.rb-tabs-scroll')).find((x) => !x.closest('.cv-compare')) ?? null;
+}
+
+/**
+ * 表示中のタブを、タブの欄の中だけで見える位置に送る（scrollIntoView はキャンバスの枠まで動かすため使わない）。
+ * 矩形は縮小後、scrollLeft は縮小前の値なので、縮小率でそろえる（zoomOf を参照）。
+ */
+function revealTab(strip: HTMLElement): void {
+  const tab = strip.querySelector<HTMLElement>('.rb-tab.active');
+  if (!tab) return;
+  const z = zoomOf(strip);
+  const sr = strip.getBoundingClientRect();
+  const tr = tab.getBoundingClientRect();
+  if (tr.left < sr.left) strip.scrollLeft -= (sr.left - tr.left) / z + 8;
+  else if (tr.right > sr.right) strip.scrollLeft += (tr.right - sr.right) / z + 8;
 }
 
 // ---- 幅の測定と見積もり ----
@@ -828,7 +887,8 @@ function measureAndReport(host: HTMLElement, doc: Document): Map<Element, GroupW
   const tabs = collectTabs(doc).filter((x) => x.el !== null && !x.builtin);
   const all = tabs.flatMap((x) => groupsOf(x.el!));
   const serializer = new XMLSerializer();
-  const sig = `${lang}|${overridesSignature()}`;
+  // 表示名（Excel から届く idMso の名前）の数も鍵に混ぜる。届く前と後で同じ控えを使わないため（onLabelsLoaded でも捨てる）
+  const sig = `${lang}|${labels.size}|${overridesSignature()}`;
   const keys = new Map<Element, string>();
   const need: Element[] = [];
   for (const g of all) {
@@ -919,7 +979,7 @@ function renderRibbonViews(host: HTMLElement, doc: Document, errorPaths: Set<str
           rerender();
         },
       }, choices.map((w) => option(String(w), String(w), w === p.compareWidth)))),
-    h('span', { class: 'muted' }, tr('実効 {w}px・表示だけ（編集はできません）', { w: effectiveWidth(p.compareWidth, p.scale) })),
+    h('span', { class: 'muted' }, tr('Excel から見た幅 {w}px・表示だけ（編集はできません）', { w: effectiveWidth(p.compareWidth, p.scale) })),
     other.fit.clipped.length ? h('span', { class: 'cv-msg warning' }, tr('この幅では右の {n} グループが収まりません', { n: other.fit.clipped.length })) : null,
     other.fit.collapsed.length ? h('span', { class: 'cv-msg info' }, tr('この幅では {n} グループが畳まれます', { n: other.fit.collapsed.length })) : null,
   );
@@ -980,7 +1040,14 @@ function updateZoom(host: HTMLElement): void {
   const primary: number | null = zooms.length === 0 ? null : p.fit === 'fit' && avail > 0 && widest > 0 ? Math.min(1, avail / widest) : 1;
   for (const z of zooms) z.style.zoom = primary === null || primary === 1 ? '' : String(primary);
   const status = host.querySelector<HTMLElement>('.cv-status');
-  if (status) status.textContent = p.width === null || primary === null ? '' : tr('実効 {w}px・{pct}% で表示中', { w: effectiveWidth(p.width, p.scale), pct: Math.round(primary * 100) });
+  const info = status?.querySelector<HTMLElement>('.cv-zoominfo');
+  if (status && info) {
+    info.textContent = p.width === null || primary === null ? '' : tr('{pct}% で表示・Excel から見た幅 {w}px', { w: effectiveWidth(p.width, p.scale), pct: Math.round(primary * 100) });
+    const fitText = status.querySelector('.cv-fitinfo')?.textContent ?? '';
+    if (info.textContent && fitText) info.textContent += '・';
+    // 「…」で切れても全文が読めるよう、ツールチップに全部を出す
+    status.title = [info.textContent + fitText, status.dataset['detail'] ?? ''].filter((x) => x).join('\n');
+  }
   const low = host.querySelector<HTMLElement>('.cv-lowzoom');
   if (low) low.hidden = !(primary !== null && primary < 0.5);
 }
@@ -992,12 +1059,16 @@ function tipFor(node: HTMLElement): ScreentipContent | null {
   return el ? screentipContent(el, labelOf(el)) : null;
 }
 
-/** キーヒントのバッジ。keytip がなければ灰色の「自動」、getKeytip なら「VBA」、重なっていれば赤。 */
+/**
+ * キーヒントのバッジ。書いたもの（重なっていれば赤）と getKeytip（「VBA」）だけを出す。
+ * 書いていないものの灰色の「自動」は、「表示」の［未設定も表示］のときだけ出す（全部に付くと、書いたものが埋もれるため）。
+ */
 function keytipBadge(el: Element, dup: boolean): HTMLElement | null {
   if (!preview().keytips || measuring || readOnlyRender) return null;
   const keytip = el.getAttribute('keytip');
   if (keytip) return h('span', { class: `rb-keytip${dup ? ' dup' : ''}`, title: dup ? tr('キーヒントが重なっています') : '' }, keytip);
   if (el.hasAttribute('getKeytip')) return h('span', { class: 'rb-keytip auto', title: tr('VBA で決まります') }, 'VBA');
+  if (!preview().keytipsAll) return null;
   return h('span', { class: 'rb-keytip auto', title: tr('Excel が自動で割り当てます') }, tr('自動'));
 }
 
@@ -1554,7 +1625,9 @@ function placePopups(host: HTMLElement): void {
   const popups = Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'));
   if (popups.length === 0) return;
   const pr = paneOf(host).getBoundingClientRect();
-  const viewTop = Math.max(0, pr.top);
+  // 見出しは枠の上に貼り付く（sticky）ので、ポップアップは見出しの下から置く（見出しに重ねると、幅の切り替えが押せなくなるため）
+  const header = host.querySelector<HTMLElement>('.cv-header');
+  const viewTop = Math.max(0, pr.top, header ? header.getBoundingClientRect().bottom : 0);
   const viewBottom = Math.min(window.innerHeight, pr.bottom);
   const viewLeft = Math.max(0, pr.left);
   const viewRight = Math.min(window.innerWidth, pr.right);
