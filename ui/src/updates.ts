@@ -2,25 +2,32 @@
 // 起動時の確認で新しい版が見つかってもダイアログは出さず、タイトルバーに控えめに知らせる。
 
 import { invoke, type UpdateCheckResult, type UpdateStatus } from './bridge';
-import { ask, openModal } from './dialogs/modal';
+import { ask, openModal, openOnce } from './dialogs/modal';
 import { $, h } from './dom';
 import { t } from './i18n';
+import { checkbox, settingRow } from './shell/form';
+import { toast as showToast, type ToastKind } from './shell/toast';
 
-type Toast = (message: string, kind?: 'info' | 'error') => void;
+type Toast = (message: string, kind?: ToastKind) => void;
 
 let confirmDiscard: () => Promise<boolean> = async () => true;
-let toast: Toast = () => undefined;
+let toast: Toast = (message, kind) => showToast({ kind, message });
+/** 確認中・入れ替え中か。二重に走らせない。 */
+let checking = false;
 
-export function initUpdates(opts: { confirmDiscard: () => Promise<boolean>; toast: Toast }): void {
+export function initUpdates(opts: { confirmDiscard: () => Promise<boolean>; toast?: Toast }): void {
   confirmDiscard = opts.confirmDiscard;
-  toast = opts.toast;
+  if (opts.toast) toast = opts.toast;
   $('update-banner').addEventListener('click', () => void checkForUpdates(true));
 }
 
 function showBanner(result: UpdateCheckResult | null): void {
   const banner = $<HTMLButtonElement>('update-banner');
   banner.hidden = !result || result.status !== 'available';
-  if (result?.latest) banner.textContent = t('新しい版 {version} があります', { version: result.latest });
+  if (result?.latest) {
+    banner.textContent = t('新しい版 {version} があります', { version: result.latest });
+    banner.title = t('クリックして更新の内容を確認');
+  }
 }
 
 /** 起動時の確認。見つかってもダイアログは出さず、タイトルバーに知らせるだけにする。 */
@@ -37,20 +44,32 @@ export async function checkOnStartup(): Promise<void> {
 
 /** 手動の確認。見つかれば、更新するかを確かめる。 */
 export async function checkForUpdates(manual: boolean): Promise<void> {
+  if (checking) return;
+  checking = true;
+  try {
+    await openOnce('update', () => runCheck(manual));
+  } finally {
+    checking = false;
+  }
+}
+
+async function runCheck(manual: boolean): Promise<void> {
   let result: UpdateCheckResult;
+  const progress = manual ? showToast({ kind: 'info', message: t('更新を確認しています…'), timeout: 0 }) : null;
   try {
     result = await invoke('update.check');
   } catch (e) {
-    toast((e as Error).message, 'error');
+    progress?.update({ kind: 'error', message: t('更新を確認できませんでした：{message}', { message: (e as Error).message }) });
     return;
   }
+  progress?.close();
   showBanner(result);
   if (result.status === 'upToDate') {
-    if (manual) toast(t('最新の版です（{version}）', { version: result.current }));
+    if (manual) toast(t('最新の版です（{version}）', { version: result.current }), 'success');
     return;
   }
   if (result.status !== 'available') {
-    if (manual) toast(result.reason ?? t('更新を確認できませんでした'), 'error');
+    if (manual) toast(result.reason ?? t('更新を確認できませんでした'), result.status === 'disabled' ? 'info' : 'error');
     return;
   }
 
@@ -59,8 +78,8 @@ export async function checkForUpdates(manual: boolean): Promise<void> {
   if (!result.canInstall && result.reason) lines.push(result.reason);
   else lines.push(t('ダウンロードして照合（SHA256）してから入れ替え、Sash を再起動します。設定やアイコンライブラリはそのまま残ります。'));
   const buttons = result.canInstall
-    ? [{ value: 'install', label: t('今すぐ更新'), primary: true }, { value: 'page', label: t('配布元を開く') }, { value: 'later', label: t('あとで') }]
-    : [{ value: 'page', label: t('配布元を開く'), primary: true }, { value: 'later', label: t('あとで') }];
+    ? [{ value: 'later', label: t('あとで') }, { value: 'page', label: t('配布元を開く') }, { value: 'install', label: t('今すぐ更新'), primary: true }]
+    : [{ value: 'later', label: t('あとで') }, { value: 'page', label: t('配布元を開く'), primary: true }];
   const r = await ask(t('新しい版があります'), lines.join('\n\n'), buttons as { value: string; label: string; primary?: boolean }[]);
   if (r === 'page' && result.pageUrl) {
     await invoke('update.openPage', { url: result.pageUrl }).catch((e: Error) => toast(e.message, 'error'));
@@ -71,7 +90,10 @@ export async function checkForUpdates(manual: boolean): Promise<void> {
 
 async function install(): Promise<void> {
   if (!(await confirmDiscard())) return;
-  const progress = openModal(t('更新しています'), h('p', { class: 'modal-message' }, t('ダウンロードと照合をしています。終わると Sash が再起動します…')));
+  // 入れ替えの途中で閉じられると、ダウンロードだけが裏で続いて分かりにくいので、閉じられないようにする
+  const progress = openModal(t('更新しています'), h('div', { class: 'update-progress' },
+    h('p', { class: 'modal-message' }, t('ダウンロードと照合をしています。終わると Sash が再起動します…')),
+    h('progress', { 'aria-label': t('更新しています') })), { size: 'sm', closable: false, key: 'update-install' });
   try {
     await invoke('update.install');
   } catch (e) {
@@ -90,7 +112,7 @@ export async function renderUpdateSettings(onChange: (patch: { updateCheckOnStar
   }
   const managed = status?.managedByAdmin ?? false;
   const source = h('input', { type: 'text', value: current.updateSource, placeholder: t('空欄で GitHub のリリース'), spellcheck: false, disabled: managed });
-  const error = h('span', { class: 'field-error' });
+  const error = h('span', { class: 'field-error', role: 'alert' });
   source.addEventListener('change', () => {
     error.textContent = '';
     void onChange({ updateSource: source.value.trim() }).catch((e: Error) => (error.textContent = e.message));
@@ -98,21 +120,19 @@ export async function renderUpdateSettings(onChange: (patch: { updateCheckOnStar
   return h(
     'div',
     { class: 'settings-group' },
-    h('h3', null, t('更新')),
-    h('label', null, t('いまの版'), h('span', null, status?.current ?? '')),
-    h('label', null, t('起動時に確認'), h('input', { type: 'checkbox', checked: status?.checkOnStartup ?? current.updateCheckOnStartup, disabled: managed, onchange: (e: Event) => void onChange({ updateCheckOnStartup: (e.target as HTMLInputElement).checked }) })),
-    h('label', null, t('確認先'), source),
-    error,
-    h('p', { class: 'muted small' }, managed
-      ? t('確認先は管理者の設定（Sash.update.json）で決められています：{source}', { source: status?.source ?? '' })
-      : t('会社のネットワークからインターネットに出られない場合は、社内の共有フォルダ（例：\\\\server\\tools\\Sash）や、社内の Web サーバーの latest.json の URL を指定できます。')),
-    h('div', { class: 'insp-inline' },
-      h('button', { type: 'button', class: 'small', onclick: () => void checkForUpdates(true) }, t('今すぐ確認')),
-      status?.logPath ? h('button', { type: 'button', class: 'small', onclick: () => void invoke('update.openPage', { url: status!.logPath.replace(/[\\/][^\\/]+$/, '') }).catch((e: Error) => toast(e.message, 'error')) }, t('ログのフォルダを開く')) : null),
+    managed ? h('p', { class: 'notice' }, t('確認先は管理者の設定（Sash.update.json）で決められています：{source}', { source: status?.source ?? '' })) : null,
+    settingRow(t('いまの版'), h('span', { class: 'setting-row' }, status?.current ?? '')),
+    settingRow(t('起動時に確認'), checkbox(t('起動したときに新しい版があるかを確認する'), status?.checkOnStartup ?? current.updateCheckOnStartup, (v) => void onChange({ updateCheckOnStartup: v }), { disabled: managed }),
+      t('見つかったときは、タイトルバーに小さく知らせるだけで、勝手には入れ替えません。')),
+    settingRow(t('確認先'), h('div', { class: 'setting-control' }, source, error),
+      t('会社のネットワークからインターネットに出られない場合は、社内の共有フォルダ（例：\\\\server\\tools\\Sash）や、社内の Web サーバーの latest.json の URL を指定できます。')),
+    h('div', { class: 'setting-row' },
+      h('button', { type: 'button', onclick: () => void checkForUpdates(true) }, t('今すぐ確認')),
+      status?.logPath ? h('button', { type: 'button', onclick: () => void invoke('update.openPage', { url: status!.logPath.replace(/[\\/][^\\/]+$/, '') }).catch((e: Error) => toast(e.message, 'error')) }, t('ログのフォルダを開く')) : null),
   );
 }
 
 /** 更新したあとの最初の起動で知らせる。 */
 export function notifyUpdated(from: string | null | undefined, to: string | undefined): void {
-  if (from) toast(t('Sash を {from} から {to} に更新しました', { from, to: to ?? '' }));
+  if (from) toast(t('Sash を {from} から {to} に更新しました', { from, to: to ?? '' }), 'success');
 }

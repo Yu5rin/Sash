@@ -1,14 +1,21 @@
-// キャンバス（仕様書 §5.2）。本物の Excel に近い見た目でリボンを描き、ドラッグで部品を置く。
+// キャンバス（仕様書 §5.2）。本物の Excel（Microsoft 365）に近い見た目でリボンを描き、ドラッグで部品を置く。
 // 組み込みタブと組み込みグループはグレーのプレースホルダーで示し、自分で足した部分だけを編集対象にする。
+// 表示はリボン・Backstage・コンテキストメニューの3つを切り替える（一度に全部出すと、どれを編集しているか分かりにくいため）。
 
+import '../styles-views.css';
 import { app } from '../app';
 import { catalog, labels } from '../catalog/catalog';
+import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard';
 import { canDropInto, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
-import { childElements, elementAt, pathOf, samePath, isAncestorPath, type Path } from '../model';
+import {
+  allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, pathOf, samePath, isAncestorPath, type Path,
+} from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
-import { defFor } from '../schema';
+import { closeMenu, openElementMenu } from './contextMenu';
+import { focusField } from './inspector';
+import { defFor, inBackstage } from '../schema';
 import { lang, t as tr } from '../i18n';
 
 /** 表示する組み込みタブ（Excel の既定の並び）。 */
@@ -29,22 +36,74 @@ function tabName(ja: string, en: string): string {
   return lang === 'en' ? en : ja;
 }
 
-/** 表示中のタブ。自作タブはパス、組み込みタブは idMso で表す。 */
-let activeTab: { kind: 'path'; path: Path } | { kind: 'builtin'; idMso: string } | { kind: 'backstage' } | null = null;
+export type CanvasMode = 'ribbon' | 'backstage' | 'contextMenu';
+
+let mode: CanvasMode = 'ribbon';
+
+/**
+ * 表示中のタブ。自作タブは id（なければパス）で覚える。
+ * パスだけで覚えると、前にタブを挿入しただけで別のタブに切り替わってしまうため（不具合 32）。
+ */
+let activeTab: { kind: 'el'; id: string | null; path: Path } | { kind: 'builtin'; idMso: string } | null = null;
 
 let onImageDrop: ((files: FileList, target: Path) => void) | null = null;
+let hostEl: HTMLElement | null = null;
+/** 直前の描画にあった要素。編集のあとで選択が新しい要素に移ったら、挿入したものとして目立たせる。 */
+let known = new WeakSet<Element>();
+let flashPath: Path | null = null;
+let scrollToSelection = false;
+/** その場でラベルを編集している間は描き直さない（入力中の文字が消えるため）。 */
+let renaming = false;
+
+export function getCanvasMode(): CanvasMode {
+  return mode;
+}
+
+/** 表示を切り替える。メニューバーなどが表示を合わせられるよう、sash:canvasmode を投げる。 */
+export function setCanvasMode(next: CanvasMode): void {
+  if (next !== 'ribbon' && app.store?.version === 'office2007') next = 'ribbon';
+  const changed = next !== mode;
+  mode = next;
+  if (hostEl) renderCanvas(hostEl);
+  if (changed) window.dispatchEvent(new CustomEvent('sash:canvasmode', { detail: { mode } }));
+}
+
+/** キャンバスにフォーカスを移す（Ctrl+1 / F6）。 */
+export function focus(): void {
+  hostEl?.focus({ preventScroll: true });
+  if (hostEl && app.store?.selection) nodeOf(hostEl, app.store.selection)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
 
 export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: FileList, target: Path) => void }): void {
   onImageDrop = opts.onImageDrop;
+  hostEl = host;
+  // tabindex がないと Ctrl+1 で focus() しても移らない（不具合 23）
+  host.tabIndex = 0;
+  host.setAttribute('role', 'region');
+  host.setAttribute('aria-label', tr('キャンバス'));
   const render = () => renderCanvas(host);
   app.on('session', () => {
     activeTab = null;
     resetBackstage();
+    known = new WeakSet();
+    if (mode !== 'ribbon') setCanvasMode('ribbon');
     render();
   });
   app.on('store', (c) => {
-    if (!c) return;
-    if (c.kinds.has('selection')) followSelection();
+    const store = app.store;
+    if (!c || !store) return;
+    if (c.kinds.has('selection')) {
+      followSelection(c.source === 'canvas');
+      if (c.source !== 'canvas') scrollToSelection = true;
+    }
+    // 挿入（貼り付け・複製・ドロップを含む）の直後は、新しい要素を目立たせる（A3）
+    if (c.kinds.has('doc') && c.source !== 'xml' && c.source !== 'history') {
+      const sel = store.selectedElement;
+      if (sel && !known.has(sel)) {
+        flashPath = store.selection;
+        scrollToSelection = true;
+      }
+    }
     render();
   });
   app.on('problems', render);
@@ -55,25 +114,56 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     if (!host.contains(e.relatedTarget as Node)) hideIndicator(host);
   });
   host.addEventListener('drop', (e) => onDrop(e, host));
+  // ドラッグを Esc で取り消したときやキャンバスの外に落としたときも、表示と状態を残さない（不具合 33）
+  window.addEventListener('dragend', () => {
+    hideIndicator(host);
+    endDrag();
+  }, true);
   host.addEventListener('click', (e) => {
-    if (e.target === host) app.store?.select(null, 'canvas');
+    const target = e.target as HTMLElement;
+    if (target === host || target.classList.contains('rb-body') || target.classList.contains('cv-stage')) app.store?.select(null, 'canvas');
+  });
+  host.addEventListener('keydown', (e) => onKey(e, host));
+  host.addEventListener('contextmenu', (e) => {
+    const node = (e.target as HTMLElement).closest<HTMLElement>('[data-sel]');
+    const path = parsePath(node?.dataset['path']);
+    if (!path || !app.store) return;
+    e.preventDefault();
+    app.store.select(path, 'canvas');
+    openElementMenu(e.clientX, e.clientY, path, 'canvas', host);
   });
 }
 
-/** 選択がタブの中に移ったら、そのタブを表示する。 */
-function followSelection(): void {
+/** 選択がタブ（または Backstage・コンテキストメニュー）の中に移ったら、そこを表示する。 */
+function followSelection(fromCanvas: boolean): void {
   const store = app.store;
   const sel = store?.selection;
   if (!store || !sel) return;
   if (followBackstageSelection(store.doc, sel)) {
-    activeTab = { kind: 'backstage' };
+    if (mode !== 'backstage') setModeQuiet('backstage');
     return;
   }
   let el = elementAt(store.doc, sel);
+  for (let cur = el; cur; cur = cur.parentElement) {
+    if (cur.localName === 'contextMenus') {
+      if (mode !== 'contextMenu') setModeQuiet('contextMenu');
+      return;
+    }
+  }
   while (el && el.localName !== 'tab') el = el.parentElement;
-  if (!el) return;
+  if (!el) {
+    if (!fromCanvas && mode !== 'ribbon' && sel.length > 0) setModeQuiet('ribbon');
+    return;
+  }
+  if (mode !== 'ribbon') setModeQuiet('ribbon');
   const idMso = el.getAttribute('idMso');
-  activeTab = idMso && isBuiltinTab(idMso) && !el.getAttribute('id') ? { kind: 'builtin', idMso } : { kind: 'path', path: pathOf(el) };
+  activeTab = idMso && isBuiltinTab(idMso) && !el.getAttribute('id') ? { kind: 'builtin', idMso } : { kind: 'el', id: el.getAttribute('id'), path: pathOf(el) };
+}
+
+/** 描き直しは呼び出し元に任せて、表示だけを切り替える。 */
+function setModeQuiet(next: CanvasMode): void {
+  mode = next;
+  window.dispatchEvent(new CustomEvent('sash:canvasmode', { detail: { mode } }));
 }
 
 function isBuiltinTab(idMso: string): boolean {
@@ -103,26 +193,27 @@ function findChild(el: Element | null | undefined, name: string): Element | unde
 function collectTabs(doc: Document): TabEntry[] {
   const ribbon = findChild(doc.documentElement, 'ribbon');
   const fromScratch = ribbon?.getAttribute('startFromScratch') === 'true' || ribbon?.getAttribute('startFromScratch') === '1';
-  const tabEls = childElements(findChild(ribbon, 'tabs') ?? doc.createElement('x')).filter((t) => t.localName === 'tab');
+  const tabsEl = findChild(ribbon, 'tabs');
+  const tabEls = tabsEl ? childElements(tabsEl).filter((x) => x.localName === 'tab') : [];
   const entries: TabEntry[] = fromScratch
     ? []
     : BUILTIN_TABS.map(([idMso, ja, en]) => ({ key: `builtin:${idMso}`, label: tabName(ja, en), builtin: true, el: null, idMso }));
 
-  for (const t of tabEls) {
-    const idMso = t.getAttribute('idMso');
+  for (const x of tabEls) {
+    const idMso = x.getAttribute('idMso');
     if (idMso) {
-      const existing = entries.find((x) => x.idMso === idMso);
+      const existing = entries.find((e) => e.idMso === idMso);
       if (existing) {
-        existing.el = t;
+        existing.el = x;
         continue;
       }
-      entries.push({ key: `builtin:${idMso}`, label: builtinTabLabel(idMso), builtin: true, el: t, idMso });
+      entries.push({ key: `builtin:${idMso}`, label: builtinTabLabel(idMso), builtin: true, el: x, idMso });
       continue;
     }
-    const entry: TabEntry = { key: pathOf(t).join('.'), label: labelOf(t), builtin: false, el: t, idMso: null };
-    const after = t.getAttribute('insertAfterMso');
-    const before = t.getAttribute('insertBeforeMso');
-    const anchor = entries.findIndex((x) => x.idMso === (after ?? before));
+    const entry: TabEntry = { key: pathOf(x).join('.'), label: labelOf(x), builtin: false, el: x, idMso: null };
+    const after = x.getAttribute('insertAfterMso');
+    const before = x.getAttribute('insertBeforeMso');
+    const anchor = entries.findIndex((e) => e.idMso === (after ?? before));
     if (anchor >= 0) entries.splice(after ? anchor + 1 : anchor, 0, entry);
     else entries.push(entry);
   }
@@ -139,62 +230,133 @@ function labelOf(el: Element): string {
   return el.getAttribute('id') ?? '';
 }
 
+function isSelected(el: Element): boolean {
+  return samePath(app.store?.selection ?? null, pathOf(el));
+}
+
+/** 表示中のタブを決める。未選択なら最初の自作タブ、なければホーム。 */
+function resolveActive(tabs: TabEntry[]): TabEntry | undefined {
+  let active: TabEntry | undefined;
+  const at = activeTab;
+  if (at?.kind === 'el') {
+    active = tabs.find((x) => x.el !== null && !x.builtin && (at.id !== null ? x.el.getAttribute('id') === at.id : samePath(pathOf(x.el), at.path)));
+    // id を変えたときなどは、パスで探し直す
+    active ??= tabs.find((x) => x.el !== null && samePath(pathOf(x.el), at.path));
+  } else if (at?.kind === 'builtin') {
+    active = tabs.find((x) => x.idMso === at.idMso);
+  }
+  return active ?? tabs.find((x) => !x.builtin) ?? tabs.find((x) => x.el !== null) ?? tabs[0];
+}
+
+function renderHeader(): HTMLElement {
+  const v2007 = app.store?.version === 'office2007';
+  const seg = (m: CanvasMode, label: string) =>
+    h('button', {
+      type: 'button',
+      class: mode === m ? 'active' : '',
+      'aria-pressed': String(mode === m),
+      disabled: m !== 'ribbon' && v2007,
+      title: m !== 'ribbon' && v2007 ? tr('customUI14（2010以降）の形式でのみ使えます') : '',
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        setCanvasMode(m);
+      },
+    }, label);
+  return h(
+    'div',
+    { class: 'cv-header' },
+    h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'))),
+    h('span', { class: 'cv-hint' }, tr('矢印キーで移動・Enter で編集・右クリックでメニュー')),
+  );
+}
+
 function renderCanvas(host: HTMLElement): void {
+  if (renaming) return;
   const store = app.store;
   if (!store) {
     host.replaceChildren();
     return;
   }
   const doc = store.doc;
-  const tabs = collectTabs(doc);
-
-  // 表示するタブを決める。未選択なら最初の自作タブ、なければホーム
-  const showBackstage = activeTab?.kind === 'backstage';
-  let active = showBackstage ? undefined : tabs.find((t) =>
-    activeTab?.kind === 'path' ? t.el !== null && samePath(pathOf(t.el), activeTab.path) : activeTab?.kind === 'builtin' && t.idMso === activeTab.idMso,
-  );
-  if (!showBackstage) active ??= tabs.find((t) => !t.builtin) ?? tabs.find((t) => t.el !== null) ?? tabs[0];
-
   const errorPaths = new Set(app.problems.filter((p) => p.severity === 'error').map((p) => p.path.join('.')));
+  let stage: HTMLElement;
+  if (mode === 'backstage') {
+    stage = h('div', { class: 'cv-stage' }, renderBackstage(doc, errorPaths));
+  } else if (mode === 'contextMenu') {
+    stage = h('div', { class: 'cv-stage' }, renderContextMenus(doc, errorPaths));
+  } else {
+    stage = h('div', { class: 'cv-stage' }, renderRibbon(host, doc, errorPaths));
+  }
+  host.replaceChildren(renderHeader(), stage, h('div', { class: 'drop-indicator', hidden: true }));
+
+  known = new WeakSet(allElements(doc));
+  const sel = store.selection;
+  if (sel && (flashPath || scrollToSelection)) {
+    const node = nodeOf(host, sel);
+    if (node) {
+      node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      if (flashPath && samePath(flashPath, sel)) {
+        node.classList.add('flash');
+        window.setTimeout(() => node.classList.remove('flash'), 900);
+      }
+    }
+  }
+  flashPath = null;
+  scrollToSelection = false;
+}
+
+function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>): HTMLElement {
+  const store = app.store!;
+  const tabs = collectTabs(doc);
+  const active = resolveActive(tabs);
+  const hasCustom = tabs.some((x) => !x.builtin);
 
   const tabBar = h(
     'div',
     { class: 'rb-tabs', role: 'tablist' },
     h('span', {
-      class: `rb-tab file${activeTab?.kind === 'backstage' ? ' active' : ''}`,
+      class: 'rb-tab file',
       role: 'tab',
       title: tr('Backstage（ファイル タブ）を表示'),
       onclick: (e: MouseEvent) => {
         e.stopPropagation();
-        activeTab = { kind: 'backstage' };
-        renderCanvas(host);
+        if (store.version !== 'office2007') setCanvasMode('backstage');
       },
     }, tr('ファイル')),
-    tabs.map((t) =>
+    tabs.map((x) =>
       h(
         'span',
         {
-          class: ['rb-tab', t.builtin && !t.el ? 'builtin' : '', t === active ? 'active' : '', t.el && isSelected(t.el) ? 'selected' : ''].join(' '),
+          class: ['rb-tab', x.builtin && !x.el ? 'builtin' : '', x === active ? 'active' : '', x.el && isSelected(x.el) ? 'selected' : ''].join(' '),
           role: 'tab',
-          'aria-selected': String(t === active),
-          dataset: t.el ? { path: pathOf(t.el).join('.') } : {},
-          draggable: t.el !== null && !t.builtin,
-          title: t.el?.getAttribute('id') ?? t.idMso ?? '',
+          'aria-selected': String(x === active),
+          dataset: x.el ? { path: pathOf(x.el).join('.'), sel: '1' } : {},
+          draggable: x.el !== null && !x.builtin,
+          title: x.el?.getAttribute('id') ?? x.idMso ?? '',
           onclick: (e: MouseEvent) => {
             e.stopPropagation();
-            activeTab = t.el && !t.builtin ? { kind: 'path', path: pathOf(t.el) } : { kind: 'builtin', idMso: t.idMso! };
-            if (t.el) store.select(pathOf(t.el), 'canvas');
+            activeTab = x.el && !x.builtin ? { kind: 'el', id: x.el.getAttribute('id'), path: pathOf(x.el) } : { kind: 'builtin', idMso: x.idMso! };
+            if (x.el) store.select(pathOf(x.el), 'canvas');
             else renderCanvas(host);
           },
-          ondragstart: (e: DragEvent) => t.el && startDrag(e, { kind: 'move', path: pathOf(t.el) }),
+          ondragstart: (e: DragEvent) => x.el && startDrag(e, { kind: 'move', path: pathOf(x.el) }),
           ondragend: () => {
             endDrag();
             hideIndicator(host);
           },
         },
-        t.label || tr('(ラベルなし)'),
+        h('span', { class: 'rb-label' }, x.label || tr('(ラベルなし)')),
       ),
     ),
+    h('button', {
+      type: 'button',
+      class: `rb-tab-add${hasCustom ? '' : ' empty'}`,
+      title: tr('新しいタブを追加'),
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        addTab();
+      },
+    }, hasCustom ? '+' : tr('＋ ここにタブを追加')),
   );
 
   const body = h('div', { class: 'rb-body' });
@@ -209,7 +371,7 @@ function renderCanvas(host: HTMLElement): void {
           body.append(renderGroup(g, errorPaths));
           placed.add(g);
         }
-        body.append(h('div', { class: 'rb-group builtin' }, h('div', { class: 'rb-controls' }), h('div', { class: 'rb-group-label' }, labels.get(bg.id) ?? bg.id.replace(/^Group/, ''))));
+        body.append(h('div', { class: 'rb-group builtin', title: tr('組み込みのグループ（編集できません）') }, h('div', { class: 'rb-controls' }), h('div', { class: 'rb-group-label' }, h('span', null, labels.get(bg.id) ?? bg.id.replace(/^Group/, '')))));
         for (const g of groups) if (g.getAttribute('insertAfterMso') === bg.id && !placed.has(g)) {
           body.append(renderGroup(g, errorPaths));
           placed.add(g);
@@ -220,19 +382,48 @@ function renderCanvas(host: HTMLElement): void {
       for (const g of groups) body.append(renderGroup(g, errorPaths));
     }
     if (active.el) body.dataset['path'] = pathOf(active.el).join('.');
-    if (groups.length === 0 && !active.builtin) {
-      body.append(h('div', { class: 'rb-empty' }, tr('パレットから「グループ」をここにドラッグしてください')));
+    if (groups.length === 0 && !active.builtin && active.el) {
+      const tabPath = pathOf(active.el);
+      body.append(
+        h('div', { class: 'cv-empty' },
+          h('span', null, tr('ここにグループを追加')),
+          h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addChild(tabPath, 'group'); } }, tr('グループを追加'))),
+      );
     }
+  }
+  if (!hasCustom) {
+    body.append(h('div', { class: 'cv-empty floating' }, h('span', null, tr('まだ自分のタブがありません。タブを追加するか、組み込みタブにグループを足してください'))));
   }
 
   const qat = renderQat(doc, errorPaths);
-  const ctx = showBackstage ? null : renderContextMenus(doc, errorPaths);
-  host.replaceChildren(...[qat, tabBar, showBackstage ? renderBackstage(doc, errorPaths) : body, ctx, h('div', { class: 'drop-indicator', hidden: true })].filter((x): x is HTMLElement => x !== null));
+  return h('div', { class: 'rb-window' }, qat, tabBar, body);
+}
+
+/** 新しいタブを作って選択する。 */
+function addTab(): void {
+  runEdit('canvas', (doc) => {
+    const tabs = ensureTabs(doc);
+    const el = createElement(doc, 'tab', tabs);
+    tabs.insertBefore(el, tabs.children[allowedIndex(tabs, 'tab', tabs.children.length) ?? tabs.children.length] ?? null);
+    return pathOf(el);
+  }, tr('タブを追加'));
+}
+
+function addChild(parentPath: Path, tag: string): void {
+  runEdit('canvas', (doc) => {
+    const parent = elementAt(doc, parentPath);
+    if (!parent) return undefined;
+    const at = allowedIndex(parent, tag, parent.children.length);
+    if (at === null) return undefined;
+    const el = createElement(doc, tag, parent);
+    parent.insertBefore(el, parent.children[at] ?? null);
+    return pathOf(el);
+  }, tr('<{tag}> を追加', { tag }));
 }
 
 /** コンテキストメニュー（右クリックメニュー）に足す項目を、メニューの形で並べる。 */
-function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement | null {
-  if (app.store?.version === 'office2007') return null;
+function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement {
+  if (app.store?.version === 'office2007') return h('div', { class: 'cv-empty' }, tr('コンテキストメニューは customUI14（2010以降）の形式でのみ編集できます'));
   const cms = findChild(doc.documentElement, 'contextMenus');
   const menus = cms ? childElements(cms).filter((c) => c.localName === 'contextMenu') : [];
   const sel = app.store?.selection ?? null;
@@ -241,10 +432,11 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
     const row = h(
       'div',
       {
-        class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}${errorPaths.has(cp.join('.')) ? ' has-error' : ''}`,
+        class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}${errorPaths.has(cp.join('.')) ? ' has-error' : ''}${c.getAttribute('visible') === 'false' ? ' hidden-ctl' : ''}`,
         style: `padding-left:${8 + depth * 14}px`,
-        dataset: { path: cp.join('.') },
+        dataset: { path: cp.join('.'), sel: '1' },
         draggable: true,
+        title: c.getAttribute('id') ?? c.getAttribute('idMso') ?? c.localName,
         onclick: (e: MouseEvent) => {
           e.stopPropagation();
           app.store?.select(cp, 'canvas');
@@ -255,7 +447,7 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
         },
         ondragend: () => endDrag(),
       },
-      c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [c.hasAttribute('image') || c.hasAttribute('imageMso') ? iconFor(c, 'small') : h('span', { class: 'rb-icon-gap' }), h('span', null, labelOf(c) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
+      c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [c.hasAttribute('image') || c.hasAttribute('imageMso') ? iconFor(c, 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(c) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
     );
     const kids = c.localName === 'menu' || c.localName === 'splitButton' ? childElements(c).flatMap((k) => item(k, depth + 1)) : [];
     return [row, ...kids];
@@ -267,7 +459,7 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
       'div',
       {
         class: `ctx-card${samePath(sel, mp) ? ' selected' : ''}${errorPaths.has(mp.join('.')) ? ' has-error' : ''}`,
-        dataset: { path: mp.join('.') },
+        dataset: { path: mp.join('.'), sel: '1' },
         onclick: (e: MouseEvent) => {
           e.stopPropagation();
           app.store?.select(mp, 'canvas');
@@ -278,21 +470,30 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
       h('div', { class: 'ctx-items', dataset: { container: mp.join('.') } }, m.children.length ? childElements(m).flatMap((c) => item(c, 0)) : h('div', { class: 'rb-menu-item muted' }, tr('ここに項目をドラッグ'))),
     );
   });
-  if (!cms && menus.length === 0) {
-    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } }, h('h3', null, tr('コンテキストメニュー（右クリック）')), h('div', { class: 'muted' }, tr('パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます')));
+  const addButton = h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addContextMenu(); } }, tr('コンテキストメニューを追加'));
+  if (menus.length === 0) {
+    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } },
+      h('h3', null, tr('コンテキストメニュー（右クリック）')),
+      h('p', { class: 'muted' }, tr('パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます')),
+      addButton);
   }
-  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, tr('コンテキストメニュー（右クリック）')), h('div', { class: 'ctx-cards' }, cards));
+  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, tr('コンテキストメニュー（右クリック）'), addButton), h('div', { class: 'ctx-cards' }, cards));
 }
 
-function isSelected(el: Element): boolean {
-  return samePath(app.store?.selection ?? null, pathOf(el));
+function addContextMenu(): void {
+  runEdit('canvas', (doc) => {
+    const cms = ensureContextMenus(doc);
+    const el = createElement(doc, 'contextMenu', cms);
+    cms.append(el);
+    return pathOf(el);
+  }, tr('コンテキストメニューを追加'));
 }
 
 function renderQat(doc: Document, errorPaths: Set<string>): HTMLElement | null {
   const qat = findChild(findChild(doc.documentElement, 'ribbon'), 'qat');
   if (!qat) return null;
   const items = childElements(qat).flatMap((c) => childElements(c));
-  return h('div', { class: 'rb-qat', dataset: { path: pathOf(qat).join('.') } }, h('span', { class: 'rb-qat-label' }, tr('クイック アクセス')), items.map((c) => renderControl(c, 'small', errorPaths)));
+  return h('div', { class: 'rb-qat', dataset: { path: pathOf(qat).join('.'), sel: '1' }, onclick: (e: MouseEvent) => { e.stopPropagation(); app.store?.select(pathOf(qat), 'canvas'); } }, h('span', { class: 'rb-qat-label' }, tr('クイック アクセス')), items.map((c) => renderControl(c, 'small', errorPaths)));
 }
 
 function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
@@ -300,14 +501,17 @@ function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
   const builtinRef = g.hasAttribute('idMso');
   const launcher = childElements(g).find((c) => c.localName === 'dialogBoxLauncher');
   const controls = h('div', { class: 'rb-controls', dataset: { container: path.join('.') } });
-  layoutControls(childElements(g).filter((c) => c.localName !== 'dialogBoxLauncher'), controls, errorPaths);
+  const items = childElements(g).filter((c) => c.localName !== 'dialogBoxLauncher');
+  layoutControls(items, controls, errorPaths);
+  if (items.length === 0 && !builtinRef) controls.append(h('span', { class: 'rb-empty-slot group' }, tr('ここにコントロールをドラッグ')));
 
   return h(
     'div',
     {
-      class: ['rb-group', builtinRef ? 'builtin-ref' : '', isSelected(g) ? 'selected' : '', errorPaths.has(path.join('.')) ? 'has-error' : ''].join(' '),
-      dataset: { path: path.join('.') },
+      class: ['rb-group', builtinRef ? 'builtin-ref' : '', isSelected(g) ? 'selected' : '', errorPaths.has(path.join('.')) ? 'has-error' : '', g.getAttribute('visible') === 'false' ? 'hidden-ctl' : ''].join(' '),
+      dataset: { path: path.join('.'), sel: '1' },
       draggable: true,
+      title: g.getAttribute('id') ?? g.getAttribute('idMso') ?? 'group',
       onclick: (e: MouseEvent) => {
         e.stopPropagation();
         app.store?.select(path, 'canvas');
@@ -322,12 +526,12 @@ function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
     h(
       'div',
       { class: 'rb-group-label' },
-      h('span', null, labelOf(g)),
+      h('span', { class: 'rb-label' }, labelOf(g)),
       launcher
         ? h('span', {
             class: `rb-launcher${isSelected(launcher) ? ' selected' : ''}`,
             title: tr('ダイアログ起動ツール'),
-            dataset: { path: pathOf(launcher).join('.') },
+            dataset: { path: pathOf(launcher).join('.'), sel: '1' },
             onclick: (e: MouseEvent) => {
               e.stopPropagation();
               app.store?.select(pathOf(launcher), 'canvas');
@@ -341,8 +545,7 @@ function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
 type Size = 'large' | 'small';
 
 function isLarge(el: Element): boolean {
-  if (el.getAttribute('size') === 'large') return true;
-  return false;
+  return el.getAttribute('size') === 'large';
 }
 
 /** large は1列を占め、それ以外は3段ずつ縦に積む（本物のリボンと同じ並べ方）。 */
@@ -390,7 +593,7 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
   const cls = ['rb-ctl', `rb-${tag}`, size, isSelected(el) ? 'selected' : '', hidden ? 'hidden-ctl' : '', disabled ? 'disabled' : '', errorPaths.has(path.join('.')) ? 'has-error' : '', el.hasAttribute('idMso') ? 'builtin-ref' : ''].join(' ');
   const common = {
     class: cls,
-    dataset: { path: path.join('.') },
+    dataset: { path: path.join('.'), sel: '1' },
     draggable: true,
     title: el.getAttribute('id') ?? el.getAttribute('idMso') ?? tag,
     onclick: (e: MouseEvent) => {
@@ -403,15 +606,16 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
     },
     ondragend: () => endDrag(),
   };
-  const arrow = h('span', { class: 'rb-arrow' });
+  const arrow = () => h('span', { class: 'rb-arrow', 'aria-hidden': 'true' });
+  const labelEl = (text: string) => h('span', { class: 'rb-label' }, text);
 
   switch (tag) {
     case 'separator':
       return h('div', { ...common, class: `${cls} rb-sep` });
     case 'checkBox':
-      return h('div', common, h('span', { class: 'rb-check' }), h('span', { class: 'rb-label' }, label));
+      return h('div', common, h('span', { class: 'rb-check' }), labelEl(label));
     case 'labelControl':
-      return h('div', common, h('span', { class: 'rb-label' }, label));
+      return h('div', common, labelEl(label));
     case 'editBox':
     case 'comboBox':
     case 'dropDown':
@@ -419,8 +623,8 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
         'div',
         common,
         el.hasAttribute('image') || el.hasAttribute('imageMso') ? iconFor(el, 'small') : null,
-        showLabel && label ? h('span', { class: 'rb-label' }, label) : null,
-        h('span', { class: 'rb-field' }, tag === 'editBox' ? null : arrow),
+        showLabel && label ? labelEl(label) : null,
+        h('span', { class: 'rb-field' }, tag === 'editBox' ? null : h('span', { class: 'rb-field-drop' }, arrow())),
         menuPopup(el),
       );
     case 'box': {
@@ -436,16 +640,13 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
       return h('div', common, inner);
     }
     case 'splitButton': {
+      // 分割ボタンは「押す部分」と「メニューを開く部分」を線で分ける（本物と同じ見た目）
       const main = childElements(el).find((c) => c.localName === 'button' || c.localName === 'toggleButton');
       const mainLabel = main ? labelOf(main) : label;
-      return h(
-        'div',
-        common,
-        main ? iconFor(main, size) : iconFor(el, size),
-        showLabel ? h('span', { class: 'rb-label' }, mainLabel) : null,
-        arrow,
-        menuPopup(el),
-      );
+      const icon = el.getAttribute('showImage') === 'false' ? null : main ? iconFor(main, size) : iconFor(el, size);
+      return size === 'large'
+        ? h('div', common, h('span', { class: 'rb-split-main' }, icon), h('span', { class: 'rb-split-drop' }, showLabel ? labelEl(mainLabel) : null, arrow()), menuPopup(el))
+        : h('div', common, h('span', { class: 'rb-split-main' }, icon, showLabel ? labelEl(mainLabel) : null), h('span', { class: 'rb-split-drop' }, arrow()), menuPopup(el));
     }
     default: {
       const hasArrow = tag === 'menu' || tag === 'dynamicMenu' || tag === 'gallery';
@@ -453,8 +654,8 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
         'div',
         common,
         el.getAttribute('showImage') === 'false' ? null : iconFor(el, size),
-        showLabel && label ? h('span', { class: 'rb-label' }, label) : null,
-        hasArrow ? arrow : null,
+        showLabel && label ? labelEl(label) : null,
+        hasArrow ? arrow() : null,
         hasArrow ? menuPopup(el) : null,
       );
     }
@@ -476,7 +677,7 @@ function menuPopup(el: Element): HTMLElement | null {
           {
             class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}`,
             style: `padding-left:${8 + depth * 12}px`,
-            dataset: { path: cp.join('.') },
+            dataset: { path: cp.join('.'), sel: '1' },
             draggable: true,
             onclick: (e: MouseEvent) => {
               e.stopPropagation();
@@ -486,8 +687,9 @@ function menuPopup(el: Element): HTMLElement | null {
               e.stopPropagation();
               startDrag(e, { kind: 'move', path: cp });
             },
+            ondragend: () => endDrag(),
           },
-          c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : labelOf(c) || c.localName,
+          c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : h('span', { class: 'rb-label' }, labelOf(c) || c.localName),
         ),
       );
       if (c.localName === 'menu' || c.localName === 'splitButton') walk(c, depth + 1);
@@ -498,17 +700,230 @@ function menuPopup(el: Element): HTMLElement | null {
   return h('div', { class: 'rb-menu-popup', dataset: { container: path.join('.') } }, items);
 }
 
+// ---- キーボード操作（A1） ----
+
+function parsePath(s: string | undefined): Path | null {
+  if (s === undefined) return null;
+  return s === '' ? [] : s.split('.').map(Number);
+}
+
+/** 要素を表す（選択できる）ノード。 */
+function nodeOf(host: HTMLElement, path: Path): HTMLElement | null {
+  return host.querySelector<HTMLElement>(`[data-sel][data-path="${path.join('.')}"]`);
+}
+
+function selectableNodes(host: HTMLElement): HTMLElement[] {
+  return Array.from(host.querySelectorAll<HTMLElement>('[data-sel][data-path]'));
+}
+
+/** 同じ親を持つノードの中から、方向に一番近いものを選ぶ。 */
+function nearest(from: HTMLElement, candidates: HTMLElement[], dir: 'left' | 'right' | 'up' | 'down'): HTMLElement | null {
+  const a = from.getBoundingClientRect();
+  const ax = a.left + a.width / 2;
+  const ay = a.top + a.height / 2;
+  let best: HTMLElement | null = null;
+  let bestScore = Infinity;
+  for (const c of candidates) {
+    if (c === from) continue;
+    const b = c.getBoundingClientRect();
+    const bx = b.left + b.width / 2;
+    const by = b.top + b.height / 2;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const ok = dir === 'left' ? dx < -2 : dir === 'right' ? dx > 2 : dir === 'up' ? dy < -2 : dy > 2;
+    if (!ok) continue;
+    // 進む方向の距離を優先し、横（縦）のずれは重く数える
+    const main = dir === 'left' || dir === 'right' ? Math.abs(dx) : Math.abs(dy);
+    const cross = dir === 'left' || dir === 'right' ? Math.abs(dy) : Math.abs(dx);
+    const score = main + cross * 3;
+    if (score < bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return best;
+}
+
+function siblingsOf(host: HTMLElement, path: Path): HTMLElement[] {
+  const parent = path.slice(0, -1).join('.');
+  return selectableNodes(host).filter((n) => {
+    const p = parsePath(n.dataset['path']);
+    return p !== null && p.length === path.length && p.slice(0, -1).join('.') === parent;
+  });
+}
+
+function childrenOf(host: HTMLElement, path: Path): HTMLElement[] {
+  return selectableNodes(host).filter((n) => {
+    const p = parsePath(n.dataset['path']);
+    return p !== null && p.length === path.length + 1 && isAncestorPath(path, p);
+  });
+}
+
+function selectNode(n: HTMLElement | null | undefined): boolean {
+  const p = parsePath(n?.dataset['path']);
+  if (!p || !app.store) return false;
+  app.store.select(p, 'canvas');
+  nodeOf(hostEl!, p)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  return true;
+}
+
+function onKey(e: KeyboardEvent, host: HTMLElement): void {
+  if (e.isComposing || renaming) return;
+  const target = e.target as HTMLElement;
+  if (target.closest('input, select, textarea, button')) {
+    // ヘッダーの切り替えボタンなど、キャンバスの中のボタンでは既定の動作に任せる
+    if (target.tagName !== 'BUTTON' || e.key === 'Enter' || e.key === ' ') return;
+  }
+  if (handleEditKey(e, 'canvas')) return;
+  const store = app.store;
+  if (!store) return;
+  const sel = store.selection;
+  const cur = sel ? nodeOf(host, sel) : null;
+  const key = e.key;
+
+  if (!cur || !sel) {
+    // 何も選んでいなければ、矢印キーで最初の要素を選ぶ
+    if (key.startsWith('Arrow') || key === 'Home' || key === 'End') {
+      e.preventDefault();
+      const all = selectableNodes(host);
+      selectNode(key === 'End' ? all.at(-1) : all[0]);
+    }
+    return;
+  }
+
+  if (e.altKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
+    e.preventDefault();
+    moveSelected(key === 'ArrowUp' ? -1 : 1, 'canvas');
+    return;
+  }
+
+  const dirs: Record<string, 'left' | 'right' | 'up' | 'down'> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+  const dir = dirs[key];
+  if (dir) {
+    e.preventDefault();
+    const sibs = siblingsOf(host, sel);
+    const next = nearest(cur, sibs, dir);
+    if (next) {
+      selectNode(next);
+      return;
+    }
+    if (dir === 'down') {
+      // 下に兄弟がなければ、中身（グループならコントロール、メニューなら項目）に入る
+      const kids = childrenOf(host, sel);
+      if (selectNode(nearest(cur, kids, 'down') ?? kids[0])) return;
+    }
+    if (dir === 'up' && sel.length > 0) {
+      // 上に兄弟がなければ、親（コントロールならグループ、グループならタブ）に上がる
+      if (selectNode(nodeOf(host, sel.slice(0, -1)))) return;
+    }
+    if ((dir === 'left' || dir === 'right') && sel.length > 1) {
+      // 端まで来たら、隣のグループに移る
+      const parent = nodeOf(host, sel.slice(0, -1));
+      if (parent) {
+        const pn = nearest(parent, siblingsOf(host, sel.slice(0, -1)), dir);
+        const pp = parsePath(pn?.dataset['path']);
+        if (pn && pp) {
+          const kids = childrenOf(host, pp);
+          selectNode((dir === 'right' ? kids[0] : kids.at(-1)) ?? pn);
+        }
+      }
+    }
+    return;
+  }
+  if (key === 'Home' || key === 'End') {
+    e.preventDefault();
+    const sibs = siblingsOf(host, sel);
+    selectNode(key === 'Home' ? sibs[0] : sibs.at(-1));
+  } else if (key === 'Escape') {
+    closeMenu();
+    if (sel.length > 0 && nodeOf(host, sel.slice(0, -1))) {
+      e.preventDefault();
+      store.select(sel.slice(0, -1), 'canvas');
+    }
+  } else if (key === 'Enter') {
+    e.preventDefault();
+    focusField('label');
+  } else if (key === 'F2') {
+    e.preventDefault();
+    if (!startRename(host, sel)) focusField('label');
+  } else if (key === 'ContextMenu' || (key === 'F10' && e.shiftKey)) {
+    e.preventDefault();
+    const r = cur.getBoundingClientRect();
+    openElementMenu(r.left + Math.min(16, r.width / 2), r.bottom, sel, 'canvas', host);
+  }
+}
+
+/** F2：ラベルをその場で書き換える。ラベルを持てない要素や、VBA で返すラベルなら false。 */
+function startRename(host: HTMLElement, path: Path): boolean {
+  const store = app.store;
+  const el = store ? elementAt(store.doc, path) : null;
+  const node = nodeOf(host, path);
+  if (!store || !el || !node || el.hasAttribute('getLabel') || !defFor(el)?.attrs.includes('label')) return false;
+  const labelNode = node.querySelector<HTMLElement>(':scope > .rb-label, :scope > .rb-group-label > .rb-label, :scope > .rb-split-main > .rb-label, :scope > .rb-split-drop > .rb-label, :scope > span:not([class])') ?? (inBackstage(el) ? node : null);
+  if (!labelNode) return false;
+  const original = el.getAttribute('label') ?? '';
+  const input = h('input', { type: 'text', class: 'cv-rename', value: original, spellcheck: false, 'aria-label': tr('ラベル') });
+  let done = false;
+  const finish = (commit: boolean) => {
+    if (done) return;
+    done = true;
+    renaming = false;
+    const v = input.value;
+    if (commit && v !== original) {
+      runEdit('canvas', (doc) => {
+        const target = elementAt(doc, path);
+        if (!target) return undefined;
+        if (v === '') target.removeAttribute('label');
+        else target.setAttribute('label', v);
+        return undefined;
+      }, tr('ラベルを「{name}」に変更', { name: v }));
+    }
+    renderCanvas(host);
+    host.focus({ preventScroll: true });
+  };
+  input.addEventListener('keydown', (e) => {
+    // 日本語入力の変換確定の Enter で確定しない（不具合 39）
+    if (e.isComposing || e.keyCode === 229) return;
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('mousedown', (e) => e.stopPropagation());
+  renaming = true;
+  labelNode.replaceChildren(input);
+  node.draggable = false;
+  input.focus();
+  input.select();
+  return true;
+}
+
 // ---- ドラッグ＆ドロップ ----
 
 interface DropSpot {
   parentPath: Path | null | 'contextMenus' | 'backstage';
   index: number;
   rect: { left: number; top: number; width: number; height: number };
+  /** 置き先として強調するノード。 */
+  container: HTMLElement | null;
 }
 
-function parsePath(s: string | undefined): Path | null {
-  if (s === undefined) return null;
-  return s === '' ? [] : s.split('.').map(Number);
+/** 運んでいる要素（移動のとき）。 */
+function movingElement(doc: Document): Element | null {
+  const p = dragPayload();
+  return p?.kind === 'move' ? elementAt(doc, p.path) : null;
+}
+
+/** 並び順の決まりに合わない位置なら null にする（A16：置けない場所では表示を出さない）。 */
+function checkOrder(doc: Document, spot: DropSpot | null): DropSpot | null {
+  if (!spot || spot.parentPath === null || typeof spot.parentPath === 'string') return spot;
+  const parent = elementAt(doc, spot.parentPath);
+  const tag = draggedTag(doc);
+  if (!parent || !tag) return null;
+  const moving = movingElement(doc);
+  const allowed = allowedIndex(parent, tag, spot.index, moving && moving.parentElement === parent ? moving : null);
+  return allowed === null ? null : spot;
 }
 
 /** ポインタの位置から、置ける場所を探す。置けなければ null。 */
@@ -520,7 +935,7 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
   const target = e.target as HTMLElement;
 
   // タブを運んでいるときは、タブバーの上だけを受け付ける
-  const tabBar = target.closest('.rb-tabs');
+  const tabBar = target.closest<HTMLElement>('.rb-tabs');
   if (tabBar) {
     const tabsEl = findChild(findChild(doc.documentElement, 'ribbon'), 'tabs');
     if (tabsEl ? !canDropInto(doc, tabsEl) : !(payload.kind === 'new' && payload.tag === 'tab')) return null;
@@ -533,12 +948,12 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
     for (const n of own) {
       const r = n.getBoundingClientRect();
       if (e.clientX < r.left + r.width / 2) {
-        return { parentPath: tabsPath, index: parsePath(n.dataset['path'])!.at(-1)!, rect: { left: r.left - 2, top: r.top, width: 2, height: r.height } };
+        return { parentPath: tabsPath, index: parsePath(n.dataset['path'])!.at(-1)!, rect: { left: r.left - 2, top: r.top, width: 2, height: r.height }, container: tabBar };
       }
     }
     const last = own.at(-1) ?? tabNodes.at(-1);
     const r = (last ?? tabBar).getBoundingClientRect();
-    return { parentPath: tabsPath, index: tabsEl?.children.length ?? 0, rect: { left: r.right + 1, top: r.top, width: 2, height: r.height } };
+    return { parentPath: tabsPath, index: tabsEl?.children.length ?? 0, rect: { left: r.right + 1, top: r.top, width: 2, height: r.height }, container: tabBar };
   }
 
   // Backstage がまだないときは、空の欄へのドロップで作る
@@ -546,7 +961,7 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
   if (bsNew) {
     if (draggedTag(doc) !== 'backstage') return null;
     const r = bsNew.getBoundingClientRect();
-    return { parentPath: 'backstage', index: 0, rect: { left: r.left + 4, top: r.top + 4, width: r.width - 8, height: 2 } };
+    return { parentPath: 'backstage', index: 0, rect: { left: r.left + 4, top: r.top + 4, width: r.width - 8, height: 2 }, container: bsNew };
   }
 
   // コンテキストメニューの一覧がまだないときは、空の欄へのドロップで作る
@@ -554,7 +969,7 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
   if (ctxNew) {
     if (draggedTag(doc) !== 'contextMenu') return null;
     const r = ctxNew.getBoundingClientRect();
-    return { parentPath: 'contextMenus', index: 0, rect: { left: r.left + 4, top: r.bottom - 6, width: r.width - 8, height: 2 } };
+    return { parentPath: 'contextMenus', index: 0, rect: { left: r.left + 4, top: r.bottom - 6, width: r.width - 8, height: 2 }, container: ctxNew };
   }
 
   // 内側のコンテナから順に、置けるところを探す
@@ -562,7 +977,10 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
   while (node && host.contains(node)) {
     const containerPath = parsePath(node.dataset['container']);
     const container = containerPath ? elementAt(doc, containerPath) : null;
-    if (container && canDropInto(doc, container)) return spotInContainer(e, node, containerPath!, container);
+    if (container && canDropInto(doc, container)) {
+      const spot = checkOrder(doc, spotInContainer(e, node, containerPath!, container));
+      if (spot) return spot;
+    }
 
     const path = parsePath(node.dataset['path']);
     const el = path ? elementAt(doc, path) : null;
@@ -570,7 +988,8 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
       // グループ本体やタブ本体（data-path）は、その要素自身がコンテナになりうる
       if (canDropInto(doc, el) && (node.classList.contains('rb-body') || node.classList.contains('rb-group'))) {
         const inner = node.classList.contains('rb-group') ? node.querySelector<HTMLElement>('.rb-controls') ?? node : node;
-        return spotInContainer(e, inner, path!, el);
+        const spot = checkOrder(doc, spotInContainer(e, inner, path!, el));
+        if (spot) return spot;
       }
       const parent = el.parentElement;
       if (parent && canDropInto(doc, parent)) {
@@ -579,13 +998,15 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
         // メニューの項目は縦に並ぶので、上下で前後を決める
         const vertical = node.classList.contains('rb-menu-item') || node.classList.contains('bs-item') || node.classList.contains('bs-group') || node.classList.contains('bs-category');
         const before = vertical ? e.clientY < r.top + r.height / 2 : e.clientX < r.left + r.width / 2;
-        return {
+        const spot = checkOrder(doc, {
           parentPath: pathOf(parent),
           index: before ? idx : idx + 1,
           rect: vertical
             ? { left: r.left, top: (before ? r.top : r.bottom) - 1, width: r.width, height: 2 }
             : { left: (before ? r.left : r.right) - 1, top: r.top, width: 2, height: r.height },
-        };
+          container: node.parentElement?.closest<HTMLElement>('[data-container], .rb-group, .rb-body') ?? null,
+        });
+        if (spot) return spot;
       }
     }
     node = node.parentElement?.closest<HTMLElement>('[data-container], [data-path]') ?? null;
@@ -598,6 +1019,7 @@ function spotInContainer(e: DragEvent, node: HTMLElement, containerPath: Path, c
     const p = parsePath(k.dataset['path']);
     return p !== null && p.length === containerPath.length + 1 && containerPath.every((v, i) => v === p[i]);
   });
+  const highlight = node.closest<HTMLElement>('.rb-group, .ctx-card, .bs-column, .bs-group, .rb-body') ?? node;
   for (const k of kids) {
     const r = k.getBoundingClientRect();
     const inList = isVerticalList(k.parentElement);
@@ -606,12 +1028,12 @@ function spotInContainer(e: DragEvent, node: HTMLElement, containerPath: Path, c
       : e.clientX < r.left || (e.clientX <= r.right && e.clientY < r.top + r.height / 2 && r.height < 40) || (e.clientX <= r.left + r.width / 2 && r.height >= 40);
     if (before) {
       const idx = parsePath(k.dataset['path'])!.at(-1)!;
-      const list = isVerticalList(k.parentElement);
-      const stacked = list || (r.height < 40 && k.parentElement?.classList.contains('rb-stack') && k.previousElementSibling !== null);
+      const stacked = inList || (r.height < 40 && k.parentElement?.classList.contains('rb-stack') && k.previousElementSibling !== null);
       return {
         parentPath: containerPath,
         index: idx,
         rect: stacked ? { left: r.left, top: r.top - 1, width: r.width, height: 2 } : { left: r.left - 2, top: r.top, width: 2, height: r.height },
+        container: highlight,
       };
     }
   }
@@ -620,7 +1042,12 @@ function spotInContainer(e: DragEvent, node: HTMLElement, containerPath: Path, c
   return {
     parentPath: containerPath,
     index: container.children.length,
-    rect: last ? { left: r.right + 1, top: r.top, width: 2, height: r.height } : { left: r.left + 4, top: r.top + 4, width: 2, height: Math.max(r.height - 8, 16) },
+    rect: last
+      ? isVerticalList(last.parentElement)
+        ? { left: r.left, top: r.bottom, width: r.width, height: 2 }
+        : { left: r.right + 1, top: r.top, width: 2, height: r.height }
+      : { left: r.left + 4, top: r.top + 4, width: 2, height: Math.max(r.height - 8, 16) },
+    container: highlight,
   };
 }
 
@@ -631,6 +1058,8 @@ function isVerticalList(el: Element | null): boolean {
   return c.contains('ctx-items') || c.contains('rb-menu-popup') || c.contains('bs-list') || c.contains('bs-column') || (c.contains('bs-nav') && !c.contains('horizontal'));
 }
 
+let highlighted: HTMLElement | null = null;
+
 function showIndicator(host: HTMLElement, spot: DropSpot): void {
   const ind = host.querySelector<HTMLElement>('.drop-indicator');
   if (!ind) return;
@@ -640,11 +1069,18 @@ function showIndicator(host: HTMLElement, spot: DropSpot): void {
   ind.style.top = `${spot.rect.top - base.top + host.scrollTop}px`;
   ind.style.width = `${spot.rect.width}px`;
   ind.style.height = `${spot.rect.height}px`;
+  if (highlighted !== spot.container) {
+    highlighted?.classList.remove('drop-target');
+    highlighted = spot.container;
+    highlighted?.classList.add('drop-target');
+  }
 }
 
 function hideIndicator(host: HTMLElement): void {
   const ind = host.querySelector<HTMLElement>('.drop-indicator');
   if (ind) ind.hidden = true;
+  highlighted?.classList.remove('drop-target');
+  highlighted = null;
 }
 
 function imageTarget(e: DragEvent): Path | null {
@@ -665,10 +1101,13 @@ function onDragOver(e: DragEvent, host: HTMLElement): void {
   }
   const spot = findDropSpot(e, host);
   if (!spot) {
+    // 置けない場所では「禁止」のカーソルにする
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
     hideIndicator(host);
     return;
   }
   e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = dragPayload()?.kind === 'new' ? 'copy' : 'move';
   showIndicator(host, spot);
 }
 
@@ -683,7 +1122,10 @@ function onDrop(e: DragEvent, host: HTMLElement): void {
     return;
   }
   const spot = findDropSpot(e, host);
-  if (!spot) return;
+  if (!spot) {
+    endDrag();
+    return;
+  }
   e.preventDefault();
   drop(spot.parentPath, spot.index, 'canvas');
 }
@@ -695,10 +1137,11 @@ function onDrop(e: DragEvent, host: HTMLElement): void {
 export function tabIdToActivate(): string | null {
   const store = app.store;
   if (!store) return null;
-  if (activeTab?.kind === 'path') {
+  if (activeTab?.kind === 'el') {
+    if (activeTab.id) return activeTab.id;
     const id = elementAt(store.doc, activeTab.path)?.getAttribute('id');
     if (id) return id;
   }
   const tabs = store.doc.documentElement.querySelector(':scope > ribbon > tabs');
-  return tabs ? childElements(tabs).find((t) => t.localName === 'tab' && t.hasAttribute('id'))?.getAttribute('id') ?? null : null;
+  return tabs ? childElements(tabs).find((x) => x.localName === 'tab' && x.hasAttribute('id'))?.getAttribute('id') ?? null : null;
 }

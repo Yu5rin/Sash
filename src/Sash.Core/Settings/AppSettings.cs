@@ -52,10 +52,15 @@ public sealed record AppSettings
     public IReadOnlyList<string> RecentFiles { get; init; } = [];
 }
 
-/// <summary>設定の読み書き。壊れたファイルは既定値として扱い、起動を妨げない。</summary>
+/// <summary>
+/// 設定の読み書き。読むだけのとき（起動時など）は、壊れたファイルや読めないファイルを既定値として扱い、起動を妨げない。
+/// 書き換えるときは、読めなかったファイルを既定値で上書きしないよう、読めなければ中止する（壊れていれば .bak に退避してから書く）。
+/// </summary>
 public sealed class SettingsStore(string path)
 {
     public const int MaxRecentFiles = 15;
+
+    private static readonly string[] Themes = ["system", "light", "dark"];
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -73,12 +78,8 @@ public sealed class SettingsStore(string path)
         {
             try
             {
-                if (!File.Exists(Path))
-                {
-                    return new AppSettings();
-                }
-
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(Path), Json) ?? new AppSettings();
+                var text = JsonFile.ReadText(Path);
+                return text is null ? new AppSettings() : Normalize(JsonSerializer.Deserialize<AppSettings>(text, Json));
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
             {
@@ -91,13 +92,57 @@ public sealed class SettingsStore(string path)
     {
         lock (_lock)
         {
-            var next = change(Load());
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-            var temp = Path + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(next, Json));
-            File.Move(temp, Path, overwrite: true);
+            var next = Normalize(change(LoadForUpdate()));
+            JsonFile.WriteAtomic(Path, JsonSerializer.Serialize(next, Json));
             return next;
         }
+    }
+
+    /// <summary>書き換えの前に読む。読めなければ投げ、壊れていれば退避して既定値から始める。</summary>
+    private AppSettings LoadForUpdate()
+    {
+        var text = JsonFile.ReadTextForUpdate(Path);
+        if (text is null)
+        {
+            return new AppSettings();
+        }
+
+        try
+        {
+            return Normalize(JsonSerializer.Deserialize<AppSettings>(text, Json));
+        }
+        catch (JsonException)
+        {
+            JsonFile.MoveAside(Path);
+            return new AppSettings();
+        }
+    }
+
+    /// <summary>
+    /// 手で書き換えた設定ファイルや古い版のファイルで、null や範囲外の値が入っていても動くようにそろえる。
+    /// JSON に "recentFiles": null とあると、宣言では null にならない型でも null が入るため。
+    /// </summary>
+    internal static AppSettings Normalize(AppSettings? s)
+    {
+        var d = new AppSettings();
+        if (s is null)
+        {
+            return d;
+        }
+
+        return s with
+        {
+            Theme = s.Theme is not null && Themes.Contains(s.Theme, StringComparer.Ordinal) ? s.Theme : d.Theme,
+            IconSize = s.IconSize is 32 or 64 ? s.IconSize : d.IconSize,
+            BackupGenerations = Math.Clamp(s.BackupGenerations, 1, 100),
+            Language = s.Language is "ja" or "en" ? s.Language : d.Language,
+            CallbackPattern = string.IsNullOrWhiteSpace(s.CallbackPattern) ? d.CallbackPattern : s.CallbackPattern,
+            CallbackSharedPattern = string.IsNullOrWhiteSpace(s.CallbackSharedPattern) ? d.CallbackSharedPattern : s.CallbackSharedPattern,
+            CallbackModule = string.IsNullOrWhiteSpace(s.CallbackModule) ? d.CallbackModule : s.CallbackModule,
+            UpdateSource = s.UpdateSource ?? d.UpdateSource,
+            IconFavorites = s.IconFavorites?.OfType<string>().ToList() ?? [],
+            RecentFiles = s.RecentFiles?.OfType<string>().Where(p => p.Length > 0).ToList() ?? [],
+        };
     }
 
     /// <summary>最近使ったファイルの先頭に追加する（同じパスは1つにまとめる）。</summary>

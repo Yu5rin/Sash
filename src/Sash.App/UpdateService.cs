@@ -33,6 +33,12 @@ internal sealed record UpdateCheckResult(
 internal sealed class UpdateService(SettingsStore settings)
 {
     private static readonly HttpClient Http = CreateClient();
+
+    /// <summary>確認全体の上限。社内のプロキシが応答を返さないまま止まると、確認中の表示が終わらなくなるため。</summary>
+    private static readonly TimeSpan CheckTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>ダウンロードで、1 バイトも届かないまま待つ上限。遅くても進んでいれば止めない。</summary>
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
     private static bool _networkLogged;
 
     public static string CurrentVersionText =>
@@ -95,9 +101,11 @@ internal sealed class UpdateService(SettingsStore settings)
                 null, source.Location, true), null);
         }
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(CheckTimeout);
         try
         {
-            var release = await FetchLatestAsync(source, ct);
+            var release = await FetchLatestAsync(source, timeout.Token);
             UpdateVersion.TryParse(current, out var cur);
             if (release is null || release.Version <= cur)
             {
@@ -105,11 +113,24 @@ internal sealed class UpdateService(SettingsStore settings)
                 return (new UpdateCheckResult("upToDate", current, release?.Version.ToString(), null, false, null, release?.PageUrl ?? source.LatestPageUrl, source.Location, managed), release);
             }
 
+            // GitHub では、リリースを作ってから配布物を添付し終えるまでの間もフィードに載る。照合値ファイルがまだなければ
+            // 「新しい版があります」と出しても入れ替えられないので、そろうまでは最新として扱う。取れた照合値は覚えておき、入れ替えのときに取り直さない
+            if (release.Sha256 is null && release.ChecksumUrl is not null && source.Kind == UpdateSourceKind.GitHub)
+            {
+                var sha = await FetchChecksumAsync(release, timeout.Token);
+                if (sha is null)
+                {
+                    return (new UpdateCheckResult("upToDate", current, null, null, false, null, source.LatestPageUrl, source.Location, managed), null);
+                }
+
+                release = release with { Sha256 = sha };
+            }
+
             var (canInstall, reason) = CanInstallHere();
             Log($"確認: 新しい版 {release.Version} があります（確認先 {source.Location}、入れ替え {(canInstall ? "可" : "不可")}）");
             return (new UpdateCheckResult("available", current, release.Version.ToString(), release.Notes, canInstall, reason, release.PageUrl, source.Location, managed), release);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or FormatException or System.Text.Json.JsonException)
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException or UnauthorizedAccessException or FormatException or System.Text.Json.JsonException)
         {
             var message = Describe(ex);
             Log($"確認に失敗: {ex.GetType().Name}: {ex.Message}");
@@ -137,14 +158,45 @@ internal sealed class UpdateService(SettingsStore settings)
             {
                 var path = Path.Combine(source.Location, UpdateSource.ManifestFileName);
                 Log($"確認: 共有フォルダ {path} を読みます");
-                return UpdateFeedLogic.ForManifest(source, await File.ReadAllTextAsync(path, ct));
+                // つながらない共有フォルダはファイルを開くところで長く止まる（そこは非同期にならない）ので、
+                // 別のスレッドで読み、上限の時間を過ぎたら待つのをやめる
+                var text = await Task.Run(() => File.ReadAllTextAsync(path, ct), ct).WaitAsync(ct);
+                return UpdateFeedLogic.ForManifest(source, text);
             }
         }
+    }
+
+    /// <summary>照合値ファイルを取って照合値を返す。まだ置かれていなければ（404）null。</summary>
+    private static async Task<string?> FetchChecksumAsync(UpdateRelease release, CancellationToken ct)
+    {
+        string text;
+        try
+        {
+            text = await GetStringAsync(release.ChecksumUrl!, ct);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            Log($"確認: {release.Version} の照合値ファイルがまだありません（配布物の準備中）。最新として扱います：{release.ChecksumUrl}");
+            return null;
+        }
+
+        var sha = UpdateFeedLogic.ParseChecksum(text, UpdateSource.AssetFileName(release.Version));
+        if (sha is null)
+        {
+            Log($"確認: {release.Version} の照合値ファイルを読めません。最新として扱います：{release.ChecksumUrl}");
+        }
+
+        return sha;
     }
 
     /// <summary>exe のフォルダに書き込めるか。Program Files などでは自分では入れ替えられない。</summary>
     private static (bool, string?) CanInstallHere()
     {
+#if DEBUG
+        // Debug ビルドは bin\Debug から dotnet run やデバッガーで動かしている。入れ替えるとビルドの出力（apphost）を
+        // 配布物で上書きしてしまい、次のビルドやデバッグが壊れるので、デバッガーの有無にかかわらず入れ替えない
+        return (false, L("開発中の実行では入れ替えません。", "Not replaced while running from a development build."));
+#else
         var dir = Path.GetDirectoryName(ExePath)!;
         if (!string.Equals(Path.GetFileName(ExePath), "Sash.exe", StringComparison.OrdinalIgnoreCase) && Debugger.IsAttached)
         {
@@ -154,10 +206,30 @@ internal sealed class UpdateService(SettingsStore settings)
         return ExecutableReplacer.CanWriteTo(dir)
             ? (true, null)
             : (false, L($"{dir} に書き込めないため、自動では入れ替えられません。新しい版をダウンロードして、管理者の権限で置き換えてください。", $"Cannot write to {dir}, so the update cannot be installed automatically. Download the new version and replace the file with administrator rights."));
+#endif
     }
 
     /// <summary>ダウンロードして照合し、exe を入れ替える。成功したら新しい版を起動して、この版は終わる。</summary>
     public async Task InstallAsync(UpdateRelease release, Action exitApp, CancellationToken ct = default)
+    {
+        try
+        {
+            await InstallCoreAsync(release, exitApp, ct);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException or UnauthorizedAccessException or FormatException)
+        {
+            // 通信や共有フォルダの失敗は、確認のときと同じく何をすればよいかがわかる文言にし、ログにも残す
+            Log($"入れ替えに失敗: {ex.GetType().Name}: {ex.Message}");
+            throw new Sash.Core.UserFacingException(L($"更新できませんでした。{Describe(ex)}", $"The update failed. {Describe(ex)}"), ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Log($"入れ替えを中止: {ex.Message}");
+            throw;
+        }
+    }
+
+    private static async Task InstallCoreAsync(UpdateRelease release, Action exitApp, CancellationToken ct)
     {
         var (ok, reason) = CanInstallHere();
         if (!ok)
@@ -170,13 +242,16 @@ internal sealed class UpdateService(SettingsStore settings)
         var fileName = UpdateSource.AssetFileName(release.Version);
         var downloaded = Path.Combine(workDir, fileName);
 
-        // 照合値を先に取る。取れなければ入れ替えない（中身を確かめられないものは入れない）
+        // 照合値を先に取る。取れなければ入れ替えない（中身を確かめられないものは入れない）。
+        // GitHub のときは確認の時点で取ってあるので、ここでは取り直さない
         var expected = release.Sha256;
         if (expected is null && release.ChecksumUrl is not null)
         {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(CheckTimeout);
             var text = release.ChecksumUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                ? await GetStringAsync(release.ChecksumUrl, ct)
-                : await File.ReadAllTextAsync(release.ChecksumUrl, ct);
+                ? await GetStringAsync(release.ChecksumUrl, timeout.Token)
+                : await Task.Run(() => File.ReadAllTextAsync(release.ChecksumUrl, timeout.Token), timeout.Token).WaitAsync(timeout.Token);
             expected = UpdateFeedLogic.ParseChecksum(text, fileName);
         }
 
@@ -188,14 +263,12 @@ internal sealed class UpdateService(SettingsStore settings)
         Log($"ダウンロード: {release.DownloadUrl}");
         if (release.DownloadUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            using var response = await Http.GetAsync(release.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-            response.EnsureSuccessStatusCode();
-            await using var fs = File.Create(downloaded);
-            await response.Content.CopyToAsync(fs, ct);
+            await DownloadAsync(release.DownloadUrl, downloaded, ct);
         }
         else
         {
-            File.Copy(release.DownloadUrl, downloaded, overwrite: true);
+            // 共有フォルダからのコピーは同期の処理なので、UI のスレッドを止めないよう別のスレッドで行う
+            await Task.Run(() => File.Copy(release.DownloadUrl, downloaded, overwrite: true), ct);
         }
 
         string actual;
@@ -212,7 +285,7 @@ internal sealed class UpdateService(SettingsStore settings)
         }
 
         var previous = CurrentVersionText;
-        ExecutableReplacer.Replace(ExePath, downloaded);
+        await Task.Run(() => ExecutableReplacer.Replace(ExePath, downloaded), CancellationToken.None);
         Log($"入れ替え: {previous} → {release.Version}");
         TryDelete(downloaded);
 
@@ -221,16 +294,45 @@ internal sealed class UpdateService(SettingsStore settings)
         exitApp();
     }
 
+    /// <summary>
+    /// ダウンロードする。全体の時間では区切らず、データが届かない状態が <see cref="StallTimeout"/> 続いたら止める
+    /// （回線が遅い社内でも、進んでいる限りは最後まで待つため）。
+    /// </summary>
+    private static async Task DownloadAsync(string url, string dest, CancellationToken ct)
+    {
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        stall.CancelAfter(StallTimeout);
+        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, stall.Token);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw HttpError(response.StatusCode);
+        }
+
+        await using var body = await response.Content.ReadAsStreamAsync(stall.Token);
+        await using var fs = File.Create(dest);
+        var buffer = new byte[81920];
+        int read;
+        while ((read = await body.ReadAsync(buffer, stall.Token)) > 0)
+        {
+            await fs.WriteAsync(buffer.AsMemory(0, read), stall.Token);
+            // 届いたので、待つ時間を数え直す
+            stall.CancelAfter(StallTimeout);
+        }
+    }
+
     private static async Task<string> GetStringAsync(string url, CancellationToken ct)
     {
         using var response = await Http.GetAsync(url, ct);
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"HTTP {(int)response.StatusCode}", null, response.StatusCode);
+            throw HttpError(response.StatusCode);
         }
 
         return await response.Content.ReadAsStringAsync(ct);
     }
+
+    private static HttpRequestException HttpError(HttpStatusCode code) =>
+        new(L($"サーバーが HTTP {(int)code} を返しました。", $"The server returned HTTP {(int)code}."), null, code);
 
     private static string Describe(Exception ex) => ex switch
     {
@@ -240,7 +342,7 @@ internal sealed class UpdateService(SettingsStore settings)
             L("確認先が見つかりません（404）。設定の「更新の確認先」を確認してください。", "The update source was not found (404). Check the update source in Settings."),
         HttpRequestException { StatusCode: HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests } =>
             L("確認先へのアクセスが拒否されました。時間をおいて試すか、社内の共有フォルダからの更新を検討してください。", "Access to the update source was denied. Try again later, or consider updating from a shared folder."),
-        TaskCanceledException => L("確認先から応答がありません（タイムアウト）。ネットワークやプロキシの設定を確認してください。", "The update source did not respond (timeout). Check your network or proxy settings."),
+        OperationCanceledException => L("確認先から応答がありません（タイムアウト）。ネットワークやプロキシの設定を確認してください。", "The update source did not respond (timeout). Check your network or proxy settings."),
         HttpRequestException => L("確認先に接続できません。ネットワークやプロキシの設定を確認してください。", "Cannot connect to the update source. Check your network or proxy settings."),
         IOException or UnauthorizedAccessException => L($"共有フォルダを読めません：{ex.Message}", $"Cannot read the shared folder: {ex.Message}"),
         _ => L($"確認先の内容を読めません：{ex.Message}", $"Cannot read the update information: {ex.Message}"),

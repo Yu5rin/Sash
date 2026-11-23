@@ -1,13 +1,19 @@
-// インスペクタ（仕様書 §5.4）。選んだ要素に使える属性だけを「基本」「表示」「動作」「詳細」に分けて出す。
-// 静的な値と get 系コールバックの組は1行の切り替えにまとめ、両方を同時に指定する矛盾を起こさない。
+// インスペクタ（仕様書 §5.4）。選んだ要素に使える属性だけを「基本」「表示」「画像」「コールバック」「詳細」に分けて出す。
+// 静的な値と get 系コールバックの組は「固定 | VBA」の切り替えにまとめ、両方を同時に指定する矛盾を起こさない。
+// 入力中に他のビューの変更で描き直しても、入力中の欄（文字・カーソル位置・フォーカス）はそのまま残す（不具合 5 / 6）。
 
 import { app } from '../app';
-import { defaultCallbackName, renameCallback, vba } from '../callbacks';
+import { defaultCallbackName, insertStubs, renameCallback, vba } from '../callbacks';
+import { copyText, notify, runEdit } from '../clipboard';
+import { openCatalog } from '../dialogs/catalogDialog';
+import { openLibrary } from '../dialogs/libraryDialog';
 import { h, svg } from '../dom';
+import { applyLibraryIcon, openIconDialog } from '../icon/iconDialog';
 import { kindIcon, uiIcons } from '../icons';
-import { identifierOf, setAttr, suggestId, usedIds } from '../model';
+import { identifierOf, samePath, setAttr, suggestId, usedIds, type Path } from '../model';
 import type { ImageEntry } from '../store';
-import { attributes, attrsOfEl, callbackSignature, defFor, ID_PATTERN, type AttrDef, type Category } from '../schema';
+import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, type AttrDef } from '../schema';
+import { bareCallbackName, generateStub, isCallbackName, type CallbackStatus } from '../vba';
 import { lang, t } from '../i18n';
 
 export interface InspectorHooks {
@@ -17,19 +23,95 @@ export interface InspectorHooks {
   pickFromLibrary(): void;
 }
 
-const CATEGORIES: readonly Category[] = ['基本', '表示', '動作', '詳細'];
+type Section = '基本' | '表示' | '画像' | 'コールバック' | '詳細';
+const SECTIONS: readonly Section[] = ['基本', '表示', '画像', 'コールバック', '詳細'];
 
 /** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
-function categoryName(cat: string): string {
-  return lang === 'en' && cat === '表示' ? 'Appearance' : t(cat);
+function sectionName(s: Section): string {
+  return lang === 'en' && s === '表示' ? 'Appearance' : t(s);
+}
+
+/** 属性の日本語名。生の属性名は横に小さく出す（XML を書く人が対応を覚えられるように）。 */
+const ATTR_LABEL: Readonly<Record<string, string>> = {
+  id: 'ID', idMso: '組み込みID', idQ: '修飾ID', tag: 'タグ文字列',
+  insertAfterMso: 'この後ろに配置', insertBeforeMso: 'この前に配置', insertAfterQ: 'この後ろに配置（idQ）', insertBeforeQ: 'この前に配置（idQ）',
+  label: 'ラベル', visible: '表示する', enabled: '有効にする', showLabel: 'ラベルを出す', showImage: 'アイコンを出す',
+  screentip: 'ヒントの見出し', supertip: 'ヒントの本文', keytip: 'アクセスキー', size: '大きさ', description: '説明',
+  title: '区切りの見出し', onAction: 'クリック時', getPressed: '押下状態', onChange: '入力時', getText: '表示する文字列',
+  getContent: 'メニューの中身', getItemCount: '項目の数', getItemLabel: '項目のラベル', getItemImage: '項目のアイコン',
+  getItemID: '項目のID', getItemScreentip: '項目のヒント見出し', getItemSupertip: '項目のヒント本文',
+  getSelectedItemID: '選択中の項目ID', getSelectedItemIndex: '選択中の項目番号', getItemWidth: '項目の幅を返す', getItemHeight: '項目の高さを返す',
+  onLoad: '読み込み時', loadImage: '画像の読み込み', startFromScratch: '組み込みタブを隠す', autoScale: '自動で縮める',
+  centerVertically: '縦の中央に揃える', itemSize: '項目の大きさ', boxStyle: '並べる向き', sizeString: '幅の基準の文字列',
+  maxLength: '最大文字数', showItemLabel: '項目のラベルを出す', showItemImage: '項目のアイコンを出す', columns: '列の数', rows: '行の数',
+  itemWidth: '項目の幅', itemHeight: '項目の高さ', invalidateContentOnDrop: '開くたびに作り直す', showInRibbon: 'リボンに並べる',
+  alignLabel: 'ラベルの位置', noWrap: '折り返さない', onShow: '開いた時', onHide: '閉じた時', isDefinitive: '押したら閉じる',
+  columnWidthPercent: '1列目の幅（%）', firstColumnMinWidth: '1列目の最小幅', firstColumnMaxWidth: '1列目の最大幅',
+  secondColumnMinWidth: '2列目の最小幅', secondColumnMaxWidth: '2列目の最大幅', helperText: '補足の文', style: '見た目の種類',
+  target: 'リンク先', altText: '代替テキスト', allowedTaskSizes: 'タスクの大きさ', layoutChildren: '中身の向き', align: '配置', expand: '広げる方向',
+};
+
+/** 真偽値の属性の既定値（分かっているものだけ）。「既定（はい）」のように出す。 */
+const BOOL_DEFAULT: Readonly<Record<string, boolean>> = {
+  visible: true, enabled: true, showLabel: true, showImage: true, showItemLabel: true, showItemImage: true,
+  startFromScratch: false, autoScale: false, centerVertically: false, invalidateContentOnDrop: false, noWrap: false,
+  isDefinitive: false, showInRibbon: true,
+};
+
+function attrLabel(name: string): string {
+  const ja = ATTR_LABEL[name];
+  return ja ? t(ja) : name;
+}
+
+function sectionOf(d: AttrDef): Section {
+  if (d.name === 'image' || d.name === 'imageMso' || d.name === 'getImage') return '画像';
+  if (d.kind === 'callback') return 'コールバック';
+  if (d.category === '動作') return '基本';
+  return d.category;
 }
 
 let hooks: InspectorHooks;
+let hostEl: HTMLElement | null = null;
+
+const COLLAPSE_KEY = 'sash.inspector.collapsed';
+const collapsed = new Set<string>(loadCollapsed());
+
+function loadCollapsed(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '[]') as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCollapsed(): void {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed]));
+  } catch {
+    // 保存できなくても動作には影響しない
+  }
+}
+
+/**
+ * 「固定 | VBA」を切り替えたときに、入力していた値を覚えておく（戻したときに元の値に戻すため）。
+ * キーは「要素（id、なければパス）|属性名」。このセッションの間だけ。
+ */
+const remembered = new Map<string, string>();
+
+/** アイコンの種類を選んだが、まだ値が決まっていない状態（値が決まるまで XML は変えない）。 */
+let pendingIcon: { key: string; mode: 'imageMso' | 'image' } | null = null;
+
+let renderTimer: number | undefined;
 
 export function mountInspector(host: HTMLElement, h0: InspectorHooks): void {
   hooks = h0;
-  const render = () => renderInspector(host);
-  app.on('session', render);
+  hostEl = host;
+  const render = () => schedule(host);
+  app.on('session', () => {
+    pendingIcon = null;
+    render();
+  });
   app.on('problems', render);
   app.on('vba', render);
   app.on('store', (c) => {
@@ -37,47 +119,167 @@ export function mountInspector(host: HTMLElement, h0: InspectorHooks): void {
   });
 }
 
-/** 属性を変更する。値が同じなら何もしない。 */
-function commit(name: string, value: string | null, also: Record<string, string | null> = {}): void {
-  const store = app.store;
-  const el = store?.selectedElement;
-  if (!store || !el) return;
-  const changes: Record<string, string | null> = { [name]: value, ...also };
-  const same = Object.entries(changes).every(([k, v]) => (el.getAttribute(k) ?? null) === (v === '' ? null : v));
-  if (same) return;
-  store.edit('inspector', () => {
-    const target = store.selectedElement!;
-    for (const [k, v] of Object.entries(changes)) setAttr(target, k, v);
-    return undefined;
-  });
+/**
+ * 描き直しを予約する。インスペクタの中にフォーカスがあるときは、フォーカスの移動（Tab など）が
+ * 終わってから描き直す。change の処理中に DOM を差し替えると、移動先の欄が消えてフォーカスを失うため。
+ */
+function schedule(host: HTMLElement): void {
+  window.clearTimeout(renderTimer);
+  if (host.contains(document.activeElement)) renderTimer = window.setTimeout(() => renderInspector(host), 0);
+  else renderInspector(host);
 }
 
+/** インスペクタにフォーカスを移す（Ctrl+4 / F6）。最初の入力欄に移る。 */
+export function focus(): void {
+  if (!hostEl) return;
+  const first = hostEl.querySelector<HTMLElement>('input, select, .segmented button.active, button');
+  (first ?? hostEl).focus();
+}
+
+/**
+ * 入力中でまだ確定していない欄を確定する（保存・反映・閉じる・終了の前に呼ぶ）。
+ * 確定は change（フォーカスを外したとき）か Enter なので、入力したまま Ctrl+S / F5 を押すと、
+ * 入力した値が書き込む内容に入らず、保存したつもりの値が失われてしまうため。
+ */
+export function flushPendingEdits(): void {
+  const a = document.activeElement;
+  if (!hostEl || !(a instanceof HTMLInputElement) || !hostEl.contains(a)) return;
+  if (a.value.trim() === (a.dataset['orig'] ?? a.defaultValue)) return;
+  // textInput の change の処理（確かめてから確定）をそのまま使う
+  a.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/** 指定した属性の入力欄にフォーカスを移す（キャンバスで Enter・F2）。なければ最初の欄。 */
+export function focusField(attr = 'label'): void {
+  if (!hostEl) return;
+  renderInspector(hostEl);
+  const field = hostEl.querySelector<HTMLElement>(`[data-attr="${attr}"]`) ?? hostEl.querySelector<HTMLElement>('input, select');
+  if (!field) return;
+  // セクションが畳まれていたら開く
+  const section = field.closest<HTMLElement>('.insp-section');
+  if (section?.classList.contains('collapsed')) {
+    section.classList.remove('collapsed');
+    collapsed.delete(section.dataset['section'] ?? '');
+    saveCollapsed();
+  }
+  field.focus();
+  if (field instanceof HTMLInputElement) field.select();
+}
+
+function elementKey(el: Element, path: Path): string {
+  return el.getAttribute('id') ?? `path:${path.join('.')}`;
+}
+
+/** 属性を変更する。値が同じなら何もしない。 */
+function commit(name: string, value: string | null, also: Record<string, string | null> = {}, label?: string): boolean {
+  const store = app.store;
+  const el = store?.selectedElement;
+  if (!store || !el || !store.selection) return false;
+  const changes: Record<string, string | null> = { [name]: value, ...also };
+  const same = Object.entries(changes).every(([k, v]) => (el.getAttribute(k) ?? null) === (v === '' ? null : v));
+  if (same) return false;
+  const path = store.selection;
+  return runEdit('inspector', () => {
+    const target = store.selectedElement;
+    if (!target || !samePath(store.selection, path)) return undefined;
+    for (const [k, v] of Object.entries(changes)) setAttr(target, k, v);
+    return undefined;
+  }, label ?? (value === null || value === '' ? t('{attr} を削除', { attr: name }) : t('{attr} を「{value}」に変更', { attr: name, value })));
+}
+
+/** コールバック名を新しく付けたときに、VBA への追加（できなければ雛形のコピー）を案内する。 */
+function offerStub(name: string): void {
+  const status = vba.statuses().find((x) => x.name === name);
+  if (!status || status.state === 'implemented') return;
+  const stub = (x: CallbackStatus) => generateStub({ ...x, name: bareCallbackName(x.name) });
+  if (vba.canWrite && status.state === 'missing') {
+    notify({
+      kind: 'info',
+      message: t('コールバック {name} を設定しました。VBA にはまだありません', { name }),
+      action: {
+        label: t('VBA に追加'),
+        run: () =>
+          void insertStubs([status])
+            .then((m) => notify({ kind: 'success', message: m }))
+            .catch((e: unknown) => notify({ kind: 'error', message: e instanceof Error ? e.message : String(e) })),
+      },
+    });
+  } else {
+    notify({ kind: 'info', message: t('コールバック {name} を設定しました', { name }), action: { label: t('雛形をコピー'), run: () => copyText(stub(status), t('{name} の雛形をコピーしました', { name })) } });
+  }
+}
+
+/** 入力中の欄を、描き直した後の対応する欄に引き継ぐための目印。 */
+interface FocusMemo {
+  key: string;
+  node: HTMLElement;
+  value?: string;
+  orig?: string;
+  start?: number | null;
+  end?: number | null;
+}
+
+function captureFocus(host: HTMLElement): FocusMemo | null {
+  const a = document.activeElement;
+  if (!(a instanceof HTMLElement) || !host.contains(a)) return null;
+  const key = a.dataset['fkey'];
+  if (!key) return null;
+  if (a instanceof HTMLInputElement) return { key, node: a, value: a.value, orig: a.dataset['orig'], start: a.selectionStart, end: a.selectionEnd };
+  return { key, node: a };
+}
+
+function restoreFocus(host: HTMLElement, memo: FocusMemo | null): void {
+  if (!memo) return;
+  // CSS.escape を使わずに探す（キーに引用符などが入っても壊れないように）
+  const next = Array.from(host.querySelectorAll<HTMLElement>('[data-fkey]')).find((n) => n.dataset['fkey'] === memo.key);
+  if (!next) return;
+  if (memo.node instanceof HTMLInputElement && next instanceof HTMLInputElement) {
+    const dirty = memo.value !== memo.orig;
+    if (dirty) {
+      // 確定していない入力は残す（描き直しで半端な値が消えたり確定したりしないように）
+      next.replaceWith(memo.node);
+      memo.node.focus({ preventScroll: true });
+      return;
+    }
+    next.focus({ preventScroll: true });
+    try {
+      next.setSelectionRange(memo.start ?? next.value.length, memo.end ?? next.value.length);
+    } catch {
+      // setSelectionRange を受け付けない種類の入力欄では何もしない
+    }
+    return;
+  }
+  next.focus({ preventScroll: true });
+}
 
 function renderInspector(host: HTMLElement): void {
+  window.clearTimeout(renderTimer);
   const store = app.store;
   const el = store?.selectedElement ?? null;
-  const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement.dataset['attr'] : undefined;
+  const memo = captureFocus(host);
+  const scroll = host.scrollTop;
 
-  if (!store || !el) {
+  if (!store || !el || !store.selection) {
+    pendingIcon = null;
     host.replaceChildren(h('div', { class: 'insp-empty' }, store ? t('キャンバスかツリーで要素を選択してください') : ''));
     return;
   }
+  const path = store.selection;
+  const key = elementKey(el, path);
+  if (pendingIcon && pendingIcon.key !== key) pendingIcon = null;
   const def = defFor(el);
-  const problems = app.problems.filter((p) => p.path.length === store.selection!.length && p.path.every((v, i) => v === store.selection![i]));
+  const problems = app.problems.filter((p) => samePath(p.path, path));
+  const ident = identifierOf(el);
 
   const header = h(
     'div',
     { class: 'insp-header' },
     h('span', { class: 'kind-icon' }, svg(kindIcon(el.localName))),
-    h('div', null, h('div', { class: 'insp-title' }, def ? t(def.title) : el.localName), h('div', { class: 'insp-sub' }, `<${el.localName}>${identifierOf(el) ? ` ${identifierOf(el)}` : ''}`)),
+    h('div', { class: 'insp-heading' }, h('div', { class: 'insp-title' }, def ? t(def.title) : el.localName), h('div', { class: 'insp-sub', title: ident ?? '' }, `<${el.localName}>${ident ? ` ${ident}` : ''}`)),
   );
 
   const problemList = problems.length
-    ? h(
-        'ul',
-        { class: 'insp-problems' },
-        problems.map((p) => h('li', { class: p.severity }, svg(uiIcons[p.severity]), h('span', null, p.message))),
-      )
+    ? h('ul', { class: 'insp-problems' }, problems.map((p) => h('li', { class: p.severity }, svg(uiIcons[p.severity]), h('span', null, p.message))))
     : null;
 
   if (!def || def.opaque) {
@@ -86,72 +288,193 @@ function renderInspector(host: HTMLElement): void {
   }
 
   const defs = attrsOfEl(el);
-  const sections = CATEGORIES.map((cat) => {
-    const rows = defs
-      .filter((d) => d.category === cat || (cat === '表示' && d.name === 'image'))
-      .filter((d) => !d.staticOf && d.name !== 'imageMso' && d.name !== 'getImage' && !(cat !== '表示' && d.name === 'image'))
-      .map((d) => (d.name === 'image' ? iconRow(el) : row(el, d)));
-    // 静的な値を持たないコールバック（onAction など）は「動作」に出す
-    return rows.length ? h('section', { class: 'insp-section' }, h('h3', null, categoryName(cat)), rows) : null;
+  const sections = SECTIONS.map((sec) => {
+    const rows: HTMLElement[] = [];
+    if (sec === '画像') {
+      if (defs.some((d) => d.name === 'image' || d.name === 'imageMso')) rows.push(iconRow(el, key));
+    } else {
+      for (const d of defs) {
+        if (d.staticOf || d.name === 'image' || d.name === 'imageMso' || d.name === 'getImage' || sectionOf(d) !== sec) continue;
+        rows.push(row(el, d, key));
+      }
+    }
+    if (rows.length === 0) return null;
+    const isCollapsed = collapsed.has(sec);
+    const toggle = h('button', {
+      type: 'button',
+      class: 'insp-section-head',
+      'aria-expanded': String(!isCollapsed),
+      onclick: (e: MouseEvent) => {
+        const s = (e.currentTarget as HTMLElement).closest<HTMLElement>('.insp-section')!;
+        const now = s.classList.toggle('collapsed');
+        (e.currentTarget as HTMLElement).setAttribute('aria-expanded', String(!now));
+        if (now) collapsed.add(sec);
+        else collapsed.delete(sec);
+        saveCollapsed();
+      },
+    }, svg(uiIcons.chevron), h('span', null, sectionName(sec)), h('span', { class: 'insp-count' }, String(rows.length)));
+    return h('section', { class: `insp-section${isCollapsed ? ' collapsed' : ''}`, dataset: { section: sec } }, toggle, h('div', { class: 'insp-rows' }, rows));
   });
 
   host.replaceChildren(header, ...[problemList, ...sections].filter((x): x is HTMLElement => x !== null));
-
-  if (focused) host.querySelector<HTMLElement>(`[data-attr="${focused}"]`)?.focus();
+  host.scrollTop = scroll;
+  restoreFocus(host, memo);
 }
 
-function labelCell(d: AttrDef, tag: string): HTMLElement {
+function labelCell(d: AttrDef, tag: string, forId: string): HTMLElement {
   const tips = [t(d.desc)];
   if (d.example) tips.push(`${t('例：')}${d.name}="${t(d.example)}"`);
   if (d.kind === 'callback') tips.push(t('Sub 名前({signature})', { signature: callbackSignature(d.name, tag) }));
-  return h('label', { class: 'insp-label', title: tips.join('\n') }, d.name);
+  const base = d.staticOf ?? d.name;
+  return h('label', { class: 'insp-label', title: tips.join('\n'), for: forId }, h('span', { class: 'insp-label-ja' }, attrLabel(base)), h('span', { class: 'insp-label-raw' }, d.name));
 }
 
-function textInput(attr: string, value: string, opts: { placeholder?: string; validate?: (v: string) => string | null; type?: string } = {}): HTMLInputElement {
+let fieldSeq = 0;
+
+interface TextOpts {
+  placeholder?: string;
+  /** 入力を確かめる。問題があればその理由を返す（空なら確定してよい）。 */
+  validate?: (v: string) => string | null;
+  inputMode?: string;
+  /**
+   * 確定する。値が変わらなければ何もしない。false（または false になる Promise）を返したら、
+   * 断られた・取りやめたとみなして、欄を確定前の値に戻す。
+   */
+  apply?: (v: string) => boolean | Promise<boolean>;
+}
+
+/** 1行の入力欄。確定は change（フォーカスを外したとき）と Enter、Esc で元の値に戻す。 */
+function textInput(attr: string, value: string, opts: TextOpts = {}): { input: HTMLInputElement; wrap: HTMLElement } {
+  const id = `insp-f${++fieldSeq}`;
   const input = h('input', {
-    type: opts.type ?? 'text',
+    type: 'text',
+    id,
     value,
     placeholder: opts.placeholder ?? '',
     spellcheck: false,
-    dataset: { attr },
+    autocomplete: 'off',
+    inputmode: opts.inputMode,
+    dataset: { attr, fkey: `${attr}:text`, orig: value },
   });
-  const apply = () => {
+  const error = h('div', { class: 'field-error', role: 'alert', hidden: true });
+  const check = (): string | null => {
     const v = input.value.trim();
     const err = v && opts.validate ? opts.validate(v) : null;
     input.classList.toggle('invalid', err !== null);
-    input.title = err ?? '';
-    if (err === null) commit(attr, v || null);
+    input.setAttribute('aria-invalid', String(err !== null));
+    error.hidden = err === null;
+    error.textContent = err ?? '';
+    return err;
   };
+  const apply = () => {
+    if (check() !== null) return;
+    const v = input.value.trim();
+    const prev = input.dataset['orig'] ?? '';
+    if (v === prev) return;
+    // 先に orig を進めておく（確定の処理の中で change がもう一度来ても、二重に確定しないように）
+    input.dataset['orig'] = v;
+    // 断られた（構文エラー中など）・取りやめた（名前の変更の確認でキャンセル）ときは、XML は元のままなので欄も元に戻す。
+    // 戻さないと、欄だけが新しい値のまま残り、XML と食い違って見える
+    const revert = (ok: boolean) => {
+      if (ok || input.dataset['orig'] !== v) return;
+      input.dataset['orig'] = prev;
+      input.value = prev;
+      check();
+    };
+    const result = opts.apply ? opts.apply(v) : commit(attr, v || null);
+    if (typeof result === 'boolean') revert(result);
+    else void result.then(revert, () => revert(false));
+  };
+  input.addEventListener('input', () => {
+    // 入力中は確定せず、問題だけを先に知らせる
+    if (input.classList.contains('invalid')) check();
+  });
   input.addEventListener('change', apply);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') apply();
-    if (e.key === 'Escape') input.value = value;
+    // 日本語入力の変換中の Enter・Esc は変換のためのものなので無視する（不具合 39）
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      apply();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      input.value = input.dataset['orig'] ?? '';
+      check();
+    }
   });
-  return input;
+  return { input, wrap: h('div', { class: 'insp-field' }, input, error) };
+}
+
+/** 既定 / はい / いいえ の3択。 */
+function boolEditor(el: Element, d: AttrDef): HTMLElement {
+  const raw = el.getAttribute(d.name);
+  const value = raw === '1' ? 'true' : raw === '0' ? 'false' : raw ?? '';
+  const def = BOOL_DEFAULT[d.name];
+  const defaultText = def === undefined ? t('既定') : t('既定（{value}）', { value: def ? t('はい') : t('いいえ') });
+  const seg = h('div', { class: 'segmented insp-bool', role: 'radiogroup', 'aria-label': attrLabel(d.name), dataset: { attr: d.name } });
+  const options = [['', defaultText], ['true', t('はい')], ['false', t('いいえ')]] as const;
+  for (const [v, text] of options) {
+    const active = value === v;
+    seg.append(
+      h('button', {
+        type: 'button',
+        class: active ? 'active' : '',
+        role: 'radio',
+        'aria-checked': String(active),
+        tabIndex: active ? 0 : -1,
+        dataset: { fkey: `${d.name}:bool:${v}` },
+        onclick: () => commit(d.name, v || null),
+      }, text),
+    );
+  }
+  // ラジオボタンと同じく、左右の矢印で選び直せるようにする
+  seg.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const i = options.findIndex(([v]) => v === value);
+    const next = options[(i + (e.key === 'ArrowRight' ? 1 : options.length - 1)) % options.length]!;
+    if (!commit(d.name, next[0] || null)) return;
+    // 確定すると描き直されるので、描き直した後の「選んだ項目」にフォーカスを移す（ラジオボタンと同じく、選んだものに乗る）。
+    // 描き直しは、フォーカスがインスペクタにある間は次のタスクに回るので、その後で探す
+    const fkey = `${d.name}:bool:${next[0]}`;
+    window.setTimeout(() => {
+      const target = Array.from(hostEl?.querySelectorAll<HTMLElement>('[data-fkey]') ?? []).find((n) => n.dataset['fkey'] === fkey);
+      target?.focus({ preventScroll: true });
+    }, 0);
+  });
+  return seg;
 }
 
 function valueEditor(el: Element, d: AttrDef): HTMLElement {
   const value = el.getAttribute(d.name) ?? '';
   switch (d.kind) {
-    case 'bool': {
-      const seg = h('div', { class: 'segmented', role: 'radiogroup', dataset: { attr: d.name }, tabIndex: 0 });
-      for (const [v, text] of [['', t('未指定')], ['true', t('オン')], ['false', t('オフ')]] as const) {
-        const active = (value === '1' ? 'true' : value === '0' ? 'false' : value) === v;
-        seg.append(h('button', { type: 'button', class: active ? 'active' : '', role: 'radio', 'aria-checked': String(active), onclick: () => commit(d.name, v || null) }, text));
-      }
-      return seg;
-    }
-    case 'enum': {
-      const sel = h('select', { dataset: { attr: d.name }, onchange: (e: Event) => commit(d.name, (e.target as HTMLSelectElement).value || null) }, h('option', { value: '' }, t('未指定')), (d.values ?? []).map((v) => h('option', { value: v, selected: v === value }, v)));
-      return sel;
-    }
+    case 'bool':
+      return boolEditor(el, d);
+    case 'enum':
+      return h(
+        'select',
+        { dataset: { attr: d.name, fkey: `${d.name}:enum` }, onchange: (e: Event) => commit(d.name, (e.target as HTMLSelectElement).value || null) },
+        h('option', { value: '' }, t('未指定')),
+        (d.values ?? []).map((v) => h('option', { value: v, selected: v === value }, v)),
+        value && !(d.values ?? []).includes(value) ? h('option', { value, selected: true }, value) : null,
+      );
     case 'int':
-      return textInput(d.name, value, { type: 'number', validate: (v) => (/^\d+$/.test(v) ? null : t('整数で入力してください')) });
-    case 'id':
+      // type="number" は「1e」や空のときに value が '' になり、属性が消えてしまう（不具合 28）。文字として受けて確かめる
+      return textInput(d.name, value, { inputMode: 'numeric', validate: (v) => (/^\d+$/.test(v) ? null : t('0 以上の整数で入力してください')) }).wrap;
+    case 'id': {
+      const { input, wrap } = textInput(d.name, value, {
+        validate: (v) => {
+          if (!isXmlId(v)) return t('文字か _ で始め、文字・数字と _ . - だけを使ってください');
+          const used = usedIds(el.ownerDocument);
+          used.delete(value);
+          return used.has(v) ? t('この id はすでに使われています') : null;
+        },
+      });
       return h(
         'div',
         { class: 'insp-inline' },
-        textInput(d.name, value, { validate: (v) => (ID_PATTERN.test(v) ? null : t('英字か _ で始め、英数字と _ . - だけを使ってください')) }),
+        wrap,
         h('button', {
           type: 'button',
           class: 'small',
@@ -159,41 +482,47 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
           onclick: () => {
             const used = usedIds(el.ownerDocument);
             used.delete(value);
-            commit('id', suggestId(el.localName, el.getAttribute('label'), used), { idMso: null, idQ: null });
+            const next = suggestId(el.localName, el.getAttribute('label'), used);
+            const before = input.value;
+            input.value = next;
+            // 断られたら、提案した値を欄に残さない
+            if (!commit('id', next, { idMso: null, idQ: null })) input.value = before;
           },
         }, t('提案')),
       );
+    }
     case 'idMso':
       return h(
         'div',
         { class: 'insp-inline' },
-        textInput(d.name, value),
+        textInput(d.name, value).wrap,
         h('button', { type: 'button', class: 'small', onclick: () => hooks.pickIdMso(value, (v) => commit(d.name, v, d.name === 'idMso' ? { id: null, idQ: null } : {})) }, t('選ぶ')),
       );
     case 'callback':
       return callbackEditor(el, d.name);
     default:
-      return textInput(d.name, value);
+      return textInput(d.name, value).wrap;
   }
+}
+
+/** コールバック名として使えるか。「モジュール名.Sub名」「ブック!Sub名」の形も認める。 */
+function callbackError(v: string): string | null {
+  return isCallbackName(v) ? null : t('VBAのSub名として使えない文字があります');
 }
 
 function callbackEditor(el: Element, attr: string): HTMLElement {
   const value = el.getAttribute(attr) ?? '';
-  const input = h('input', { type: 'text', value, placeholder: defaultCallbackName(el, attr), spellcheck: false, dataset: { attr } });
-  const apply = () => {
-    const v = input.value.trim();
-    const ok = !v || /^[A-Za-z_][A-Za-z0-9_.!]*$/.test(v);
-    input.classList.toggle('invalid', !ok);
-    input.title = ok ? '' : t('VBAのSub名として使えない文字があります');
-    if (!ok || v === value) return;
-    // 名前を変えたときは、VBA 側の Sub 名も変えるかを確認する
-    if (value && v) void renameCallback(app.store!.selection!, attr, value, v);
-    else commit(attr, v || null);
-  };
-  input.addEventListener('change', apply);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') apply();
-    if (e.key === 'Escape') input.value = value;
+  const path = app.store!.selection!;
+  const { wrap } = textInput(attr, value, {
+    placeholder: defaultCallbackName(el, attr),
+    validate: callbackError,
+    apply: (v) => {
+      // 名前を変えたときは、VBA 側の Sub 名も変えるかを確認する（キャンセルしたら false が返り、欄は元に戻る）
+      if (value && v) return renameCallback(path, attr, value, v);
+      const ok = commit(attr, v || null);
+      if (ok && v) offerStub(v);
+      return ok;
+    },
   });
   const status = value ? vba.statuses().find((x) => x.name === value) : undefined;
   const stateText = status && vba.status === 'ok' ? t({ implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: '' }[status.state]) : '';
@@ -203,8 +532,17 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
     h(
       'div',
       { class: 'insp-inline' },
-      input,
-      value ? null : h('button', { type: 'button', class: 'small', onclick: () => commit(attr, defaultCallbackName(el, attr)) }, lang === 'en' ? 'Add' : '追加'),
+      wrap,
+      value
+        ? null
+        : h('button', {
+            type: 'button',
+            class: 'small',
+            onclick: () => {
+              const name = defaultCallbackName(el, attr);
+              if (commit(attr, name)) offerStub(name);
+            },
+          }, lang === 'en' ? 'Add' : '追加'),
     ),
     value ? h('code', { class: 'insp-signature' }, `Sub ${value}(${callbackSignature(attr, el.localName)})`) : null,
     stateText ? h('span', { class: `cb-state ${status!.state}`, title: status!.reason ?? '' }, stateText) : null,
@@ -212,42 +550,91 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
 }
 
 /** 静的な値とコールバックを切り替えられる行。 */
-function row(el: Element, d: AttrDef): HTMLElement {
+function row(el: Element, d: AttrDef, key: string): HTMLElement {
   const dyn = d.dynamic ? attributes.get(d.dynamic) : undefined;
-  const available = dyn && defFor(el)?.attrs.includes(dyn.name);
+  const available = dyn !== undefined && defFor(el)?.attrs.includes(dyn.name) === true;
   const useDynamic = available && el.hasAttribute(dyn.name);
+  const shown = useDynamic ? dyn : d;
   const editor = useDynamic ? callbackEditor(el, dyn.name) : valueEditor(el, d);
-  const toggle = available
-    ? h(
-        'button',
-        {
-          type: 'button',
-          class: `mode-switch${useDynamic ? ' on' : ''}`,
-          title: useDynamic ? t('固定の値（{name}）に戻す', { name: d.name }) : t('VBAで動的に返す（{name}）に切り替える', { name: dyn.name }),
-          onclick: () => (useDynamic ? commit(dyn.name, null) : commit(dyn.name, defaultCallbackName(el, dyn.name), { [d.name]: null })),
-        },
-        'VBA',
-      )
-    : null;
-  return h('div', { class: 'insp-row' }, labelCell(useDynamic ? dyn : d, el.localName), h('div', { class: 'insp-value' }, editor), toggle);
+  const fieldId = editor.querySelector('input')?.id ?? '';
+
+  let modeSwitch: HTMLElement | null = null;
+  if (available) {
+    const toStatic = () => {
+      // VBA から固定に戻すときは、切り替える前に入力していた値を戻す
+      remembered.set(`${key}|${dyn.name}`, el.getAttribute(dyn.name) ?? '');
+      const back = remembered.get(`${key}|${d.name}`) ?? null;
+      commit(d.name, back, { [dyn.name]: null }, t('{attr} を固定の値にする', { attr: d.name }));
+    };
+    const toDynamic = () => {
+      remembered.set(`${key}|${d.name}`, el.getAttribute(d.name) ?? '');
+      const name = remembered.get(`${key}|${dyn.name}`) || defaultCallbackName(el, dyn.name);
+      if (commit(dyn.name, name, { [d.name]: null }, t('{attr} を VBA で返す', { attr: d.name }))) offerStub(name);
+    };
+    modeSwitch = h(
+      'div',
+      { class: 'segmented insp-mode', role: 'radiogroup', 'aria-label': t('値の決め方') },
+      h('button', { type: 'button', role: 'radio', class: useDynamic ? '' : 'active', 'aria-checked': String(!useDynamic), title: t('固定の値（{name}）', { name: d.name }), dataset: { fkey: `${d.name}:mode:static` }, onclick: () => useDynamic && toStatic() }, t('固定')),
+      h('button', { type: 'button', role: 'radio', class: useDynamic ? 'active' : '', 'aria-checked': String(useDynamic), title: t('VBAで動的に返す（{name}）', { name: dyn.name }), dataset: { fkey: `${d.name}:mode:vba` }, onclick: () => !useDynamic && toDynamic() }, 'VBA'),
+    );
+  }
+  // 「固定 | VBA」はラベルの下に置く（インスペクタは幅が狭く、入力欄の横に置くと値の欄が潰れるため）
+  const label = labelCell(shown, el.localName, fieldId);
+  return h('div', { class: `insp-row${modeSwitch ? ' has-mode' : ''}` }, modeSwitch ? h('div', { class: 'insp-label-cell' }, label, modeSwitch) : label, h('div', { class: 'insp-value' }, editor));
 }
 
 /** アイコンの行。組み込み（imageMso）、埋め込み画像（image）、VBA（getImage）を切り替える。 */
-function iconRow(el: Element): HTMLElement {
+function iconRow(el: Element, key: string): HTMLElement {
   const store = app.store!;
-  const mode = el.hasAttribute('getImage') ? 'getImage' : el.hasAttribute('image') ? 'image' : el.hasAttribute('imageMso') ? 'imageMso' : '';
+  const path = store.selection!;
+  const actual = el.hasAttribute('getImage') ? 'getImage' : el.hasAttribute('image') ? 'image' : el.hasAttribute('imageMso') ? 'imageMso' : '';
+  // 種類だけ選んで値がまだないときは、その種類の入力欄を出す（値が決まるまで XML は変えない。不具合 29）
+  const mode = pendingIcon && pendingIcon.key === key ? pendingIcon.mode : actual;
   const canDynamic = defFor(el)?.attrs.includes('getImage');
+  const clear = { image: null, imageMso: null, getImage: null } as Record<string, string | null>;
+  const rerender = () => hostEl && renderInspector(hostEl);
+  const cancelPending = () => {
+    if (pendingIcon?.key === key) {
+      pendingIcon = null;
+      rerender();
+    }
+  };
+  const setMso = (v: string): boolean => {
+    pendingIcon = null;
+    return commit('imageMso', v, { ...clear, imageMso: v }, t('アイコンを {name} に変更', { name: v }));
+  };
+  const openEditor = (existing?: ImageEntry) =>
+    openIconDialog(path, undefined, existing, {
+      onClose: (applied) => {
+        // 取り消したら、種類の選択も元に戻す
+        if (!applied) cancelPending();
+      },
+    });
+
   const sel = h(
     'select',
     {
-      dataset: { attr: 'icon-mode' },
+      dataset: { attr: 'icon-mode', fkey: 'icon-mode' },
+      'aria-label': t('アイコンの種類'),
       onchange: (e: Event) => {
         const v = (e.target as HTMLSelectElement).value;
-        const clear = { image: null, imageMso: null, getImage: null } as Record<string, string | null>;
-        if (v === 'imageMso') commit('imageMso', el.getAttribute('imageMso') ?? 'HappyFace', { ...clear, imageMso: el.getAttribute('imageMso') ?? 'HappyFace' });
-        else if (v === 'image') hooks.editImage();
-        else if (v === 'getImage') commit('getImage', defaultCallbackName(el, 'getImage'), { ...clear, getImage: defaultCallbackName(el, 'getImage') });
-        else commit('image', null, clear);
+        if (v === actual) {
+          cancelPending();
+          return;
+        }
+        if (v === 'imageMso' || v === 'image') {
+          // 別の種類の値はまだ消さない。新しい値を決めた時点でまとめて入れ替える
+          pendingIcon = { key, mode: v };
+          rerender();
+          return;
+        }
+        pendingIcon = null;
+        if (v === 'getImage') {
+          const name = defaultCallbackName(el, 'getImage');
+          if (commit('getImage', name, { ...clear, getImage: name }, t('アイコンを VBA で返す'))) offerStub(name);
+        } else {
+          commit('image', null, clear, t('アイコンをなしにする'));
+        }
       },
     },
     h('option', { value: '', selected: mode === '' }, t('なし')),
@@ -259,27 +646,64 @@ function iconRow(el: Element): HTMLElement {
   let detail: HTMLElement | null = null;
   if (mode === 'imageMso') {
     const v = el.getAttribute('imageMso') ?? '';
-    detail = h('div', { class: 'insp-inline' }, textInput('imageMso', v), h('button', { type: 'button', class: 'small', onclick: () => hooks.pickImageMso(v, (x) => commit('imageMso', x)) }, t('選ぶ')));
+    detail = h(
+      'div',
+      { class: 'insp-inline' },
+      textInput('imageMso', v, { placeholder: t('例：AutoSum'), apply: (x) => (x ? setMso(x) : commit('imageMso', null)) }).wrap,
+      h('button', { type: 'button', class: 'small', onclick: () => openCatalog('imageMso', v, setMso, '', { onCancel: cancelPending }) }, t('選ぶ')),
+    );
   } else if (mode === 'image') {
     const id = el.getAttribute('image') ?? '';
     const img = store.images.get(id);
     detail = h(
       'div',
-      { class: 'insp-inline' },
-      img ? h('img', { class: 'insp-thumb', src: img.dataUrl, alt: '' }) : null,
+      { class: 'insp-image' },
       h(
-        'select',
-        { dataset: { attr: 'image' }, onchange: (e: Event) => commit('image', (e.target as HTMLSelectElement).value || null) },
-        [...store.images.keys()].map((k) => h('option', { value: k, selected: k === id }, k)),
-        img ? null : h('option', { value: id, selected: true }, id ? t('{id}（見つかりません）', { id }) : t('選択してください')),
+        'div',
+        { class: 'insp-inline' },
+        img ? h('img', { class: 'insp-thumb', src: img.dataUrl, alt: '' }) : null,
+        h(
+          'select',
+          {
+            dataset: { attr: 'image', fkey: 'image:select' },
+            'aria-label': t('画像'),
+            onchange: (e: Event) => {
+              const v = (e.target as HTMLSelectElement).value;
+              if (!v) return;
+              pendingIcon = null;
+              commit('image', v, { ...clear, image: v }, t('アイコンを {name} に変更', { name: v }));
+            },
+          },
+          id && img ? null : h('option', { value: '', selected: true }, id ? t('{id}（見つかりません）', { id }) : t('選択してください')),
+          [...store.images.keys()].map((k) => h('option', { value: k, selected: k === id }, k)),
+        ),
       ),
-      img?.edit ? h('button', { type: 'button', class: 'small', title: t('元画像と設定から加工し直す'), onclick: () => hooks.editImage(img) }, t('加工し直す')) : null,
-      h('button', { type: 'button', class: 'small', onclick: () => hooks.editImage() }, t('新しく作る')),
-      h('button', { type: 'button', class: 'small', title: t('アイコンライブラリから選ぶ'), onclick: () => hooks.pickFromLibrary() }, t('ライブラリ')),
+      h(
+        'div',
+        { class: 'insp-inline wrap' },
+        img?.edit ? h('button', { type: 'button', class: 'small', title: t('元画像と設定から加工し直す'), onclick: () => openEditor(img) }, t('加工し直す')) : null,
+        h('button', { type: 'button', class: 'small', onclick: () => openEditor() }, t('新しく作る')),
+        h('button', {
+          type: 'button',
+          class: 'small',
+          title: t('アイコンライブラリから選ぶ'),
+          onclick: () =>
+            void openLibrary((d) => {
+              pendingIcon = null;
+              applyLibraryIcon(path, d);
+            }, (m, k) => notify({ kind: k ?? 'info', message: m }), { onClose: (picked) => !picked && cancelPending() }),
+        }, t('ライブラリ')),
+      ),
     );
   } else if (mode === 'getImage') {
     detail = callbackEditor(el, 'getImage');
   }
   const d = attributes.get('image')!;
-  return h('div', { class: 'insp-row wide' }, h('label', { class: 'insp-label', title: t(d.desc) }, t('アイコン')), h('div', { class: 'insp-value' }, sel, detail));
+  const rawName = mode === 'getImage' ? 'getImage' : mode === 'image' ? 'image' : 'imageMso';
+  return h(
+    'div',
+    { class: 'insp-row wide' },
+    h('label', { class: 'insp-label', title: t(d.desc) }, h('span', { class: 'insp-label-ja' }, t('アイコン')), h('span', { class: 'insp-label-raw' }, rawName)),
+    h('div', { class: 'insp-value' }, sel, detail),
+  );
 }

@@ -1,79 +1,433 @@
-// 画面全体の組み立てと、ファイル操作・反映・ショートカットの配線。
+// 画面全体の組み立てと、メニュー・ツールバー・ショートカット・ファイル操作の配線。
+// 操作はすべて「コマンド」として 1 か所に定義し、メニュー・ツールバー・コマンドパレット・ショートカット一覧は
+// そこから作る（どこから呼んでも同じ名前・同じショートカット・同じ有効条件になるように）。
 
 import './styles.css';
 import { app } from './app';
-import { invoke, isHosted, onHostEvent, sendDroppedFiles, type PartToSave, type Settings } from './bridge';
+import { invoke, isHosted, onHostEvent, sendDroppedFiles } from './bridge';
 import { insertStubs, setupRibbonHolder, vba } from './callbacks';
-import { checkForUpdates, checkOnStartup, initUpdates, notifyUpdated, renderUpdateSettings } from './updates';
+import { checkForUpdates, checkOnStartup, initUpdates, notifyUpdated } from './updates';
 import { openCatalog } from './dialogs/catalogDialog';
 import { openDiff } from './dialogs/diffDialog';
-import { exportSash, parseSash, partXml } from './sashJson';
 import { openCommandPalette, type Command } from './dialogs/commandPalette';
 import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
-import { builtinRecipes } from './recipes';
-import { ask, openModal } from './dialogs/modal';
+import { isModalOpen, openOnce } from './dialogs/modal';
 import { $, h, svg } from './dom';
-import { lang, storeLang, t, translateDocument, type Lang } from './i18n';
+import { lang, storeLang, t, translateDocument } from './i18n';
 import { applyLibraryIcon, openIconDialog } from './icon/iconDialog';
 import { openLibrary } from './dialogs/libraryDialog';
 import { uiIcons } from './icons';
 import { mountLayout } from './layout';
-import { duplicateElement, elementAt, pathOf } from './model';
+import { elementAt } from './model';
 import { enableMsoIcons } from './msoIcons';
 import type { ImageEntry } from './store';
 import { defFor, titleOf } from './schema';
+import { builtinRecipes } from './recipes';
 import { mountBottom, showBottomTab } from './views/bottom';
-import { mountCanvas, tabIdToActivate } from './views/canvas';
+import { getCanvasMode, mountCanvas, setCanvasMode, type CanvasMode } from './views/canvas';
+import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
-import { mountInspector } from './views/inspector';
+import { flushPendingEdits, mountInspector } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
 import { mountTree } from './views/tree';
-import { mountXmlEditor } from './views/xmlEditor';
+import { mountXmlEditor, revealInXml } from './views/xmlEditor';
+import { probeInsert, setEditRefusedHandler } from './shell/compat';
+import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
+import { inTextField, runEditCommand } from './shell/editCommands';
+import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
+import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
+import { mountMenubar, type MenuDef, type MenuItemDef } from './shell/menubar';
+import { cyclePane, focusPane, initPanes, toggleBottom } from './shell/panes';
+import { openSettings } from './shell/settingsDialog';
+import { matchShortcut, splitPath } from './shell/text';
+import { applyTheme, setEditorThemeHandler, updateSettings } from './shell/theme';
+import { notify, toast } from './shell/toast';
 
-// ---- 通知 ----
-
-let toastTimer: number | undefined;
-function toast(message: string, kind: 'info' | 'error' = 'info'): void {
-  const el = $('toast');
-  el.textContent = message;
-  el.className = `toast ${kind}`;
-  el.hidden = false;
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (el.hidden = true), kind === 'error' ? 8000 : 4000);
-}
-
-// ---- ツールバー ----
+// ---- 文言 ----
 
 translateDocument();
 for (const el of Array.from(document.querySelectorAll<HTMLElement>('[aria-label]'))) el.setAttribute('aria-label', t(el.getAttribute('aria-label')!));
-const iconText = (id: string, icon: string, text: string) => $(id).replaceChildren(svg(icon), h('span', null, text));
-iconText('btn-open', uiIcons.open, t('開く'));
-iconText('btn-save', uiIcons.save, t('保存'));
-iconText('btn-apply', uiIcons.apply, t('反映 F5'));
-$('btn-undo').replaceChildren(svg(uiIcons.undo));
-$('btn-redo').replaceChildren(svg(uiIcons.redo));
-$('btn-format').replaceChildren(svg(uiIcons.format));
-$('btn-catalog').replaceChildren(svg(uiIcons.catalog));
-$('btn-settings').replaceChildren(svg(uiIcons.settings));
-$('btn-recipes').replaceChildren(svg(uiIcons.recipe));
-$('btn-diff').replaceChildren(svg(uiIcons.diff));
-$('btn-command').replaceChildren(svg(uiIcons.command));
 
-function updateToolbar(): void {
+// ---- 編集の小さな操作 ----
+
+function undo(): void {
+  app.store?.undo();
+}
+
+function redo(): void {
+  app.store?.redo();
+}
+
+function openImageEditor(files?: FileList | File[], existing?: ImageEntry): void {
+  const store = app.store;
+  if (!store) return;
+  if (existing && !store.selection) {
+    openIconDialog(null, undefined, existing);
+    return;
+  }
+  if (!store.selection) {
+    toast({ kind: 'warning', message: t('アイコンを設定するコントロールを選択してください') });
+    return;
+  }
+  const el = store.selectedElement;
+  if (!el || !defFor(el)?.attrs.includes('image')) {
+    toast({ kind: 'warning', message: t('この要素にはアイコンを設定できません') });
+    return;
+  }
+  openIconDialog(store.selection, files, existing);
+}
+
+function copyToClipboard(value: string): void {
+  void navigator.clipboard.writeText(value)
+    .then(() => toast({ kind: 'success', message: t('{value} をコピーしました', { value }) }))
+    .catch(() => toast({ kind: 'error', message: t('クリップボードにコピーできませんでした') }));
+}
+
+function openImageMsoCatalog(): void {
+  const el = app.store?.selectedElement;
+  const canIcon = el && defFor(el)?.attrs.includes('imageMso');
+  openCatalog('imageMso', el?.getAttribute('imageMso') ?? '', (v) => {
+    if (!canIcon || !app.store) {
+      copyToClipboard(v);
+      return;
+    }
+    app.store.edit('inspector', (doc) => {
+      const target = elementAt(doc, app.store!.selection!)!;
+      target.removeAttribute('image');
+      target.removeAttribute('getImage');
+      target.setAttribute('imageMso', v);
+      return undefined;
+    }, t('imageMso を {value} にする', { value: v }));
+  });
+}
+
+function openIdMsoCatalog(): void {
+  openCatalog('idMso', '', copyToClipboard);
+}
+
+/** 結果の文言を返す非同期の操作（VBA・レシピ）を実行して知らせる。 */
+function runAndNotify(p: Promise<string>): void {
+  void p.then((m) => m && toast({ kind: 'success', message: m })).catch((e: Error) => toast({ kind: 'error', message: e.message }));
+}
+
+// ---- コマンド ----
+
+interface AppCommand extends Command {
+  /** 入力欄や XML エディタの中でもショートカットを受けるか（保存・反映・ペインの移動など）。 */
+  inText?: boolean;
+  /** 表示とは別に受けるキー（やり直しの Ctrl+Shift+Z など）。 */
+  altKeys?: string[];
+}
+
+const has = () => app.session !== null;
+const hasSel = () => app.store?.selectedElement !== null && app.store?.selectedElement !== undefined;
+const idle = () => busyState() === null;
+
+/** 元に戻す・やり直しの名前に、何が取り消されるかを付ける。 */
+function historyTitle(base: string, label: string | null | undefined): string {
+  return label ? t('{action}：{label}', { action: base, label }) : base;
+}
+
+function commands(): AppCommand[] {
+  const G = { file: t('ファイル'), edit: t('編集'), view: t('表示'), insert: t('挿入'), tools: t('ツール'), help: t('ヘルプ'), recipe: t('レシピ') };
+  return [
+    { id: 'file.open', group: G.file, title: t('開く…'), shortcut: 'Ctrl+O', keywords: 'open file ファイルを開く', inText: true, enabled: idle, run: () => void openFile() },
+    // 保存と反映は、実行中でも押せるようにしておき、押されたら「終わるまでお待ちください」と知らせる（黙って無視しない）
+    { id: 'file.save', group: G.file, title: t('保存'), shortcut: 'Ctrl+S', keywords: 'save', inText: true, enabled: has, run: () => void save() },
+    { id: 'file.close', group: G.file, title: t('閉じる'), shortcut: 'Ctrl+W', keywords: 'close ホームに戻る', inText: true, enabled: () => has() && idle(), run: () => void closeFile() },
+    { id: 'file.backup', group: G.file, title: t('バックアップから復元…'), keywords: 'backup restore 戻す', enabled: () => has() && idle(), run: () => void openBackupDialog() },
+    { id: 'file.export', group: G.file, title: t('.sash.json として書き出す…'), keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
+    { id: 'file.import', group: G.file, title: t('.sash.json を読み込む…'), keywords: 'import json', enabled: has, run: importSashFile },
+    { id: 'file.quit', group: G.file, title: t('終了'), keywords: 'quit exit', enabled: () => isHosted, run: () => void quit() },
+
+    { id: 'edit.undo', group: G.edit, title: historyTitle(t('元に戻す'), app.store?.undoLabel), shortcut: 'Ctrl+Z', keywords: 'undo', enabled: () => app.store?.canUndo === true, run: undo },
+    { id: 'edit.redo', group: G.edit, title: historyTitle(t('やり直し'), app.store?.redoLabel), shortcut: 'Ctrl+Y', altKeys: ['Ctrl+Shift+Z'], keywords: 'redo', enabled: () => app.store?.canRedo === true, run: redo },
+    { id: 'edit.cut', group: G.edit, title: t('切り取り'), shortcut: 'Ctrl+X', keywords: 'cut', enabled: hasSel, run: () => runEditCommand('cut') },
+    { id: 'edit.copy', group: G.edit, title: t('コピー'), shortcut: 'Ctrl+C', keywords: 'copy', enabled: hasSel, run: () => runEditCommand('copy') },
+    { id: 'edit.paste', group: G.edit, title: t('貼り付け'), shortcut: 'Ctrl+V', keywords: 'paste', enabled: has, run: () => runEditCommand('paste') },
+    { id: 'edit.duplicate', group: G.edit, title: t('複製'), shortcut: 'Ctrl+D', keywords: 'duplicate 選択中の要素を複製', enabled: hasSel, run: () => runEditCommand('duplicate') },
+    { id: 'edit.delete', group: G.edit, title: t('削除'), shortcut: 'Del', keywords: 'delete remove 選択中の要素を削除', enabled: hasSel, run: () => runEditCommand('delete') },
+    { id: 'edit.format', group: G.edit, title: t('XMLを整形'), shortcut: 'Shift+Alt+F', keywords: 'format', enabled: () => !!app.store && app.store.syncError === null, run: () => app.store?.format() },
+    { id: 'edit.palette', group: G.edit, title: t('コマンドパレット'), shortcut: 'Ctrl+K', keywords: 'command', inText: true, run: () => openCommandPalette(paletteCommands) },
+
+    { id: 'view.canvas', group: G.view, title: t('キャンバスに移動'), shortcut: 'Ctrl+1', inText: true, enabled: has, run: () => focusPane('canvas') },
+    { id: 'view.tree', group: G.view, title: t('ツリーに移動'), shortcut: 'Ctrl+2', inText: true, enabled: has, run: () => focusPane('tree') },
+    { id: 'view.xml', group: G.view, title: t('XMLエディタに移動'), shortcut: 'Ctrl+3', inText: true, enabled: has, run: () => focusPane('xml') },
+    { id: 'view.inspector', group: G.view, title: t('インスペクタに移動'), shortcut: 'Ctrl+4', inText: true, enabled: has, run: () => focusPane('inspector') },
+    { id: 'view.bottom', group: G.view, title: t('下部パネルの表示・非表示'), shortcut: 'Ctrl+J', inText: true, enabled: has, run: toggleBottom },
+    { id: 'view.nextPane', group: G.view, title: t('次のペインへ移る'), shortcut: 'F6', inText: true, enabled: has, run: () => cyclePane(1) },
+    { id: 'view.prevPane', group: G.view, title: t('前のペインへ移る'), shortcut: 'Shift+F6', inText: true, enabled: has, run: () => cyclePane(-1) },
+    { id: 'view.problems', group: G.view, title: t('問題の一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('problems'); } },
+    { id: 'view.callbacks', group: G.view, title: t('コールバックの一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('callbacks'); } },
+    { id: 'view.images', group: G.view, title: t('アイコンの一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('images'); } },
+    { id: 'view.theme.system', group: G.view, title: t('テーマをシステムに合わせる'), keywords: 'theme system', run: () => void updateSettings({ theme: 'system' }) },
+    { id: 'view.theme.light', group: G.view, title: t('ライトテーマにする'), keywords: 'theme light', run: () => void updateSettings({ theme: 'light' }) },
+    { id: 'view.theme.dark', group: G.view, title: t('ダークテーマにする'), keywords: 'theme dark', run: () => void updateSettings({ theme: 'dark' }) },
+    { id: 'view.swap', group: G.view, title: t('キャンバスとXMLの上下を入れ替える'), keywords: 'layout swap', run: () => void updateSettings({ xmlOnTop: !app.settings.xmlOnTop }) },
+    { id: 'view.resetLayout', group: G.view, title: t('既定のレイアウトに戻す'), keywords: 'layout reset', run: () => layout.reset() },
+
+    ...PALETTE_ITEMS.map((tag): AppCommand => ({ id: `insert.${tag}`, group: G.insert, title: t('{name}を追加', { name: titleOf(tag) }), keywords: tag, enabled: has, run: () => void insertNearSelection(tag) })),
+    { id: 'insert.recipes', group: G.insert, title: t('レシピ…'), keywords: 'recipe template レシピを挿入', enabled: has, run: () => void openOnce('recipes', () => openRecipes(notify)) },
+    { id: 'insert.saveRecipe', group: G.recipe, title: t('選択中のタブ・グループをレシピとして保存'), keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(notify) },
+    ...builtinRecipes.map((r): AppCommand => ({ id: `recipe.${r.id}`, group: G.recipe, title: t(r.title), keywords: 'recipe template', enabled: has, run: () => runAndNotify(applyRecipe(r)) })),
+    { id: 'insert.idMso', group: G.insert, title: t('idMso カタログ…'), keywords: 'idmso catalog', enabled: has, run: openIdMsoCatalog },
+    { id: 'insert.imageMso', group: G.insert, title: t('imageMso カタログ…'), keywords: 'imagemso icon catalog', enabled: has, run: openImageMsoCatalog },
+
+    { id: 'tools.apply', group: G.tools, title: t('Excelへ反映'), shortcut: 'F5', keywords: 'apply reload', inText: true, enabled: has, run: () => void applyToExcel() },
+    { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
+    { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
+    { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
+    { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
+    { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
+    { id: 'tools.library', group: G.tools, title: t('アイコンライブラリ…'), keywords: 'icon library', run: () => void openOnce('library', () => openLibrary(undefined, notify)) },
+    { id: 'tools.settings', group: G.tools, title: t('設定…'), keywords: 'settings options', run: () => void openSettings() },
+    { id: 'tools.language', group: G.tools, title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
+
+    { id: 'help.shortcuts', group: G.help, title: t('キーボードショートカット'), keywords: 'keyboard shortcuts keys', run: () => openShortcutsDialog(shortcutCommands()) },
+    { id: 'help.update', group: G.help, title: t('更新を確認…'), keywords: 'update version', run: () => void checkForUpdates(true) },
+    { id: 'help.releases', group: G.help, title: t('リリースノートを開く'), keywords: 'release notes', run: () => openUrl(RELEASES_URL) },
+    { id: 'help.github', group: G.help, title: t('GitHub のページを開く'), keywords: 'github repository', run: () => openUrl(REPO_URL) },
+    { id: 'help.about', group: G.help, title: t('バージョン情報'), keywords: 'about version license', run: openAboutDialog },
+  ];
+}
+
+/**
+ * ショートカット一覧に出すコマンド。元に戻す・やり直しは、メニューでは「元に戻す：XMLの編集」のように
+ * 取り消す操作の名前を付けるが、一覧ではキーの説明なので、操作の名前だけにする。
+ */
+function shortcutCommands(): Command[] {
+  const fixed: Readonly<Record<string, string>> = { 'edit.undo': t('元に戻す'), 'edit.redo': t('やり直し') };
+  return commands().map((c) => (fixed[c.id] ? { ...c, title: fixed[c.id]! } : c));
+}
+
+function openUrl(url: string): void {
+  void invoke('update.openPage', { url }).catch((e: Error) => toast({ kind: 'error', message: e.message }));
+}
+
+/** コマンドパレットに出すもの（パレット自身は除く）。 */
+function paletteCommands(): Command[] {
+  return commands().filter((c) => c.id !== 'edit.palette');
+}
+
+// ---- メニュー ----
+
+const byId = (id: string): AppCommand => commands().find((c) => c.id === id)!;
+
+/** コマンドからメニューの項目を作る。label を渡すとメニューでの名前を変える。 */
+function cmd(id: string, label?: string, extra: Partial<MenuItemDef> = {}): MenuItemDef {
+  const c = byId(id);
+  return { label: label ?? c.title, shortcut: c.shortcut, enabled: c.enabled?.() ?? true, run: c.run, ...extra };
+}
+
+const SEP: MenuItemDef = { type: 'separator' };
+
+async function recentItems(): Promise<MenuItemDef[]> {
+  const recent = await invoke('file.recent').catch(() => []);
+  if (recent.length === 0) return [{ label: t('最近使ったファイルはありません'), enabled: false }];
+  const missing = recent.filter((r) => !r.exists);
+  return [
+    ...recent.map((r, i): MenuItemDef => ({
+      label: `${i < 9 ? `${i + 1}  ` : ''}${splitPath(r.path).name}`,
+      hint: r.exists ? r.path : t('{path}（見つかりません）', { path: r.path }),
+      enabled: r.exists && idle(),
+      run: () => void openFile(r.path),
+    })),
+    SEP,
+    {
+      label: t('一覧から消す'),
+      // ホームの「最近使ったファイル」にも同じ一覧が出ているので、消したら取り直す
+      items: () => recent.map((r): MenuItemDef => ({ label: splitPath(r.path).name, hint: r.path, run: () => void invoke('file.removeRecent', { path: r.path }).then(() => home.refresh()) })),
+    },
+    {
+      label: t('見つからないファイルを一覧から消す'),
+      enabled: missing.length > 0,
+      run: () => void Promise.all(missing.map((r) => invoke('file.removeRecent', { path: r.path }))).then(() => {
+        home.refresh();
+        toast({ kind: 'success', message: t('{n} 件を一覧から消しました', { n: missing.length }) });
+      }),
+    },
+  ];
+}
+
+/** 挿入メニューに直接並べる要素。残りは「その他」にまとめる。 */
+const INSERT_COMMON = ['tab', 'group', 'button', 'toggleButton', 'checkBox', 'dropDown', 'comboBox', 'editBox', 'menu', 'splitButton', 'gallery', 'labelControl', 'separator'];
+
+function insertItem(tag: string): MenuItemDef {
+  const store = app.store;
+  const reason = store ? probeInsert(store.doc, store.selection, tag) : t('ファイルを開くと追加できます');
+  return { label: titleOf(tag), hint: reason ?? tag, enabled: reason === null, run: () => void insertNearSelection(tag) };
+}
+
+const CANVAS_MODES: readonly { mode: CanvasMode; label: string }[] = [
+  { mode: 'ribbon', label: 'リボン' },
+  { mode: 'backstage', label: 'Backstage' },
+  { mode: 'contextMenu', label: 'コンテキストメニュー' },
+];
+
+const MENUS: MenuDef[] = [
+  {
+    id: 'file', label: t('ファイル'), mnemonic: 'F', items: () => [
+      cmd('file.open'),
+      { label: t('最近使ったファイル'), items: recentItems },
+      SEP,
+      cmd('file.save'),
+      cmd('file.close'),
+      SEP,
+      cmd('file.backup'),
+      cmd('file.export'),
+      cmd('file.import'),
+      SEP,
+      cmd('file.quit', undefined, { hint: isHosted ? undefined : t('ブラウザで動かしているときは使えません') }),
+    ],
+  },
+  {
+    id: 'edit', label: t('編集'), mnemonic: 'E', items: () => [
+      cmd('edit.undo'),
+      cmd('edit.redo'),
+      SEP,
+      cmd('edit.cut'),
+      cmd('edit.copy'),
+      cmd('edit.paste'),
+      cmd('edit.duplicate'),
+      cmd('edit.delete'),
+      SEP,
+      cmd('edit.format'),
+      SEP,
+      cmd('edit.palette'),
+    ],
+  },
+  {
+    id: 'view', label: t('表示'), mnemonic: 'V', items: () => {
+      const s = app.session;
+      const is2007 = app.store?.version === 'office2007';
+      const modes = CANVAS_MODES.map((m): MenuItemDef => ({
+        label: t(m.label),
+        checked: has() && getCanvasMode() === m.mode,
+        enabled: has() && (m.mode === 'ribbon' || !is2007),
+        hint: is2007 && m.mode !== 'ribbon' ? t('customUI（2007）では使えません') : undefined,
+        run: () => {
+          setCanvasMode(m.mode);
+          focusPane('canvas');
+        },
+      }));
+      const parts: MenuItemDef[] = s && s.parts.size >= 2
+        ? [SEP, ...[...s.parts.keys()].map((v): MenuItemDef => ({ label: v === 'office2010' ? t('customUI14.xml（2010以降）') : t('customUI.xml（2007）'), checked: s.active.version === v, run: () => app.switchPart(v) }))]
+        : [];
+      const theme = app.settings.theme;
+      return [
+        cmd('view.canvas', t('キャンバス')),
+        cmd('view.tree', t('ツリー')),
+        cmd('view.xml', t('XMLエディタ')),
+        cmd('view.inspector', t('インスペクタ')),
+        cmd('view.bottom', t('下部パネル'), { checked: !layout.isCollapsed('bottom') }),
+        SEP,
+        ...modes,
+        ...parts,
+        SEP,
+        cmd('view.problems', t('問題')),
+        cmd('view.callbacks', t('コールバック')),
+        cmd('view.images', t('アイコン')),
+        SEP,
+        {
+          label: t('テーマ'), items: () => [
+            { label: t('システムに合わせる'), checked: theme === 'system', run: () => void updateSettings({ theme: 'system' }) },
+            { label: t('ライト'), checked: theme === 'light', run: () => void updateSettings({ theme: 'light' }) },
+            { label: t('ダーク'), checked: theme === 'dark', run: () => void updateSettings({ theme: 'dark' }) },
+          ],
+        },
+        cmd('view.swap'),
+        cmd('view.resetLayout'),
+      ];
+    },
+  },
+  {
+    id: 'insert', label: t('挿入'), mnemonic: 'I', items: () => [
+      ...INSERT_COMMON.map(insertItem),
+      { label: t('その他の要素'), items: () => PALETTE_ITEMS.filter((tag) => !INSERT_COMMON.includes(tag)).map(insertItem) },
+      SEP,
+      cmd('insert.recipes'),
+      cmd('insert.saveRecipe', t('選択中をレシピとして保存…')),
+      SEP,
+      cmd('insert.idMso'),
+      cmd('insert.imageMso'),
+    ],
+  },
+  {
+    id: 'tools', label: t('ツール'), mnemonic: 'T', items: () => [
+      cmd('tools.apply', undefined, { hint: app.info.excelInstalled ? undefined : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)') }),
+      cmd('tools.diff'),
+      SEP,
+      cmd('vba.refresh'),
+      cmd('vba.insert'),
+      cmd('vba.holder'),
+      SEP,
+      cmd('tools.icon'),
+      cmd('tools.library'),
+      SEP,
+      cmd('tools.settings'),
+    ],
+  },
+  {
+    id: 'help', label: t('ヘルプ'), mnemonic: 'H', items: () => [
+      cmd('help.shortcuts'),
+      SEP,
+      cmd('help.update'),
+      cmd('help.releases'),
+      cmd('help.github'),
+      SEP,
+      cmd('help.about'),
+    ],
+  },
+];
+
+// ---- ツールバーとタイトル ----
+
+function toolbarButton(id: string, icon: string, label: string): void {
+  $(id).replaceChildren(svg(icon), h('span', { class: 'tb-label' }, label));
+}
+toolbarButton('btn-open', uiIcons.open, t('開く'));
+toolbarButton('btn-save', uiIcons.save, t('保存'));
+toolbarButton('btn-undo', uiIcons.undo, t('元に戻す'));
+toolbarButton('btn-redo', uiIcons.redo, t('やり直し'));
+toolbarButton('btn-command', uiIcons.command, t('コマンド'));
+$('btn-apply').replaceChildren(svg(uiIcons.apply), h('span', { class: 'tb-label' }, t('Excelへ反映')), h('kbd', null, 'F5'));
+
+const tip = (title: string, shortcut?: string) => (shortcut ? `${title} (${shortcut})` : title);
+
+function updateChrome(): void {
   const s = app.session;
   const store = app.store;
   const dirty = app.dirty;
-  $('file-name').textContent = s ? `${s.path}${dirty ? t('（未保存）') : ''}` : '';
-  document.title = s ? `${dirty ? '* ' : ''}${s.path.split(/[\\/]/).pop()} - Sash` : 'Sash';
-  $<HTMLButtonElement>('btn-save').disabled = !s;
-  $<HTMLButtonElement>('btn-apply').disabled = !s;
-  $<HTMLButtonElement>('btn-apply').title = app.info.excelInstalled ? t('Excelへ反映 (F5)') : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)');
-  $<HTMLButtonElement>('btn-undo').disabled = !store?.canUndo;
-  $<HTMLButtonElement>('btn-redo').disabled = !store?.canRedo;
-  $<HTMLButtonElement>('btn-format').disabled = !store || store.syncError !== null;
-  $<HTMLButtonElement>('btn-catalog').disabled = !s;
-  $<HTMLButtonElement>('btn-recipes').disabled = !s;
-  $<HTMLButtonElement>('btn-diff').disabled = !s;
+  const busy = busyState();
+
+  const chip = $('file-chip');
+  chip.hidden = !s;
+  if (s) {
+    const { name } = splitPath(s.path);
+    $('file-name').textContent = name;
+    chip.title = dirty ? t('{path}（未保存の変更があります）', { path: s.path }) : s.path;
+    const dot = $('file-dirty');
+    dot.hidden = !dirty;
+    dot.setAttribute('aria-label', t('未保存の変更があります'));
+    dot.setAttribute('role', 'img');
+  }
+  document.title = s ? `${dirty ? '● ' : ''}${splitPath(s.path).name} - Sash` : 'Sash';
+
+  const set = (id: string, enabled: boolean, title: string) => {
+    const b = $<HTMLButtonElement>(id);
+    b.disabled = !enabled;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+  };
+  set('btn-open', busy === null, tip(t('開く'), 'Ctrl+O'));
+  set('btn-save', !!s && busy === null, busy === 'save' ? t('保存しています…') : tip(t('保存'), 'Ctrl+S'));
+  set('btn-undo', store?.canUndo === true, tip(historyTitle(t('元に戻す'), store?.undoLabel), 'Ctrl+Z'));
+  set('btn-redo', store?.canRedo === true, tip(historyTitle(t('やり直し'), store?.redoLabel), 'Ctrl+Y'));
+  set('btn-command', true, tip(t('コマンドパレット'), 'Ctrl+K'));
+  set('btn-apply', !!s && busy === null,
+    busy === 'apply' ? t('Excelへ反映しています…') : app.info.excelInstalled ? tip(t('Excelへ反映'), 'F5') : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)'));
+  $('btn-save').classList.toggle('busy', busy === 'save');
+  $('btn-apply').classList.toggle('busy', busy === 'apply');
 
   const sw = $<HTMLSelectElement>('part-switch');
   sw.hidden = !s || s.parts.size < 2;
@@ -84,359 +438,53 @@ function updateToolbar(): void {
   }
 }
 
-// ---- ファイル操作 ----
-
-async function confirmDiscard(): Promise<boolean> {
-  if (!app.dirty) return true;
-  const r = await ask(t('未保存の変更があります'), t('変更を保存しますか？'), [
-    { value: 'save', label: t('保存する'), primary: true },
-    { value: 'discard', label: t('保存しない') },
-    { value: 'cancel', label: t('キャンセル') },
-  ]);
-  if (r === 'save') return save();
-  return r === 'discard';
-}
-
-async function open(path?: string): Promise<void> {
-  if (!(await confirmDiscard())) return;
-  try {
-    const doc = await invoke('file.open', path ? { path } : undefined);
-    if (!doc) return;
-    app.open(doc);
-    const s = app.session!;
-    if (s.created) toast(t('このブックにはリボン定義がないので、customUI14 を新しく作りました'));
-    else if (s.parts.size >= 2) toast(t('customUI と customUI14 の両方があります。2010以降のExcelは customUI14 を優先します'));
-  } catch (e) {
-    toast((e as Error).message, 'error');
-  }
-}
-
-function partsToSave(): PartToSave[] {
-  const s = app.session!;
-  return [...s.parts.values()]
-    .filter((p) => p.dirty || s.created)
-    .map((p) => ({
-      version: p.version,
-      xml: p.text,
-      addImages: [...p.images.values()].filter((i) => i.isNew).map((i) => ({ id: i.id, base64: i.dataUrl.slice(i.dataUrl.indexOf(',') + 1) })),
-      removeImages: [...p.removedImages],
-    }));
-}
-
-/** 構文エラーや Lint のエラーがあるときは、本当に書き込むかを確認する。 */
-async function confirmErrors(action: '保存' | '反映'): Promise<boolean> {
-  const s = app.session!;
-  const broken = [...s.parts.values()].some((p) => p.syncError);
-  const errors = app.problems.filter((p) => p.severity === 'error').length;
-  if (!broken && errors === 0) return true;
-  const msg = broken ? t('XMLの構文が壊れています。このまま書き込むと、Excelでリボンが表示されません。') : t('エラーが {n} 件あります。このまま書き込むと、Excelでリボンが表示されない可能性があります。', { n: errors });
-  const title = action === '保存' ? t('保存の前に確認') : t('反映の前に確認');
-  const go = action === '保存' ? t('保存する') : t('反映する');
-  return (await ask(title, msg, [{ value: 'go', label: go }, { value: 'cancel', label: t('キャンセル'), primary: true }])) === 'go';
-}
-
-async function save(): Promise<boolean> {
-  const s = app.session;
-  if (!s) return false;
-  if (!(await confirmErrors('保存'))) return false;
-  const parts = partsToSave();
-  if (parts.length === 0) {
-    toast(t('変更はありません'));
-    return true;
-  }
-  try {
-    const res = await invoke('file.save', { path: s.path, parts });
-    for (const p of s.parts.values()) p.markSaved();
-    s.created = false;
-    toast(t('保存しました（バックアップ：{backup}）', { backup: res.backup }));
-    return true;
-  } catch (e) {
-    toast(t('保存できませんでした：{message}', { message: (e as Error).message }), 'error');
-    return false;
-  }
-}
-
-async function applyToExcel(): Promise<void> {
-  const s = app.session;
-  if (!s) return;
-  if (!(await confirmErrors('反映'))) return;
-  if (app.info.excelInstalled && !app.settings.ribbonErrorsHintShown) {
-    await ask(
-      t('リボンのエラーを表示する設定'),
-      t('リボンのXMLに誤りがあると、Excelは何も言わずにリボンを表示しません。原因を確認できるよう、Excelの［ファイル］→［オプション］→［詳細設定］→［全般］にある「アドインのユーザー インターフェイス エラーを表示する」をオンにすることをおすすめします（Sashはこの設定を変更しません）。'),
-      [{ value: 'ok', label: t('わかりました'), primary: true }],
-    );
-    app.settings = await invoke('settings.set', { ribbonErrorsHintShown: true });
-  }
-
-  const run = async (saveIfDirty: boolean) => {
-    const parts = partsToSave();
-    toast(t('反映しています…'));
-    return invoke('excel.apply', { path: s.path, parts, saveIfDirty, activateTab: tabIdToActivate() ?? undefined });
+// ツールバーは ←→ で移る（WAI-ARIA の toolbar と同じ。Tab ではツールバー全体を 1 つとして飛ばせる）
+function setupToolbarKeys(bar: HTMLElement): void {
+  const buttons = () => Array.from(bar.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+  const roving = () => {
+    const list = buttons();
+    const current = list.find((b) => b.tabIndex === 0) ?? list[0];
+    for (const b of Array.from(bar.querySelectorAll<HTMLButtonElement>('button'))) b.tabIndex = b === current ? 0 : -1;
   };
-  try {
-    let res = await run(false);
-    if (res.status === 'needsSave') {
-      const r = await ask(t('Excel側に未保存の変更があります'), t('{file} はExcelで開かれていて、未保存の変更があります。Excelで保存してから反映しますか？', { file: s.path.split(/[\\/]/).pop()! }), [
-        { value: 'go', label: t('保存して反映'), primary: true },
-        { value: 'cancel', label: t('中止') },
-      ]);
-      if (r !== 'go') {
-        toast(t('反映を中止しました'));
-        return;
-      }
-      res = await run(true);
-    }
-    if (res.status === 'applied' || res.status === 'written' || res.status === 'blocked') {
-      for (const p of s.parts.values()) p.markSaved();
-      s.created = false;
-    }
-    toast(res.message, res.status === 'blocked' ? 'error' : 'info');
-  } catch (e) {
-    toast(t('反映できませんでした：{message}', { message: (e as Error).message }), 'error');
-  }
-}
-
-// ---- 編集コマンド ----
-
-function undo(): void {
-  app.store?.undo();
-}
-
-function redo(): void {
-  app.store?.redo();
-}
-
-function deleteSelection(): void {
-  const store = app.store;
-  const el = store?.selectedElement;
-  if (!store || !el || el === store.doc.documentElement) return;
-  store.edit('other', () => {
-    const target = store.selectedElement!;
-    const parent = target.parentElement!;
-    const next = target.nextElementSibling ?? target.previousElementSibling;
-    target.remove();
-    return next ? pathOf(next) : pathOf(parent);
+  bar.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
+    const list = buttons();
+    const i = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (i < 0) return;
+    e.preventDefault();
+    const j = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + list.length) % list.length;
+    for (const b of list) b.tabIndex = -1;
+    list[j]!.tabIndex = 0;
+    list[j]!.focus();
   });
-}
-
-function duplicateSelection(): void {
-  const store = app.store;
-  const el = store?.selectedElement;
-  if (!store || !el || el === store.doc.documentElement || el.localName === 'customUI') return;
-  store.edit('other', () => pathOf(duplicateElement(store.selectedElement!)));
-}
-
-function openImageEditor(files?: FileList | File[], existing?: ImageEntry): void {
-  const store = app.store;
-  if (!store) return;
-  if (existing && !store.selection) {
-    openIconDialog(null, undefined, existing);
-    return;
-  }
-  if (!store.selection) return;
-  const el = store.selectedElement;
-  if (!el || !defFor(el)?.attrs.includes('image')) {
-    toast(t('この要素にはアイコンを設定できません'));
-    return;
-  }
-  openIconDialog(store.selection, files, existing);
-}
-
-// ---- 言語 ----
-
-const REOPEN_KEY = 'sash.reopen';
-const LANG_SYNC_KEY = 'sash.langSynced';
-
-function sessionGet(key: string): string | null {
-  try {
-    return sessionStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function sessionSet(key: string, value: string | null): void {
-  try {
-    if (value === null) sessionStorage.removeItem(key);
-    else sessionStorage.setItem(key, value);
-  } catch {
-    // 保存できない環境では何もしない
-  }
-}
-
-/** 言語を切り替えて読み込み直す。未保存の変更があるときは切り替えない（false を返す）。 */
-async function changeLanguage(next: Lang): Promise<boolean> {
-  if (next === lang) return true;
-  if (app.dirty) {
-    toast(t('言語を切り替える前に、変更を保存してください'), 'error');
-    return false;
-  }
-  storeLang(next);
-  try {
-    app.settings = await invoke('settings.set', { language: next });
-  } catch (e) {
-    toast((e as Error).message, 'error');
-  }
-  if (app.session) sessionSet(REOPEN_KEY, app.session.path);
-  location.reload();
-  return true;
-}
-
-async function openSettings(): Promise<void> {
-  const s = app.settings;
-  const updateSection = await renderUpdateSettings(async (patch) => {
-    app.settings = await invoke('settings.set', patch);
-  }, s);
-  const update = async (patch: Partial<Settings>) => {
-    app.settings = await invoke('settings.set', patch);
-    applyTheme();
-    app.emit('settings');
-  };
-  const content = h(
-    'div',
-    { class: 'settings' },
-    h('label', null, t('テーマ'), h('select', { onchange: (e: Event) => void update({ theme: (e.target as HTMLSelectElement).value as Settings['theme'] }) },
-      h('option', { value: 'system', selected: s.theme === 'system' }, t('システムに合わせる')),
-      h('option', { value: 'light', selected: s.theme === 'light' }, t('ライト')),
-      h('option', { value: 'dark', selected: s.theme === 'dark' }, t('ダーク')))),
-    h('label', null, t('レイアウト'), h('select', { onchange: (e: Event) => void update({ xmlOnTop: (e.target as HTMLSelectElement).value === 'xml' }) },
-      h('option', { value: 'canvas', selected: !s.xmlOnTop }, t('キャンバスを上に')),
-      h('option', { value: 'xml', selected: s.xmlOnTop }, t('XMLエディタを上に')))),
-    h('label', null, t('言語'), h('select', { onchange: (e: Event) => { const sel = e.target as HTMLSelectElement; void changeLanguage(sel.value as Lang).then((ok) => { if (!ok) sel.value = lang; }); } },
-      h('option', { value: 'ja', selected: lang === 'ja' }, '日本語'),
-      h('option', { value: 'en', selected: lang === 'en' }, 'English'))),
-    h('label', null, t('アイコンの出力サイズ'), h('select', { onchange: (e: Event) => void update({ iconSize: Number((e.target as HTMLSelectElement).value) as 32 | 64 }) },
-      h('option', { value: '32', selected: s.iconSize === 32 }, '32 × 32'),
-      h('option', { value: '64', selected: s.iconSize === 64 }, t('64 × 64（高DPI）')))),
-    h('h3', null, t('アイコンライブラリ')),
-    h('label', null, t('保存先'), h('div', { class: 'insp-inline' }, h('span', { class: 'muted path-text', title: s.iconLibraryPath }, s.iconLibraryPath), h('button', { type: 'button', class: 'small', onclick: async () => { const p = await invoke('library.chooseFolder'); if (p) { app.settings = await invoke('settings.get'); modal.close(); void openSettings(); } } }, t('変更')))),
-    h('h3', null, t('コールバック')),
-    h('label', null, t('名前の規則'), h('input', { type: 'text', value: s.callbackPattern, spellcheck: false, title: t('{id} と {attr} が置き換わります'), onchange: (e: Event) => void update({ callbackPattern: (e.target as HTMLInputElement).value.trim() }) })),
-    h('label', null, t('Subの共有'), h('select', { onchange: (e: Event) => void update({ callbackShared: (e.target as HTMLSelectElement).value === 'shared' }) },
-      h('option', { value: 'each', selected: !s.callbackShared }, t('コントロールごとに分ける')),
-      h('option', { value: 'shared', selected: s.callbackShared }, t('1つのSubを共有し control.Id で振り分ける')))),
-    h('label', null, t('共有するときの名前'), h('input', { type: 'text', value: s.callbackSharedPattern, spellcheck: false, title: t('{attr} が置き換わります'), onchange: (e: Event) => void update({ callbackSharedPattern: (e.target as HTMLInputElement).value.trim() }) })),
-    h('label', null, t('挿入先のモジュール'), h('input', { type: 'text', value: s.callbackModule, spellcheck: false, onchange: (e: Event) => void update({ callbackModule: (e.target as HTMLInputElement).value.trim() }) })),
-    updateSection,
-    h('p', { class: 'muted' }, t('Sash {version} ・ Excel {excel}', { version: app.info.version, excel: app.info.excelInstalled ? t('あり') : t('なし（ファイル編集のみ）') })),
-  );
-  const modal = openModal(t('設定'), content);
-}
-
-// ---- .sash.json の書き出し・読み込み ----
-
-async function exportSashFile(): Promise<void> {
-  const s = app.session;
-  if (!s) return;
-  const base = s.path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '');
-  try {
-    const saved = await invoke('file.exportText', { defaultName: `${base}.sash.json`, filter: `${t('Sash のリボン定義 (*.sash.json)')}|*.sash.json`, content: exportSash([...s.parts.values()], s.path.split(/[\\/]/).pop()) });
-    if (saved) toast(t('リボン定義を書き出しました：{path}', { path: saved }));
-  } catch (e) {
-    toast((e as Error).message, 'error');
-  }
-}
-
-function importSashFile(): void {
-  const input = h('input', { type: 'file', accept: '.json,.sash.json' });
-  input.addEventListener('change', () => {
-    const file = input.files?.[0];
-    if (file) void file.text().then(applySash).catch((e: Error) => toast(e.message, 'error'));
+  bar.addEventListener('focusin', (e) => {
+    const b = e.target as HTMLButtonElement;
+    for (const x of Array.from(bar.querySelectorAll<HTMLButtonElement>('button'))) x.tabIndex = x === b ? 0 : -1;
   });
-  input.click();
+  // 無効になったボタンに tabindex=0 が残ると Tab で入れなくなるので、状態が変わるたびに付け直す
+  app.on('store', roving);
+  app.on('session', roving);
+  onBusyChange(roving);
+  roving();
 }
-
-async function applySash(text: string): Promise<void> {
-  const s = app.session;
-  if (!s) return;
-  const data = parseSash(text);
-  const target = s.active;
-  const part = data.parts.find((p) => p.version === target.version) ?? data.parts[0]!;
-  const r = await ask(t('リボン定義を読み込む'), t('編集中の {part} を、{source} のリボン定義（画像 {n} 個を含む）で置き換えます。元に戻す（Ctrl+Z）で取り消せます。', { part: target.version === 'office2010' ? 'customUI14' : 'customUI', source: data.source ?? t('ファイル'), n: part.images.length }), [
-    { value: 'ok', label: t('置き換える'), primary: true },
-    { value: 'cancel', label: t('キャンセル') },
-  ]);
-  if (r !== 'ok') return;
-  target.replaceAll(partXml(part), part.images.map((i) => ({ id: i.id, dataUrl: `data:${i.contentType};base64,${i.base64}`, isNew: true })));
-  toast(part.version !== target.version ? t('形式（2007 / 2010以降）が違うリボン定義を読み込みました。名前空間を確認してください') : t('リボン定義を読み込みました'));
-}
-
-// ---- コマンドパレット ----
-
-function openImageMsoCatalog(): void {
-  $('btn-catalog').click();
-}
-
-function buildCommands(): Command[] {
-  const has = () => app.session !== null;
-  const hasSel = () => app.store?.selectedElement !== null && app.store?.selectedElement !== undefined;
-  const run = (p: Promise<string>) => void p.then((m) => m && toast(m)).catch((e: Error) => toast(e.message, 'error'));
-  const setTheme = (theme: Settings['theme']) => void invoke('settings.set', { theme }).then((st) => { app.settings = st; applyTheme(); });
-  return [
-    { id: 'file.open', group: t('ファイル'), title: t('ファイルを開く'), shortcut: 'Ctrl+O', run: () => void open() },
-    { id: 'file.save', group: t('ファイル'), title: t('保存'), shortcut: 'Ctrl+S', enabled: has, run: () => void save() },
-    { id: 'file.diff', group: t('ファイル'), title: t('保存済みとの差分を表示'), keywords: 'diff compare', enabled: has, run: openDiff },
-    { id: 'file.export', group: t('ファイル'), title: t('リボン定義を書き出す（.sash.json）'), keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
-    { id: 'file.import', group: t('ファイル'), title: t('リボン定義を読み込む（.sash.json）'), keywords: 'import json', enabled: has, run: importSashFile },
-    { id: 'file.apply', group: t('ファイル'), title: t('Excelへ反映'), shortcut: 'F5', keywords: 'apply reload', enabled: has, run: () => void applyToExcel() },
-    { id: 'edit.undo', group: t('編集'), title: t('元に戻す'), shortcut: 'Ctrl+Z', enabled: () => app.store?.canUndo === true, run: undo },
-    { id: 'edit.redo', group: t('編集'), title: t('やり直し'), shortcut: 'Ctrl+Y', enabled: () => app.store?.canRedo === true, run: redo },
-    { id: 'edit.duplicate', group: t('編集'), title: t('選択中の要素を複製'), shortcut: 'Ctrl+D', enabled: hasSel, run: duplicateSelection },
-    { id: 'edit.delete', group: t('編集'), title: t('選択中の要素を削除'), shortcut: 'Delete', enabled: hasSel, run: deleteSelection },
-    { id: 'edit.format', group: t('編集'), title: t('XMLを整形'), shortcut: 'Shift+Alt+F', enabled: has, run: () => app.store?.format() },
-    { id: 'edit.icon', group: t('編集'), title: t('選択中のコントロールのアイコンを作る'), keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
-    ...PALETTE_ITEMS.map((tag): Command => ({ id: `insert.${tag}`, group: t('追加'), title: t('{name}を追加', { name: titleOf(tag) }), keywords: tag, enabled: has, run: () => insertNearSelection(tag) })),
-    ...builtinRecipes.map((r): Command => ({ id: `recipe.${r.id}`, group: t('レシピ'), title: t(r.title), keywords: 'recipe template', enabled: has, run: () => run(applyRecipe(r)) })),
-    { id: 'recipe.open', group: t('レシピ'), title: t('レシピの一覧を開く'), keywords: 'recipe', enabled: has, run: () => void openRecipes(toast) },
-    { id: 'recipe.save', group: t('レシピ'), title: t('選択中のタブ・グループをレシピとして保存'), keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(toast) },
-    { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
-    { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => run(insertStubs(vba.statuses())) },
-    { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => run(setupRibbonHolder()) },
-    { id: 'view.library', group: t('表示'), title: t('アイコンライブラリを開く'), keywords: 'icon library', run: () => void openLibrary(undefined, toast) },
-    { id: 'view.catalog', group: t('表示'), title: t('imageMso カタログを開く'), keywords: 'icon catalog', enabled: has, run: openImageMsoCatalog },
-    { id: 'view.idmso', group: t('表示'), title: t('idMso カタログを開く（IDをコピー）'), keywords: 'idmso catalog', enabled: has, run: () => openCatalog('idMso', '', (v) => void navigator.clipboard.writeText(v).then(() => toast(t('{value} をコピーしました', { value: v })))) },
-    { id: 'view.problems', group: t('表示'), title: t('問題の一覧を表示'), enabled: has, run: () => showBottomTab('problems') },
-    { id: 'view.callbacks', group: t('表示'), title: t('コールバックの一覧を表示'), enabled: has, run: () => showBottomTab('callbacks') },
-    { id: 'view.images', group: t('表示'), title: t('アイコンの一覧を表示'), enabled: has, run: () => showBottomTab('images') },
-    { id: 'view.canvas', group: t('表示'), title: t('キャンバスに移動'), shortcut: 'Ctrl+1', run: () => $('canvas').focus() },
-    { id: 'view.tree', group: t('表示'), title: t('ツリーに移動'), shortcut: 'Ctrl+2', run: () => $('tree').focus() },
-    { id: 'view.xml', group: t('表示'), title: t('XMLエディタに移動'), shortcut: 'Ctrl+3', run: () => xmlHandle.focus() },
-    { id: 'view.theme.light', group: t('表示'), title: t('ライトテーマにする'), keywords: 'theme light', run: () => setTheme('light') },
-    { id: 'view.theme.dark', group: t('表示'), title: t('ダークテーマにする'), keywords: 'theme dark', run: () => setTheme('dark') },
-    { id: 'view.theme.system', group: t('表示'), title: t('テーマをシステムに合わせる'), keywords: 'theme system', run: () => setTheme('system') },
-    { id: 'view.layout', group: t('表示'), title: t('キャンバスとXMLの上下を入れ替える'), keywords: 'layout swap', run: () => void invoke('settings.set', { xmlOnTop: !app.settings.xmlOnTop }).then((st) => { app.settings = st; applyTheme(); }) },
-    { id: 'app.settings', group: t('設定'), title: t('設定を開く'), run: () => void openSettings() },
-    { id: 'app.update', group: t('設定'), title: t('更新を確認'), keywords: 'update version', run: () => void checkForUpdates(true) },
-    { id: 'app.language', group: t('設定'), title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
-  ];
-}
-
-// ---- テーマ ----
-
-const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
-let xmlHandle: ReturnType<typeof mountXmlEditor>;
-
-function applyTheme(): void {
-  const t = app.settings.theme;
-  if (t === 'system') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.dataset['theme'] = t;
-  const dark = t === 'dark' || (t === 'system' && darkQuery.matches);
-  xmlHandle?.setTheme(dark);
-  $('app').classList.toggle('xml-on-top', app.settings.xmlOnTop);
-}
-darkQuery.addEventListener('change', applyTheme);
 
 // ---- 組み立て ----
 
-mountLayout($('app'));
-mountPalette($('palette-list'));
+const layout = mountLayout($('app'));
+initPanes({ layout });
+const menubar = mountMenubar($('menubar'), MENUS, {
+  fallbackFocus: () => (app.session ? $('canvas') : document.querySelector<HTMLElement>('#home button')),
+});
+mountPalette($('palette'));
 mountTree($('tree'));
 mountCanvas($('canvas'), { onImageDrop: (files, target) => {
   app.store?.select(target, 'canvas');
   openIconDialog(target, files);
 } });
-xmlHandle = mountXmlEditor($('xml-editor'), $('xml-status'), { undo, redo });
+const xmlHandle = mountXmlEditor($('xml-editor'), $('xml-status'), { undo, redo });
+setEditorThemeHandler((dark) => xmlHandle.setTheme(dark));
+// 保存・反映・閉じる前に、インスペクタで入力中の値を確定させる
+setPendingEditFlusher(flushPendingEdits);
 mountInspector($('inspector'), {
   pickIdMso: (cur, apply) => {
     const tag = app.store?.selectedElement?.localName ?? '';
@@ -446,114 +494,98 @@ mountInspector($('inspector'), {
   editImage: (existing) => openImageEditor(undefined, existing),
   pickFromLibrary: () => {
     const sel = app.store?.selection;
-    if (sel) void openLibrary((d) => applyLibraryIcon(sel, d), toast);
+    if (sel) void openOnce('library', () => openLibrary((d) => applyLibraryIcon(sel, d), notify));
   },
 });
-mountBottom($('bottom-tabs'), $('bottom-body'), toast, (existing) => {
+mountBottom($('bottom-tabs'), $('bottom-body'), notify, (existing) => {
   // 一覧から開いたときは、コントロールには設定せずに画像だけを作り直す
   openIconDialog(null, undefined, existing);
 });
-mountHome($('home'), (p) => void open(p));
+setElementMenuHooks({ revealInXml: (p) => revealInXml(p) });
+const home = mountHome($('home'), (p) => void openFile(p));
 
-app.on('session', updateToolbar);
-app.on('store', updateToolbar);
+// XML の構文エラー中などで編集を断ったときは、何が起きたか分かるように警告を出す
+setEditRefusedHandler((message) => toast({ kind: 'warning', message }));
 
-$('btn-open').addEventListener('click', () => void open());
+app.on('session', updateChrome);
+app.on('store', updateChrome);
+onBusyChange(updateChrome);
+
+$('btn-open').addEventListener('click', () => void openFile());
 $('btn-save').addEventListener('click', () => void save());
 $('btn-apply').addEventListener('click', () => void applyToExcel());
 $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
-$('btn-format').addEventListener('click', () => app.store?.format());
-$('btn-settings').addEventListener('click', () => void openSettings());
-initUpdates({ confirmDiscard, toast });
-$('btn-recipes').addEventListener('click', () => void openRecipes(toast));
-$('btn-diff').addEventListener('click', openDiff);
-$('btn-command').addEventListener('click', () => openCommandPalette(buildCommands));
-$('btn-catalog').addEventListener('click', () => {
-  const el = app.store?.selectedElement;
-  const canIcon = el && defFor(el)?.attrs.includes('imageMso');
-  openCatalog('imageMso', el?.getAttribute('imageMso') ?? '', (v) => {
-    if (!canIcon || !app.store) {
-      void navigator.clipboard.writeText(v).then(() => toast(t('{value} をコピーしました', { value: v })));
-      return;
-    }
-    app.store.edit('inspector', (doc) => {
-      const t = elementAt(doc, app.store!.selection!)!;
-      t.removeAttribute('image');
-      t.removeAttribute('getImage');
-      t.setAttribute('imageMso', v);
-      return undefined;
-    });
-  });
-});
+$('btn-command').addEventListener('click', () => openCommandPalette(paletteCommands));
+setupToolbarKeys($('toolbar'));
+initUpdates({ confirmDiscard });
 $<HTMLSelectElement>('part-switch').addEventListener('change', (e) => app.switchPart((e.target as HTMLSelectElement).value as 'office2007' | 'office2010'));
 
-function inTextField(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  if (!el) return false;
-  return el.closest('#xml-editor') !== null || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
+// ---- ショートカット ----
+
+/** 押されたキーに当たるコマンド。 */
+function commandForKey(e: KeyboardEvent): AppCommand | undefined {
+  return commands().find((c) => [c.shortcut, ...(c.altKeys ?? [])].some((k) => !!k && matchShortcut(e, k)));
 }
 
+/**
+ * 入力欄の中でも受けるコマンド（保存・反映・ペインの移動など）は、捕捉の段階（capture）で先に受ける。
+ * XML エディタ（Monaco）は自分のキー割り当て（Ctrl+K で始まる組み合わせ、F6 など）を先に処理して
+ * 既定の動作を止めるので、バブリングの段階で待っていると届かない・二重に動くことがあるため。
+ */
 window.addEventListener('keydown', (e) => {
-  if (document.querySelector('.modal-backdrop')) return;
-  const ctrl = e.ctrlKey || e.metaKey;
-  const k = e.key.toLowerCase();
-  if (e.key === 'F5') {
-    e.preventDefault();
-    void applyToExcel();
-  } else if (ctrl && k === 's') {
-    e.preventDefault();
-    void save();
-  } else if (ctrl && k === 'o') {
-    e.preventDefault();
-    void open();
-  } else if (ctrl && k === 'k') {
-    e.preventDefault();
-    openCommandPalette(buildCommands);
-  } else if (ctrl && (k === '1' || k === '2' || k === '3')) {
-    e.preventDefault();
-    if (k === '1') $('canvas').focus();
-    if (k === '2') $('tree').focus();
-    if (k === '3') xmlHandle.focus();
-  } else if (inTextField(e.target)) {
-    return;
-  } else if (ctrl && k === 'z') {
-    e.preventDefault();
-    undo();
-  } else if (ctrl && (k === 'y' || (e.shiftKey && k === 'z'))) {
-    e.preventDefault();
-    redo();
-  } else if (ctrl && k === 'd') {
-    e.preventDefault();
-    duplicateSelection();
-  } else if (e.key === 'Delete') {
-    e.preventDefault();
-    deleteSelection();
-  }
+  if (isModalOpen() || menubar.isOpen() || e.isComposing) return;
+  const c = commandForKey(e);
+  if (!c?.inText) return;
+  e.preventDefault();
+  // Monaco などに渡ると、同じキーで別の動作（Ctrl+K の続きを待つなど）が始まってしまうので止める
+  e.stopPropagation();
+  if (c.enabled?.() ?? true) c.run();
+}, true);
+
+window.addEventListener('keydown', (e) => {
+  // ダイアログ・コマンドパレット・メニューが開いている間は、それぞれのキー操作に任せる
+  if (isModalOpen() || menubar.isOpen() || e.defaultPrevented || e.isComposing) return;
+  const c = commandForKey(e);
+  if (!c || c.inText) return;
+  if (inTextField(e.target)) return;
+  // メニューバー・ツールバー・右クリックメニューにフォーカスがあるときの Delete などは、
+  // 選択中の要素への操作として扱わない（右クリックメニューを開いたまま要素が消え、古いメニューが残ってしまう）
+  if (e.target instanceof Element && e.target.closest('#menubar, #toolbar, .ctx-menu, .menu-popup')) return;
+  e.preventDefault();
+  if (c.enabled?.() ?? true) c.run();
 });
 
-// ファイルのドロップ。xlsm / xlam / xltm / xlsb はホストにパスを調べてもらって開く
+// ---- ファイルのドロップ ----
+// どこに落としても WebView がファイルを開いて画面ごと移ってしまわないよう、window で必ず既定の動作を止める。
+// 自分で受けるところ（キャンバスへの画像、アイコンエディタ）は preventDefault 済みなので、それ以外を開く処理に回す
+
 window.addEventListener('dragover', (e) => {
-  if (e.dataTransfer?.types.includes('Files') && !(e.target as HTMLElement).closest('#canvas, .modal')) e.preventDefault();
+  if (!e.dataTransfer?.types.includes('Files') || e.defaultPrevented) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = (e.target as HTMLElement).closest('.modal') ? 'none' : 'copy';
 });
 window.addEventListener('drop', (e) => {
-  if ((e.target as HTMLElement).closest('#canvas, .modal')) return;
   const files = e.dataTransfer?.files;
-  if (!files?.length) return;
+  const handled = e.defaultPrevented;
   e.preventDefault();
+  if (handled || !files?.length || (e.target as HTMLElement).closest('.modal') || isModalOpen()) return;
   if (!/\.(xlsm|xlam|xltm|xlsb)$/i.test(files[0]!.name)) {
-    toast(t('.xlsm / .xlam / .xltm / .xlsb のファイルをドロップしてください'), 'error');
+    toast({ kind: 'warning', message: t('.xlsm / .xlam / .xltm / .xlsb のファイルをドロップしてください') });
     return;
   }
   if (isHosted) sendDroppedFiles(files);
-  else void open();
+  else void openFile();
 });
 
 onHostEvent((e) => {
-  if (e.event === 'fileDropped') void open(e.path);
+  if (e.event === 'fileDropped') void openFile(e.path);
   if (e.event === 'closeRequested') {
-    void confirmDiscard().then((ok) => {
-      if (ok) void invoke('app.close');
+    // 確認の途中で × がもう一度押されたら、同じ確認を二重に出さない
+    if (isQuitting()) return;
+    // 取りやめたら、ホストに知らせて次の × を受け付けてもらう（知らせないと、しばらく × が効かない）
+    void quit().then((closing) => {
+      if (!closing) void invoke('app.closeCancelled').catch(() => undefined);
     });
   }
 });
@@ -573,12 +605,14 @@ if (settings.language && settings.language !== lang && sessionGet(LANG_SYNC_KEY)
   if (settings.language === lang) sessionSet(LANG_SYNC_KEY, null);
   enableMsoIcons(info.excelInstalled);
   applyTheme();
-  updateToolbar();
+  updateChrome();
+  // app.info が届いてから取り直す（Excel で開いているブックが起動時に出なかった不具合の対策）
+  home.refresh();
   const reopen = sessionGet(REOPEN_KEY);
   if (reopen !== null) sessionSet(REOPEN_KEY, null);
   const initialFile = reopen ?? ready.initialFile;
-  if (initialFile) await open(initialFile);
-  else if (!isHosted && new URLSearchParams(location.search).has('sample')) await open();
+  if (initialFile) await openFile(initialFile, { force: true });
+  else if (!isHosted && new URLSearchParams(location.search).has('sample')) await openFile(undefined, { force: true });
   notifyUpdated(ready.updatedFrom, ready.version);
   // 更新した直後の起動では確認しない（入れ替えたばかりのため）
   if (!ready.updatedFrom) void checkOnStartup();

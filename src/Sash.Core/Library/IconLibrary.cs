@@ -49,7 +49,8 @@ public sealed partial class IconLibrary(string root)
             try
             {
                 var icon = JsonSerializer.Deserialize<LibraryIcon>(File.ReadAllText(file), Json);
-                if (icon is not null && File.Exists(PngPath(icon.Id)))
+                // id は json の中身なので信用しない。パスとして危ないものは飛ばす
+                if (icon is not null && IsValidId(icon.Id) && File.Exists(PngPath(icon.Id)))
                 {
                     result.Add(icon);
                 }
@@ -79,7 +80,11 @@ public sealed partial class IconLibrary(string root)
         var id = baseId;
         for (var n = 2; File.Exists(MetaPath(id)); n++)
         {
-            id = $"{baseId}-{n}";
+            // 連番を足しても上限を超えないよう、元の部分を削ってから付ける。削った末尾に空白や「.」が残ると
+            // Windows がファイル名から黙って落とし、id とファイル名が食い違うので、もう一度落としておく
+            var suffix = $"-{n}";
+            var head = TrimId(baseId.Length + suffix.Length > MaxSlugLength ? baseId[..(MaxSlugLength - suffix.Length)] : baseId);
+            id = (head.Length == 0 ? "icon" : head) + suffix;
         }
 
         var icon = new LibraryIcon
@@ -138,16 +143,51 @@ public sealed partial class IconLibrary(string root)
     private static List<string> NormalizeTags(IEnumerable<string> tags) =>
         tags.Select(t => t.Trim()).Where(t => t.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
+    /// <summary>Slug の長さの上限。連番（-2 など）を付けても <see cref="MaxIdLength"/> に収まるようにしてある。</summary>
+    public const int MaxSlugLength = 60;
+
+    /// <summary>id として受け付ける長さの上限。</summary>
+    public const int MaxIdLength = 80;
+
+    private static readonly string[] ReservedNames =
+        ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
+
     /// <summary>ファイル名に使える id にする。日本語などは残し、パスに使えない文字だけを置き換える。</summary>
     public static string Slug(string name)
     {
-        var s = UnsafeChars().Replace(name.Trim(), "_").Trim('.', ' ', '_');
-        return s.Length == 0 ? "icon" : s.Length > 60 ? s[..60] : s;
+        var s = TrimId(UnsafeChars().Replace((name ?? string.Empty).Trim(), "_"));
+        if (s.Length > MaxSlugLength)
+        {
+            // 切った末尾に空白や「.」が来ることがあるので、切ってからもう一度落とす
+            s = TrimId(s[..MaxSlugLength]);
+        }
+
+        if (s.Length == 0)
+        {
+            return "icon";
+        }
+
+        // CON や NUL は Windows では拡張子を付けてもファイル名に使えない
+        return ReservedNames.Contains(s, StringComparer.OrdinalIgnoreCase) ? s + "_" : s;
     }
 
-    private static bool IsValidId(string id) => id.Length > 0 && Slug(id) == id;
+    private static string TrimId(string s) => s.Trim('.', ' ', '_');
 
-    private static string Checked(string id) => IsValidId(id) ? id : throw new ArgumentException($"不正な id です：{id}", nameof(id));
+    /// <summary>
+    /// ファイル名の一部として安全に使える id か。Slug(id) == id で判定すると、切り詰めや連番で作った id が
+    /// 弾かれて読めなくなるので、「パスとして危なくないか」だけを見る。
+    /// </summary>
+    internal static bool IsValidId(string? id) =>
+        !string.IsNullOrEmpty(id)
+        && id.Length <= MaxIdLength
+        && id.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+        && !UnsafeChars().IsMatch(id)
+        && id is not "." and not ".."
+        && !id.Contains("..", StringComparison.Ordinal)
+        && !id.StartsWith(' ') && !id.EndsWith(' ')
+        && !id.StartsWith('.') && !id.EndsWith('.');
+
+    private static string Checked(string id) => IsValidId(id) ? id : throw new ArgumentException(L($"不正な id です：{id}", $"Invalid id: {id}"), nameof(id));
 
     private string MetaPath(string id) => Path.Combine(Root, id + ".json");
 

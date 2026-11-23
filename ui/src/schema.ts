@@ -48,7 +48,29 @@ export interface ElementDef {
   /** 子要素の中身を検証しない（第2弾以降の対象）。 */
   opaque?: boolean;
   since2010?: boolean;
+  /** 2007形式（customUI）でだけ使える（officeMenu など、2010以降の形式から外されたもの）。 */
+  only2007?: boolean;
+  /**
+   * 子要素の並び順（XSD の sequence）。前の枠の要素は、後ろの枠の要素より前に置く。
+   * 枠ごとに個数の上限・下限を持つ。どの枠にもない子要素は、並び順と個数を問わない。
+   */
+  childOrder?: readonly ChildSlot[];
 }
+
+/** 子要素の並びの「枠」。tags のどれかを、min 個以上 max 個以下置ける。 */
+export interface ChildSlot {
+  tags: readonly string[];
+  /** 省略すると上限なし。 */
+  max?: number;
+  /** 省略すると 0。 */
+  min?: number;
+}
+
+/** 形式ごとの customUI の名前空間。 */
+export const NAMESPACES = {
+  office2007: 'http://schemas.microsoft.com/office/2006/01/customui',
+  office2010: 'http://schemas.microsoft.com/office/2009/07/customui',
+} as const;
 
 // ---- 属性 ----
 
@@ -112,7 +134,10 @@ const attrList: AttrDef[] = [
   a({ name: 'rows', kind: 'int', category: '表示', desc: 'ギャラリーの行数' }),
   a({ name: 'itemWidth', kind: 'int', category: '表示', desc: 'ギャラリー項目の幅（px）' }),
   a({ name: 'itemHeight', kind: 'int', category: '表示', desc: 'ギャラリー項目の高さ（px）' }),
-  a({ name: 'invalidateContentOnDrop', kind: 'bool', category: '詳細', desc: '開くたびに中身を作り直す' }),
+  // invalidateContentOnDrop は customUI14（2009/07）で加わった属性（2006/01 の XSD にはない）
+  a({ name: 'invalidateContentOnDrop', kind: 'bool', category: '詳細', desc: '開くたびに中身を作り直す', since2010: true }),
+  // ギャラリーをリボン上に直接並べるか。customUI14 で加わった属性（実機の Excel では未確認）
+  a({ name: 'showInRibbon', kind: 'bool', category: '表示', desc: 'ギャラリーの項目をリボン上に直接並べる', since2010: true }),
   a({ name: 'alignLabel', kind: 'enum', category: '表示', desc: 'ラベルの位置', values: ['topLeft', 'top', 'topRight', 'left', 'center', 'right', 'bottomLeft', 'bottom', 'bottomRight'], since2010: true }),
   a({ name: 'noWrap', kind: 'bool', category: '表示', desc: '折り返さない', since2010: true }),
   // ---- Backstage（2010以降） ----
@@ -159,7 +184,11 @@ const GROUP_CONTROLS = [
 ];
 const BOX_CONTROLS = GROUP_CONTROLS.filter((t) => t !== 'separator' && t !== 'dialogBoxLauncher');
 const MENU_CONTROLS = ['button', 'toggleButton', 'checkBox', 'splitButton', 'menu', 'dynamicMenu', 'gallery', 'menuSeparator', 'control'];
-const QAT_CONTROLS = ['button', 'toggleButton', 'checkBox', 'splitButton', 'menu', 'dynamicMenu', 'gallery', 'dropDown', 'comboBox', 'editBox', 'labelControl', 'box', 'buttonGroup', 'separator', 'control'];
+// QAT（sharedControls / documentControls）に置けるのは control・button・separator だけ（CT_QatItems）
+const QAT_CONTROLS = ['control', 'button', 'separator'];
+/** id / idQ / tag だけを持つ要素（box・buttonGroup・separator は idMso で組み込みを指せない）。 */
+const ID_ONLY = ['id', 'idQ', 'tag'];
+const one = (tag: string): ChildSlot => ({ tags: [tag], max: 1 });
 
 const e = (def: Omit<ElementDef, 'idRequired' | 'isControl'> & Partial<ElementDef>): ElementDef => ({
   idRequired: false,
@@ -167,40 +196,48 @@ const e = (def: Omit<ElementDef, 'idRequired' | 'isControl'> & Partial<ElementDe
   ...def,
 });
 
+// gallery / dropDown は item を並べた後ろに button を置く（XSD の sequence。上限は item 1000、button 16）
+const ITEMS_THEN_BUTTONS: readonly ChildSlot[] = [{ tags: ['item'], max: 1000 }, { tags: ['button'], max: 16 }];
+
 const elementList: ElementDef[] = [
-  e({ tag: 'customUI', title: 'customUI', attrs: ['onLoad', 'loadImage'], children: ['commands', 'ribbon', 'backstage', 'contextMenus'] }),
+  e({ tag: 'customUI', title: 'customUI', attrs: ['onLoad', 'loadImage'], children: ['commands', 'ribbon', 'backstage', 'contextMenus'], childOrder: [one('commands'), one('ribbon'), one('backstage'), one('contextMenus')] }),
   // backstage の中身は backstageElements で定義する（ここは customUI 直下に置けることを示すため）
   e({ tag: 'backstage', title: 'Backstage', attrs: ['onShow', 'onHide'], children: ['tab', 'button'], since2010: true }),
   e({ tag: 'commands', title: 'コマンドの上書き', attrs: [], children: ['command'] }),
   e({ tag: 'command', title: 'コマンド', attrs: ['idMso', ...EN, 'onAction'], children: [], idRequired: true }),
-  e({ tag: 'ribbon', title: 'リボン', attrs: ['startFromScratch'], children: ['officeMenu', 'qat', 'tabs', 'contextualTabs'] }),
-  e({ tag: 'officeMenu', title: 'Officeメニュー（2007）', attrs: [], children: MENU_CONTROLS, opaque: true }),
-  e({ tag: 'qat', title: 'クイックアクセスツールバー', attrs: [], children: ['sharedControls', 'documentControls'] }),
+  e({ tag: 'ribbon', title: 'リボン', attrs: ['startFromScratch'], children: ['officeMenu', 'qat', 'tabs', 'contextualTabs'], childOrder: [one('officeMenu'), one('qat'), one('tabs'), one('contextualTabs')] }),
+  e({ tag: 'officeMenu', title: 'Officeメニュー（2007）', attrs: [], children: MENU_CONTROLS, opaque: true, only2007: true }),
+  e({ tag: 'qat', title: 'クイックアクセスツールバー', attrs: [], children: ['sharedControls', 'documentControls'], childOrder: [one('sharedControls'), one('documentControls')] }),
   e({ tag: 'sharedControls', title: '共有コントロール', attrs: [], children: QAT_CONTROLS }),
   e({ tag: 'documentControls', title: 'ブック固有のコントロール', attrs: [], children: QAT_CONTROLS }),
   e({ tag: 'tabs', title: 'タブの一覧', attrs: [], children: ['tab'] }),
   e({ tag: 'contextualTabs', title: 'コンテキストタブ', attrs: [], children: ['tabSet'] }),
   e({ tag: 'tabSet', title: 'タブセット', attrs: ['idMso', ...VIS], children: ['tab'], idRequired: true }),
   e({ tag: 'tab', title: 'タブ', attrs: [...ID, ...INSERT, ...LABEL, ...VIS, ...KEYTIP], children: ['group'], idRequired: true }),
-  e({ tag: 'group', title: 'グループ', attrs: [...ID, ...INSERT, ...LABEL, ...IMG, ...VIS, ...TIPS, ...KEYTIP, 'autoScale', 'centerVertically'], children: GROUP_CONTROLS, idRequired: true }),
+  e({ tag: 'group', title: 'グループ', attrs: [...ID, ...INSERT, ...LABEL, ...IMG, ...VIS, ...TIPS, ...KEYTIP, 'autoScale', 'centerVertically'], children: GROUP_CONTROLS, idRequired: true,
+    // dialogBoxLauncher は1つまでで、ほかのコントロールの後ろ（末尾）に置く（CT_Group の sequence）
+    childOrder: [{ tags: GROUP_CONTROLS.filter((x) => x !== 'dialogBoxLauncher') }, one('dialogBoxLauncher')] }),
   e({ tag: 'button', title: 'ボタン', attrs: [...BUTTONLIKE, 'onAction'], children: [], idRequired: true, isControl: true }),
   e({ tag: 'toggleButton', title: 'トグルボタン', attrs: [...BUTTONLIKE, 'getPressed', 'onAction'], children: [], idRequired: true, isControl: true }),
   e({ tag: 'checkBox', title: 'チェックボックス', attrs: [...ID, ...INSERT, ...LABEL, ...VIS, ...EN, ...TIPS, ...KEYTIP, ...DESC, 'getPressed', 'onAction'], children: [], idRequired: true, isControl: true }),
-  e({ tag: 'splitButton', title: '分割ボタン', attrs: [...ID, ...INSERT, ...SIZE, ...VIS, ...EN, ...SHOWLABEL, ...KEYTIP], children: ['button', 'toggleButton', 'menu'], idRequired: true, isControl: true }),
+  e({ tag: 'splitButton', title: '分割ボタン', attrs: [...ID, ...INSERT, ...SIZE, ...VIS, ...EN, ...SHOWLABEL, ...KEYTIP], children: ['button', 'toggleButton', 'menu'], idRequired: true, isControl: true,
+    // 先頭に button か toggleButton をちょうど1つ、その後ろに menu をちょうど1つ
+    childOrder: [{ tags: ['button', 'toggleButton'], min: 1, max: 1 }, { tags: ['menu'], min: 1, max: 1 }] }),
   e({ tag: 'menu', title: 'メニュー', attrs: [...BUTTONLIKE, 'itemSize'], children: MENU_CONTROLS, idRequired: true, isControl: true }),
   e({ tag: 'dynamicMenu', title: '動的メニュー', attrs: [...BUTTONLIKE, 'getContent', 'invalidateContentOnDrop'], children: [], idRequired: true, isControl: true }),
-  e({ tag: 'gallery', title: 'ギャラリー', attrs: [...BUTTONLIKE, 'columns', 'rows', 'itemWidth', 'itemHeight', 'getItemWidth', 'getItemHeight', 'showItemLabel', 'showItemImage', 'sizeString', ...ITEMS, 'getSelectedItemID', 'getSelectedItemIndex', 'onAction', 'invalidateContentOnDrop'], children: ['item', 'button'], idRequired: true, isControl: true }),
-  e({ tag: 'dropDown', title: 'ドロップダウン', attrs: [...ID, ...INSERT, ...LABEL, ...IMG, ...VIS, ...EN, ...SHOWLABEL, ...SHOWIMG, ...TIPS, ...KEYTIP, 'sizeString', 'showItemLabel', 'showItemImage', ...ITEMS, 'getSelectedItemID', 'getSelectedItemIndex', 'onAction'], children: ['item', 'button'], idRequired: true, isControl: true }),
+  e({ tag: 'gallery', title: 'ギャラリー', attrs: [...BUTTONLIKE, 'columns', 'rows', 'itemWidth', 'itemHeight', 'getItemWidth', 'getItemHeight', 'showItemLabel', 'showItemImage', 'sizeString', ...ITEMS, 'getSelectedItemID', 'getSelectedItemIndex', 'onAction', 'invalidateContentOnDrop', 'showInRibbon'], children: ['item', 'button'], idRequired: true, isControl: true, childOrder: ITEMS_THEN_BUTTONS }),
+  e({ tag: 'dropDown', title: 'ドロップダウン', attrs: [...ID, ...INSERT, ...LABEL, ...IMG, ...VIS, ...EN, ...SHOWLABEL, ...SHOWIMG, ...TIPS, ...KEYTIP, 'sizeString', 'showItemLabel', 'showItemImage', ...ITEMS, 'getSelectedItemID', 'getSelectedItemIndex', 'onAction'], children: ['item', 'button'], idRequired: true, isControl: true, childOrder: ITEMS_THEN_BUTTONS }),
   e({ tag: 'comboBox', title: 'コンボボックス', attrs: [...ID, ...INSERT, ...LABEL, ...IMG, ...VIS, ...EN, ...SHOWLABEL, ...SHOWIMG, ...TIPS, ...KEYTIP, 'sizeString', 'maxLength', 'showItemImage', ...ITEMS, 'getText', 'onChange', 'invalidateContentOnDrop'], children: ['item'], idRequired: true, isControl: true }),
   e({ tag: 'editBox', title: 'テキストボックス', attrs: [...ID, ...INSERT, ...LABEL, ...IMG, ...VIS, ...EN, ...SHOWLABEL, ...SHOWIMG, ...TIPS, ...KEYTIP, 'sizeString', 'maxLength', 'getText', 'onChange'], children: [], idRequired: true, isControl: true }),
   e({ tag: 'labelControl', title: 'ラベル', attrs: [...ID, ...INSERT, ...LABEL, ...VIS, ...EN, ...SHOWLABEL, ...TIPS], children: [], idRequired: true, isControl: true }),
-  e({ tag: 'box', title: 'ボックス', attrs: [...ID, ...INSERT, ...VIS, 'boxStyle'], children: BOX_CONTROLS, isControl: true }),
-  e({ tag: 'buttonGroup', title: 'ボタングループ', attrs: [...ID, ...INSERT, ...VIS], children: ['button', 'toggleButton', 'splitButton', 'menu', 'dynamicMenu', 'gallery', 'control'], isControl: true }),
-  e({ tag: 'separator', title: '区切り線', attrs: [...ID, ...INSERT, ...VIS], children: [], isControl: true }),
+  e({ tag: 'box', title: 'ボックス', attrs: [...ID_ONLY, ...INSERT, ...VIS, 'boxStyle'], children: BOX_CONTROLS, isControl: true }),
+  e({ tag: 'buttonGroup', title: 'ボタングループ', attrs: [...ID_ONLY, ...INSERT, ...VIS], children: ['button', 'toggleButton', 'splitButton', 'menu', 'dynamicMenu', 'gallery', 'control'], isControl: true }),
+  e({ tag: 'separator', title: '区切り線', attrs: [...ID_ONLY, ...INSERT, ...VIS], children: [], isControl: true }),
   e({ tag: 'menuSeparator', title: 'メニューの区切り線', attrs: ['id', 'idQ', 'tag', ...INSERT, 'title', 'getTitle'], children: [], isControl: true }),
   e({ tag: 'control', title: '組み込みコントロール', attrs: [...BUTTONLIKE], children: [], idRequired: true, isControl: true }),
-  e({ tag: 'dialogBoxLauncher', title: 'ダイアログ起動ツール', attrs: [], children: ['button'], isControl: true }),
-  e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'image', 'imageMso', 'screentip', 'supertip'], children: [], idRequired: true }),
+  e({ tag: 'dialogBoxLauncher', title: 'ダイアログ起動ツール', attrs: [], children: ['button'], isControl: true, childOrder: [{ tags: ['button'], min: 1, max: 1 }] }),
+  // item の id は XSD では省略できる（項目の識別は getItemID や番号でもできるため）
+  e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'image', 'imageMso', 'screentip', 'supertip'], children: [] }),
   e({ tag: 'contextMenus', title: 'コンテキストメニューの一覧', attrs: [], children: ['contextMenu'], since2010: true }),
   e({ tag: 'contextMenu', title: 'コンテキストメニュー', attrs: ['idMso'], children: MENU_CONTROLS, idRequired: true, since2010: true }),
 ];
@@ -215,11 +252,12 @@ const BS_COMMON = [...ID, ...INSERT, ...LABEL, ...VIS, ...EN, ...KEYTIP];
 
 const backstageList: ElementDef[] = [
   e({ tag: 'backstage', title: 'Backstage', attrs: ['onShow', 'onHide'], children: ['tab', 'button'], ...BS }),
-  e({ tag: 'tab', title: 'Backstageのタブ', attrs: [...BS_COMMON, 'title', 'getTitle', 'columnWidthPercent', 'firstColumnMinWidth', 'firstColumnMaxWidth', 'secondColumnMinWidth', 'secondColumnMaxWidth'], children: ['firstColumn', 'secondColumn'], idRequired: true, ...BS }),
+  e({ tag: 'tab', title: 'Backstageのタブ', attrs: [...BS_COMMON, 'title', 'getTitle', 'columnWidthPercent', 'firstColumnMinWidth', 'firstColumnMaxWidth', 'secondColumnMinWidth', 'secondColumnMaxWidth'], children: ['firstColumn', 'secondColumn'], idRequired: true, childOrder: [one('firstColumn'), one('secondColumn')], ...BS }),
   e({ tag: 'firstColumn', title: '1列目', attrs: [], children: ['group', 'taskGroup', 'taskFormGroup'], ...BS }),
   e({ tag: 'secondColumn', title: '2列目', attrs: [], children: ['group', 'taskGroup', 'taskFormGroup'], ...BS }),
-  e({ tag: 'group', title: 'Backstageのグループ', attrs: [...ID, ...INSERT, ...LABEL, ...VIS, 'helperText', 'getHelperText', 'style', 'getStyle', 'showLabel', 'getShowLabel'], children: ['primaryItem', 'topItems', 'bottomItems'], idRequired: true, ...BS }),
-  e({ tag: 'primaryItem', title: '主な項目', attrs: [], children: ['button', 'menu'], ...BS }),
+  e({ tag: 'group', title: 'Backstageのグループ', attrs: [...ID, ...INSERT, ...LABEL, ...VIS, 'helperText', 'getHelperText', 'style', 'getStyle', 'showLabel', 'getShowLabel'], children: ['primaryItem', 'topItems', 'bottomItems'], idRequired: true, childOrder: [one('primaryItem'), one('topItems'), one('bottomItems')], ...BS }),
+  // primaryItem には button か menu のどちらか1つだけを置く
+  e({ tag: 'primaryItem', title: '主な項目', attrs: [], children: ['button', 'menu'], childOrder: [{ tags: ['button', 'menu'], min: 1, max: 1 }], ...BS }),
   e({ tag: 'topItems', title: '上の項目', attrs: [], children: BS_ITEMS, ...BS }),
   e({ tag: 'bottomItems', title: '下の項目', attrs: [], children: BS_ITEMS, ...BS }),
   e({ tag: 'taskGroup', title: 'タスクグループ', attrs: [...ID, ...INSERT, ...LABEL, ...VIS, 'helperText', 'getHelperText', 'showLabel', 'getShowLabel'], children: ['category'], idRequired: true, ...BS }),
@@ -233,13 +271,14 @@ const backstageList: ElementDef[] = [
   e({ tag: 'comboBox', title: 'コンボボックス', attrs: [...BS_COMMON, ...TIPS, 'sizeString', 'maxLength', ...ITEMS, 'getText', 'onChange'], children: ['item'], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'radioGroup', title: 'ラジオボタン', attrs: [...BS_COMMON, ...TIPS, ...ITEMS, 'getSelectedItemIndex', 'onAction'], children: ['radioButton'], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'radioButton', title: 'ラジオボタンの選択肢', attrs: ['id', 'label'], children: [], idRequired: true, ...BS }),
-  e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'image', 'imageMso'], children: [], idRequired: true, ...BS }),
+  e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'image', 'imageMso'], children: [], ...BS }),
   e({ tag: 'hyperlink', title: 'リンク', attrs: [...BS_COMMON, ...IMG, ...TIPS, 'target', 'getTarget', 'onAction'], children: [], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'labelControl', title: 'ラベル', attrs: [...BS_COMMON, 'noWrap'], children: [], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'imageControl', title: '画像', attrs: [...ID, ...INSERT, ...VIS, ...EN, ...IMG, 'altText', 'getAltText'], children: [], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'groupBox', title: '枠', attrs: [...ID, ...INSERT, ...LABEL, 'expand'], children: BS_ITEMS, isControl: true, ...BS }),
   e({ tag: 'layoutContainer', title: 'レイアウト', attrs: [...ID, ...INSERT, 'layoutChildren', 'align', 'expand'], children: BS_ITEMS, isControl: true, ...BS }),
-  e({ tag: 'menu', title: 'メニュー', attrs: [...BS_COMMON, ...IMG, ...TIPS, ...DESC], children: ['button', 'checkBox', 'menu', 'toggleButton', 'menuGroup'], idRequired: true, isControl: true, ...BS }),
+  // Backstage の menu の直下に置けるのは menuGroup だけ。ボタンなどは menuGroup の中に入れる（customUI14.xsd の CT_BackstageMenuBase）
+  e({ tag: 'menu', title: 'メニュー', attrs: [...BS_COMMON, ...IMG, ...TIPS, ...DESC], children: ['menuGroup'], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'menuGroup', title: 'メニューのグループ', attrs: [...ID, ...INSERT, ...LABEL, 'itemSize'], children: ['button', 'checkBox', 'menu', 'toggleButton'], ...BS }),
   e({ tag: 'toggleButton', title: 'トグルボタン', attrs: [...BS_COMMON, ...IMG, ...TIPS, ...DESC, 'getPressed', 'onAction'], children: [], idRequired: true, isControl: true, ...BS }),
 ];
@@ -252,14 +291,36 @@ export function inBackstage(el: Element | null): boolean {
   return false;
 }
 
+/**
+ * メニューやボタングループなどの中に置くコントロールは、XSD では「Regular」の型になり、size / getSize を持たない。
+ * （CT_ButtonRegular など。menu・buttonGroup・splitButton・dialogBoxLauncher・contextMenu・QAT・officeMenu の中）
+ */
+const REGULAR_PARENTS = new Set(['menu', 'buttonGroup', 'splitButton', 'dialogBoxLauncher', 'contextMenu', 'sharedControls', 'documentControls', 'officeMenu']);
+const regularDefs = new Map<string, ElementDef>();
+
+function regularDef(def: ElementDef): ElementDef {
+  if (!def.attrs.includes('size')) return def;
+  let r = regularDefs.get(def.tag);
+  if (!r) {
+    r = { ...def, attrs: def.attrs.filter((n) => n !== 'size' && n !== 'getSize') };
+    regularDefs.set(def.tag, r);
+  }
+  return r;
+}
+
+function ribbonDefIn(parentTag: string | undefined, tag: string): ElementDef | undefined {
+  const def = elements.get(tag);
+  return def && parentTag !== undefined && REGULAR_PARENTS.has(parentTag) ? regularDef(def) : def;
+}
+
 /** 要素の場所に応じた定義を返す。 */
 export function defFor(el: Element): ElementDef | undefined {
-  return inBackstage(el) ? backstageElements.get(el.localName) : elements.get(el.localName);
+  return inBackstage(el) ? backstageElements.get(el.localName) : ribbonDefIn(el.parentElement?.localName, el.localName);
 }
 
 /** 親要素の中に置いたときの、子要素の定義。 */
 export function defForChild(parent: Element | null, tag: string): ElementDef | undefined {
-  return (tag !== 'backstage' && inBackstage(parent)) ? backstageElements.get(tag) : elements.get(tag);
+  return (tag !== 'backstage' && inBackstage(parent)) ? backstageElements.get(tag) : ribbonDefIn(parent?.localName, tag);
 }
 
 /** 親要素の中に、その要素を置けるか。 */
@@ -288,11 +349,16 @@ export function callbackSignature(attr: string, tag: string): string {
   switch (attr) {
     case 'onLoad':
       return 'ribbon As IRibbonUI';
+    case 'onShow':
+    case 'onHide':
+      // Backstage の onShow / onHide は IRibbonControl ではなく、表示中の文書などを表す Object を受け取る
+      return 'contextObject As Object';
     case 'loadImage':
       return 'imageId As String, ByRef image';
     case 'onAction':
       if (tag === 'toggleButton' || tag === 'checkBox') return `${RC}, pressed As Boolean`;
-      if (tag === 'dropDown' || tag === 'gallery') return `${RC}, id As String, index As Integer`;
+      // Backstage の radioGroup も、dropDown と同じく選ばれた項目の id と番号を受け取る
+      if (tag === 'dropDown' || tag === 'gallery' || tag === 'radioGroup') return `${RC}, id As String, index As Integer`;
       if (tag === 'command') return `${RC}, ByRef cancelDefault`;
       return RC;
     case 'onChange':
@@ -312,8 +378,29 @@ export function callbackSignature(attr: string, tag: string): string {
   }
 }
 
-/** 名前の規則（XML の NCName に相当する、ASCII に限った簡易版）。 */
-export const ID_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+/**
+ * id の規則（XML の NCName に相当する）。日本語などの文字も使える。
+ * 先頭は文字か _、2文字目以降は文字・数字・結合文字・_ . - ・（中黒 U+00B7）。
+ */
+export const ID_PATTERN = /^[\p{L}_][\p{L}\p{N}\p{M}_.\-\u00B7]*$/u;
+
+/** XML の id（NCName）として使えるか。 */
+export function isXmlId(s: string): boolean {
+  return ID_PATTERN.test(s);
+}
+
+/**
+ * VBA の識別子（Sub 名・変数名）として使えるか。VBA は日本語などの文字も識別子に使える。
+ * 長さの上限は 255 文字。
+ */
+export function isVbaIdentifier(s: string): boolean {
+  return s.length > 0 && s.length <= 255 && /^[\p{L}_][\p{L}\p{N}_]*$/u.test(s);
+}
+
+/** 子要素の並びの中で、tag が入る枠の番号（並び順の決まりがなければ -1）。 */
+export function slotIndex(def: ElementDef | undefined, tag: string): number {
+  return def?.childOrder?.findIndex((s) => s.tags.includes(tag)) ?? -1;
+}
 
 /** id の接頭辞（種類＋連番で id を提案する）。 */
 export const ID_PREFIX: Readonly<Record<string, string>> = {

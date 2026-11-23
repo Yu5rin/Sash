@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.Core.Update;
 
@@ -27,17 +28,25 @@ public static partial class UpdateFeedLogic
     /// <summary>
     /// Atom フィードから、いちばん新しい版のタグを取り出す。並び順には頼らず、解釈できる版のうち最大のものを選ぶ
     /// （リリースの削除や作り直しで並びが変わることがあるため）。
+    /// 正式版が 1 つもないフィードなら null。Atom フィードでないもの（社内の認証ページやプロキシのエラー画面が
+    /// 200 で返ってきたときの HTML など）は FormatException を投げる。「最新です」と取り違えないようにするため。
     /// </summary>
     public static (string Tag, UpdateVersion Version)? LatestFromAtom(string xml)
     {
         XDocument doc;
         try
         {
+            // DTD は読まない（外部の実体を取りに行かないように）。XDocument.Parse の既定でも DTD は処理されない
             doc = XDocument.Parse(xml, LoadOptions.None);
         }
-        catch (XmlException)
+        catch (XmlException ex)
         {
-            return null;
+            throw new FormatException(L("確認先から返ってきた内容が Atom フィードではありません（社内の認証ページなどが返っている可能性があります）。", "The update source did not return an Atom feed (a sign-in page or proxy page may have been returned instead)."), ex);
+        }
+
+        if (doc.Root is not { } root || root.Name != XName.Get("feed", "http://www.w3.org/2005/Atom"))
+        {
+            throw new FormatException(L("確認先から返ってきた内容が Atom フィードではありません（社内の認証ページなどが返っている可能性があります）。", "The update source did not return an Atom feed (a sign-in page or proxy page may have been returned instead)."));
         }
 
         (string, UpdateVersion)? best = null;
@@ -63,9 +72,11 @@ public static partial class UpdateFeedLogic
     /// <summary>.sha256 ファイルの中身から照合値を取り出す（「値」だけでも「値  ファイル名」でもよい）。</summary>
     public static string? ParseChecksum(string text, string? expectedFileName = null)
     {
+        ArgumentNullException.ThrowIfNull(text);
         foreach (var raw in text.Split('\n'))
         {
-            var line = raw.Trim();
+            // Windows のメモ帳などで保存すると先頭に BOM（U+FEFF）が付く。Trim では落ちないので明示的に落とす
+            var line = raw.Trim().TrimStart('\uFEFF').Trim();
             var m = Sha256Line().Match(line);
             if (!m.Success)
             {
@@ -98,24 +109,29 @@ public static partial class UpdateFeedLogic
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new FormatException(L("latest.json の中身が JSON のオブジェクト（{ … }）ではありません。", "latest.json does not contain a JSON object ({ … })."));
+        }
+
         string? Str(string name) => root.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 
-        var versionText = Str("version") ?? throw new FormatException("latest.json に version がありません。");
+        var versionText = Str("version") ?? throw new FormatException(L("latest.json に version がありません。", "latest.json has no version."));
         if (!UpdateVersion.TryParse(versionText, out var version))
         {
-            throw new FormatException($"latest.json の version を版として読めません：{versionText}");
+            throw new FormatException(L($"latest.json の version を版として読めません：{versionText}", $"The version in latest.json cannot be read: {versionText}"));
         }
 
         var file = Str("file") ?? UpdateSource.AssetFileName(version);
         if (file.Contains('/') || file.Contains('\\') || file.Contains("..", StringComparison.Ordinal) || file.Contains(':'))
         {
-            throw new FormatException("latest.json の file には、同じ場所にあるファイルの名前だけを書いてください。");
+            throw new FormatException(L("latest.json の file には、同じ場所にあるファイルの名前だけを書いてください。", "The file in latest.json must be just the name of a file in the same location."));
         }
 
         var sha = Str("sha256")?.Trim().ToLowerInvariant();
         if (sha is null || !Sha256Hex().IsMatch(sha))
         {
-            throw new FormatException("latest.json に正しい sha256（64 桁の 16 進）がありません。");
+            throw new FormatException(L("latest.json に正しい sha256（64 桁の 16 進）がありません。", "latest.json has no valid sha256 (64 hexadecimal digits)."));
         }
 
         string download;

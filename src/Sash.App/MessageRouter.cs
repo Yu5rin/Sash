@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using System.Text.Json;
+using Sash.Core;
 using Sash.Core.CustomUI;
 using Sash.Core.Packaging;
 using Sash.Core.Settings;
@@ -55,15 +56,57 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "vba.insert" => await InsertVbaAsync(Read<VbaInsertRequest>(body)),
                 "vba.replaceLine" => await ReplaceLineAsync(Read<VbaReplaceRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
+                "backup.list" => BackupList(Read<PathRequest>(body)),
+                "backup.restore" => BackupRestore(Read<BackupRestoreRequest>(body)),
                 _ => throw new InvalidOperationException(L($"不明な要求です：{request.Type}", $"Unknown request: {request.Type}")),
             };
             return new HostResponse(request.Id, true, payload, null);
         }
         catch (Exception ex)
         {
-            return new HostResponse(request.Id, false, null, ex.InnerException is IOException io ? io.Message : ex.Message);
+            return new HostResponse(request.Id, false, null, DescribeError(ex));
         }
     }
+
+    /// <summary>
+    /// 失敗を利用者向けの文言にする。利用者向けに書いた文言（UserFacingException）があればそれを優先し、
+    /// Excel が忙しいときやファイルが別のプログラムに開かれているときは、何をすればよいかがわかる文言にする。
+    /// </summary>
+    private static string DescribeError(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is UserFacingException)
+            {
+                return e.Message;
+            }
+        }
+
+        if (ExcelService.IsBusy(ex))
+        {
+            return ExcelService.BusyMessage;
+        }
+
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is IOException io && IsSharingViolation(io))
+            {
+                return L("ファイルが別のプログラム（Excelなど）で開かれているため、書き込めません。Excelで開いている場合は「反映（F5）」を使うか、Excelでブックを閉じてからやり直してください。",
+                    "The file is open in another program (such as Excel) and cannot be written. If it is open in Excel, use Apply (F5), or close the workbook in Excel and try again.");
+            }
+        }
+
+        if (ex is UnauthorizedAccessException)
+        {
+            return L($"ファイルにアクセスする権限がありません：{ex.Message}", $"Access to the file was denied: {ex.Message}");
+        }
+
+        return ex.Message;
+    }
+
+    /// <summary>共有違反（ERROR_SHARING_VIOLATION = 32）かロック違反（ERROR_LOCK_VIOLATION = 33）か。</summary>
+    private static bool IsSharingViolation(IOException ex) =>
+        ex.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021);
 
     private static T Read<T>(JsonElement? body) =>
         body is { } b ? b.Deserialize<T>(HostJson.Options) ?? throw new InvalidOperationException(L("要求の内容が空です。", "The request is empty.")) : throw new InvalidOperationException(L("要求の内容が空です。", "The request is empty."));
@@ -117,7 +160,15 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         }
 
         var doc = RibbonPackage.Load(path);
-        settings.AddRecent(doc.Path);
+        try
+        {
+            settings.AddRecent(doc.Path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UserFacingException)
+        {
+            // 最近使ったファイルに載せられないだけなので、開くことは続ける
+        }
+
         return new
         {
             path = doc.Path,
@@ -137,35 +188,57 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             p.AddImages.Select(i => new NewImage(i.Id, Convert.FromBase64String(i.Base64))).ToList(),
             p.RemoveImages)).ToList();
 
-    /// <summary>バックアップを取ってから書き込む。バックアップのパスを返す。</summary>
-    private string BackupAndWrite(string path, IReadOnlyList<PartDto> parts)
+    private BackupService Backups() =>
+        new(AppPaths.Backups, Math.Max(1, settings.Load().BackupGenerations));
+
+    /// <summary>
+    /// 保存・反映の前に、書き込める状態かを確かめる。ないファイルや読み取り専用のファイルは、
+    /// バックアップを取ったり Excel のブックを閉じたりする前に、わかる言葉で断る。
+    /// </summary>
+    private static string CheckWritable(string path)
     {
-        var generations = settings.Load().BackupGenerations;
-        var backup = new BackupService(AppPaths.Backups, Math.Max(1, generations)).Backup(path);
-        RibbonPackage.Save(path, ToChanges(parts));
-        return backup;
+        var full = Path.GetFullPath(path);
+        var info = new FileInfo(full);
+        if (!info.Exists)
+        {
+            throw new UserFacingException(L($"ファイルが見つかりません：{full}", $"File not found: {full}"));
+        }
+
+        if (info.IsReadOnly)
+        {
+            throw new UserFacingException(L($"読み取り専用のファイルのため保存できません。ファイルのプロパティで「読み取り専用」を外してください：{full}", $"The file is read-only and cannot be saved. Clear the Read-only attribute in the file properties: {full}"));
+        }
+
+        return full;
     }
 
     private object SaveFile(SaveRequest req)
     {
-        if (ExcelInstalled && IsLockedByExcel(req.Path))
+        var path = CheckWritable(req.Path);
+        var changes = ToChanges(req.Parts);
+        if (ExcelInstalled)
         {
-            throw new InvalidOperationException(L("Excelでこのブックが開かれているため保存できません。「反映（F5）」を使うと、Excelで閉じて書き込み、開き直します。", "This workbook is open in Excel and cannot be saved. Use Apply (F5) to close it in Excel, write the changes, and reopen it."));
+            ThrowIfOpenElsewhere(path, L("Excelでこのブックが開かれているため保存できません。「反映（F5）」を使うと、Excelで閉じて書き込み、開き直します。", "This workbook is open in Excel and cannot be saved. Use Apply (F5) to close it in Excel, write the changes, and reopen it."));
         }
 
-        return new { backup = BackupAndWrite(req.Path, req.Parts) };
+        var backup = Backups().Backup(path);
+        RibbonPackage.Save(path, changes);
+        return new { backup };
     }
 
-    private static bool IsLockedByExcel(string path)
+    /// <summary>
+    /// ほかのプログラム（ふつうは Excel）がファイルを開いていれば、message で断る。
+    /// 共有違反のときだけを「開かれている」とみなす（ないファイルや権限がないときは、その理由のまま伝える）。
+    /// </summary>
+    private static void ThrowIfOpenElsewhere(string path, string message)
     {
         try
         {
             using var _ = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            return false;
         }
-        catch (IOException)
+        catch (IOException ex) when (IsSharingViolation(ex))
         {
-            return true;
+            throw new UserFacingException(message, ex);
         }
     }
 
@@ -202,7 +275,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         using var dialog = new OpenFileDialog
         {
-            Filter = L("アイコンを含むファイル (*.exe;*.dll;*.ocx;*.cpl;*.icl)|*.exe;*.dll;*.ocx;*.cpl;*.icl|すべてのファイル (*.*)|*.*", "Files with icons (*.exe;*.dll;*.ocx;*.cpl;*.icl)|*.exe;*.dll;*.ocx;*.cpl;*.icl|All files (*.*)|*.*"),
+            // .icl は 16 ビットの NE 形式で LoadLibraryEx では読めないので、候補に出さない
+            Filter = L("アイコンを含むファイル (*.exe;*.dll;*.ocx;*.cpl)|*.exe;*.dll;*.ocx;*.cpl|すべてのファイル (*.*)|*.*", "Files with icons (*.exe;*.dll;*.ocx;*.cpl)|*.exe;*.dll;*.ocx;*.cpl|All files (*.*)|*.*"),
             Title = L("アイコンを取り出すファイルを選ぶ", "Choose a file to extract icons from"),
         };
         if (dialog.ShowDialog(owner) != DialogResult.OK)
@@ -286,10 +360,21 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         var lib = Library();
         var favorites = settings.Load().IconFavorites.ToHashSet(StringComparer.Ordinal);
-        return new
+        var icons = new List<object>();
+        foreach (var i in lib.List())
         {
-            root = lib.Root,
-            icons = lib.List().Select(i => new
+            byte[] png;
+            try
+            {
+                png = lib.ReadPng(i.Id);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // 共有フォルダで別の人が消している途中など。1 つ読めないだけで一覧全体を失敗させない
+                continue;
+            }
+
+            icons.Add(new
             {
                 id = i.Id,
                 name = i.Name,
@@ -297,9 +382,11 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 createdAt = i.CreatedAt,
                 hasSource = i.SourceName is not null,
                 favorite = favorites.Contains(i.Id),
-                png = Convert.ToBase64String(lib.ReadPng(i.Id)),
-            }),
-        };
+                png = Convert.ToBase64String(png),
+            });
+        }
+
+        return new { root = lib.Root, icons };
     }
 
     private object? LibraryGet(IdRequest req)
@@ -394,7 +481,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private SettingsDto SetSettings(SettingsDto patch) => ToDto(SettingsLanguage.Apply(settings.Update(s => s with
     {
-        Theme = patch.Theme ?? s.Theme,
+        Theme = patch.Theme is "system" or "light" or "dark" ? patch.Theme : s.Theme,
         XmlOnTop = patch.XmlOnTop ?? s.XmlOnTop,
         IconSize = patch.IconSize is 32 or 64 ? patch.IconSize.Value : s.IconSize,
         RibbonErrorsHintShown = patch.RibbonErrorsHintShown ?? s.RibbonErrorsHintShown,
@@ -412,16 +499,23 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private async Task<object> ApplyAsync(ApplyRequest req)
     {
+        var path = CheckWritable(req.Path);
+        var changes = ToChanges(req.Parts);
+        var service = Backups();
         string? backup = null;
-        void Write() => backup = BackupAndWrite(req.Path, req.Parts);
+
+        // バックアップと書き込みは分けて渡す。書き込みはロックが外れるまでやり直されるが、バックアップは 1 回だけ取る
+        void Backup() => backup = service.Backup(path);
+        void Write() => RibbonPackage.Save(path, changes);
 
         if (!ExcelInstalled)
         {
+            Backup();
             Write();
             return new { status = "written", message = L("Excelが見つからないため、ファイルに書き込みました", "Excel was not found, so the changes were written to the file"), backup };
         }
 
-        var result = await excel.Value.ApplyAsync(req.Path, req.SaveIfDirty, Write, req.ActivateTab);
+        var result = await excel.Value.ApplyAsync(path, req.SaveIfDirty, Backup, Write, req.ActivateTab);
         return new
         {
             status = result.Status switch
@@ -434,6 +528,52 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             message = result.Message,
             backup,
         };
+    }
+
+    // ---- バックアップ（仕様書 §5.1） ----
+    //
+    // 要求と応答の形（UI の bridge.ts 側はまだない。つなぐときはこれに合わせる）:
+    //   "backup.list"    要求 { path: string }
+    //                    応答 { path: string; createdAt: string（ISO 8601）; size: number }[]（新しい順）
+    //   "backup.restore" 要求 { path: string; backupPath: string }
+    //                    応答 { backup: string | null }（戻す前に取った、今のファイルのバックアップ。今のファイルがなければ null）
+    // backupPath は backup.list が返したもの（そのブックのバックアップのフォルダの中のもの）だけを受け付ける。
+    // Excel でブックを開いているときは戻さずに断る（開き直しはしない）。
+
+    private object BackupList(PathRequest req) =>
+        Backups().ListEntries(Path.GetFullPath(req.Path))
+            .Select(e => new { path = e.Path, createdAt = e.CreatedAt, size = e.Size })
+            .ToList();
+
+    private object BackupRestore(BackupRestoreRequest req)
+    {
+        var target = Path.GetFullPath(req.Path);
+        if (!RibbonPackage.IsSupported(target))
+        {
+            throw new UserFacingException(L(".xlsm / .xlam / .xltm / .xlsb のみ戻せます。", "Only .xlsm / .xlam / .xltm / .xlsb files can be restored."));
+        }
+
+        var service = Backups();
+        if (!service.IsBackupOf(req.BackupPath, target))
+        {
+            throw new UserFacingException(L("指定されたファイルは、このブックのバックアップではありません。", "The specified file is not a backup of this workbook."));
+        }
+
+        if (ExcelInstalled && File.Exists(target))
+        {
+            ThrowIfOpenElsewhere(target, L("Excelでこのブックが開かれているため戻せません。Excelでブックを閉じてからやり直してください。", "This workbook is open in Excel and cannot be restored. Close it in Excel and try again."));
+        }
+
+        try
+        {
+            return new { backup = service.Restore(req.BackupPath, target) };
+        }
+        catch (IOException ex) when (IsSharingViolation(ex))
+        {
+            // 共通の文言は「反映（F5）を使う」を勧めるが、復元は反映では代われないので、閉じてからのやり直しだけを案内する
+            throw new UserFacingException(L("ブックかバックアップが別のプログラム（Excelなど）で開かれているため、戻せません。開いているプログラムでファイルを閉じてからやり直してください。",
+                "The workbook or the backup is open in another program (such as Excel) and cannot be restored. Close the file in that program and try again."), ex);
+        }
     }
 
     private ExcelService RequireExcel() =>
@@ -496,6 +636,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     private sealed record PartDto(CustomUIVersion Version, string Xml, IReadOnlyList<ImageDto> AddImages, IReadOnlyList<string> RemoveImages);
 
     private sealed record SaveRequest(string Path, IReadOnlyList<PartDto> Parts);
+
+    private sealed record BackupRestoreRequest(string Path, string BackupPath);
 
     private sealed record ApplyRequest(string Path, IReadOnlyList<PartDto> Parts, bool SaveIfDirty, string? ActivateTab = null);
 

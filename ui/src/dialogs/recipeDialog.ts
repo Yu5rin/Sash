@@ -3,14 +3,17 @@
 import { app } from '../app';
 import { invoke } from '../bridge';
 import { defaultCallbackName, vba } from '../callbacks';
-import { allElements, pathOf } from '../model';
+import { allElements, pathOf, serialize } from '../model';
 import { builtinRecipes, insertInstance, instantiate, recipeFromElement, type Recipe } from '../recipes';
 import { generateStub, parseProcedures, procedureCode, RIBBON_HOLDER_MODULE, RIBBON_HOLDER_MODULE_NAME } from '../vba';
+import { copyText } from '../clipboard';
+import type { ToastKind } from '../shell/toast';
 import { h } from '../dom';
 import { ask, openModal } from './modal';
+import type { Instance } from '../recipes';
 import { t } from '../i18n';
 
-type Toast = (msg: string, kind?: 'info' | 'error') => void;
+type Toast = (msg: string, kind?: ToastKind) => void;
 
 async function loadCustom(): Promise<Recipe[]> {
   try {
@@ -20,8 +23,52 @@ async function loadCustom(): Promise<Recipe[]> {
   }
 }
 
+/** 既存の ThisWorkbook のイベント処理と重なったもの・名前を振り直したものを、コピーボタン付きで示す。 */
+function conflictNotes(inst: Instance): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  if (inst.workbookVbaConflicts.length) {
+    out.push(h('h3', null, t('既存のイベントに次の行を追加してください')));
+    out.push(h('p', { class: 'muted' }, t('ThisWorkbook にすでに同じ名前のイベント処理があるため、自動では足しません。その Sub の中に次の行を足してください。')));
+    for (const name of inst.workbookVbaConflicts) {
+      const code = inst.workbookVbaConflictCode[name] ?? '';
+      out.push(
+        h('div', { class: 'recipe-conflict' },
+          h('div', { class: 'recipe-conflict-head' }, h('code', null, name), h('button', { type: 'button', class: 'small', onclick: () => copyText(code, t('{name} に足す行をコピーしました', { name })) }, t('コピー'))),
+          h('pre', null, code)),
+      );
+    }
+  }
+  const renamed = [...inst.renamed, ...inst.renamedProcedures];
+  if (renamed.length) {
+    out.push(h('p', { class: 'muted' }, t('重なる名前を振り直します：{list}', { list: renamed.map(([a, b]) => `${a} → ${b}`).join(t('、')) })));
+  }
+  return out;
+}
+
+/** 整形した XML（プレビュー用）。 */
+function previewXml(el: Element): string {
+  const tmp = document.implementation.createDocument(el.namespaceURI, null, null);
+  tmp.appendChild(tmp.importNode(el, true));
+  return serialize(tmp).replace(/^(<[^\s>/]+)\s+xmlns(:\w+)?="[^"]*"/, '$1').trimEnd();
+}
+
+/** 読み込めている VBA の Sub・Function の名前（重なる名前の振り直しと、イベント処理の重なりの判定に使う）。 */
+function existingVbaNames(): Set<string> {
+  return new Set((vba.modules ?? []).flatMap(parseProcedures).map((p) => p.name));
+}
+
+let recipesOpen = false;
+
 export async function openRecipes(toast: Toast): Promise<void> {
-  const custom = await loadCustom();
+  // 読み込みの間にもう一度押されても、二重に開かない
+  if (recipesOpen) return;
+  recipesOpen = true;
+  let custom: Recipe[];
+  try {
+    custom = await loadCustom();
+  } finally {
+    recipesOpen = false;
+  }
   const all = [...builtinRecipes, ...custom];
   let selected = all[0]!;
   const list = h('div', { class: 'recipe-list', role: 'listbox' });
@@ -35,31 +82,63 @@ export async function openRecipes(toast: Toast): Promise<void> {
           r.custom ? h('span', { class: 'tag' }, t('保存したレシピ')) : null),
       ),
     );
-  const renderPreview = () =>
+  // プレビューは、今の文書に入れたときの姿（id の振り直しや、既存の VBA との重なりを反映したもの）を出す
+  const renderPreview = () => {
+    let inst: Instance | null = null;
+    let error = '';
+    try {
+      const store = app.store;
+      if (store) inst = instantiate(selected, store.doc, existingVbaNames());
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    const xml = inst ? previewXml(inst.element) : selected.xml;
+    const code = inst ? inst.vba : selected.vba;
+    const wb = inst ? inst.workbookVba : selected.workbookVba ?? '';
     preview.replaceChildren(
       ...([
-      h('p', null, selected.description ? t(selected.description) : t('（説明なし）')),
-      h('h3', null, 'XML'),
-      h('pre', null, selected.xml),
-      selected.vba ? h('h3', null, t('VBA（標準モジュール）')) : null,
-      selected.vba ? h('pre', null, selected.vba) : null,
-      selected.workbookVba ? h('h3', null, t('VBA（ThisWorkbook）')) : null,
-      selected.workbookVba ? h('pre', null, selected.workbookVba) : null,
-      selected.needsRibbon ? h('p', { class: 'muted' }, t('IRibbonUI を保持する共通コード（{module}）と onLoad も一緒に入れます。', { module: RIBBON_HOLDER_MODULE_NAME })) : null,
+        h('p', null, selected.description ? t(selected.description) : t('（説明なし）')),
+        error ? h('p', { class: 'field-error' }, error) : null,
+        h('h3', null, t('挿入される XML')),
+        h('pre', null, xml),
+        code ? h('h3', null, t('VBA（標準モジュール）')) : null,
+        code ? h('pre', null, code) : null,
+        wb ? h('h3', null, t('VBA（ThisWorkbook）')) : null,
+        wb ? h('pre', null, wb) : null,
+        ...(inst ? conflictNotes(inst) : []),
+        selected.needsRibbon ? h('p', { class: 'muted' }, t('IRibbonUI を保持する共通コード（{module}）と onLoad も一緒に入れます。', { module: RIBBON_HOLDER_MODULE_NAME })) : null,
       ] as (HTMLElement | null)[]).filter((x): x is HTMLElement => x !== null),
     );
+  };
+  list.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const i = all.indexOf(selected) + (e.key === 'ArrowDown' ? 1 : -1);
+    const next = all[Math.max(0, Math.min(i, all.length - 1))]!;
+    if (next === selected) return;
+    selected = next;
+    renderList();
+    renderPreview();
+    list.querySelector<HTMLElement>('.recipe-item.active')?.focus();
+  });
 
   const apply = async () => {
     modal.close();
     try {
-      toast(await applyRecipe(selected));
+      const message = await applyRecipe(selected);
+      if (message) toast(message);
     } catch (e) {
       toast((e as Error).message, 'error');
     }
   };
   const remove = async () => {
     if (!selected.custom) return;
-    await invoke('recipes.delete', { id: selected.id });
+    try {
+      await invoke('recipes.delete', { id: selected.id });
+    } catch (e) {
+      toast((e as Error).message, 'error');
+      return;
+    }
     modal.close();
     toast(t('レシピ「{title}」を削除しました', { title: t(selected.title) }));
   };
@@ -68,35 +147,41 @@ export async function openRecipes(toast: Toast): Promise<void> {
   renderPreview();
   const modal = openModal(t('レシピを挿入'), h('div', { class: 'recipes' }, list, preview), {
     wide: true,
+    key: 'recipes',
     footer: [
-      h('button', { type: 'button', onclick: () => void remove(), class: 'left' }, t('削除')),
+      h('button', { type: 'button', onclick: () => void remove(), class: 'left', disabled: !all.some((r) => r.custom) }, t('削除')),
       h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')),
       h('button', { type: 'button', class: 'primary', onclick: () => void apply() }, t('挿入')),
     ],
   });
 }
 
-/** レシピを挿入し、VBA も入れる（Excel で開いていなければクリップボードにコピー）。 */
+/** レシピを挿入し、VBA も入れる（Excel で開いていなければクリップボードにコピー）。知らせる文言を返す（空ならもう知らせてある）。 */
 export async function applyRecipe(recipe: Recipe): Promise<string> {
   const store = app.store;
   const s = app.session;
   if (!store || !s) return '';
-  const vbaNames = new Set((vba.modules ?? []).flatMap(parseProcedures).map((p) => p.name));
-  const inst = instantiate(recipe, store.doc, vbaNames);
+  const inst = instantiate(recipe, store.doc, existingVbaNames());
 
   let onLoadName: string | null = null;
-  store.edit('canvas', (doc) => {
+  const inserted = store.edit('canvas', (doc) => {
     if (recipe.needsRibbon && !doc.documentElement.getAttribute('onLoad')) {
       onLoadName = defaultCallbackName(doc.documentElement, 'onLoad');
       doc.documentElement.setAttribute('onLoad', onLoadName);
     }
     const target = store.selection ? allElements(doc).find((e) => samePathOf(e, store.selection!)) ?? null : null;
     return insertInstance(doc, inst, store.selection, target);
-  });
+  }, t('レシピ「{title}」を挿入', { title: t(recipe.title) }));
+  // XML に入れられなかったときは、VBA だけが入って食い違わないよう、ここでやめる。
+  // 構文エラー中で断られたときは、store がすでに理由を知らせているので、重ねて知らせない（空の文言を返す）
+  if (!inserted && store.syncError) return '';
+  if (!inserted) throw new Error(t('レシピ「{title}」を挿入できませんでした', { title: t(recipe.title) }));
+  if (inst.workbookVbaConflicts.length) showConflicts(inst);
 
   let code = inst.vba;
   if (onLoadName) code = generateStub({ name: onLoadName, expected: '', uses: [{ attr: 'onLoad', tag: 'customUI', id: 'customUI', path: [] }] }) + '\r\n' + code;
-  const renamedNote = inst.renamed.size ? t('（重なる id を {list} に変えました）', { list: [...inst.renamed].map(([a, b]) => `${a}→${b}`).join(t('、')) }) : '';
+  const renamedAll = [...inst.renamed, ...inst.renamedProcedures];
+  const renamedNote = renamedAll.length ? t('（重なる名前を {list} に変えました）', { list: renamedAll.map(([a, b]) => `${a}→${b}`).join(t('、')) }) : '';
   if (!code && !inst.workbookVba) return t('レシピ「{title}」を挿入しました{note}', { title: t(recipe.title), note: renamedNote });
 
   if (vba.canWrite) {
@@ -114,7 +199,13 @@ export async function applyRecipe(recipe: Recipe): Promise<string> {
     }
   }
   const all = [recipe.needsRibbon ? `' ===== ${RIBBON_HOLDER_MODULE_NAME}${t('（まだなければ）')}=====\r\n${RIBBON_HOLDER_MODULE}` : '', `' ===== ${app.settings.callbackModule} =====\r\n${code}`, inst.workbookVba ? `' ===== ThisWorkbook =====\r\n${inst.workbookVba}` : ''].filter(Boolean).join('\r\n');
-  await navigator.clipboard.writeText(all);
+  try {
+    await navigator.clipboard.writeText(all);
+  } catch {
+    // コピーできなくても XML は入っているので、VBA は画面で見せる
+    showCode(all);
+    return t('レシピ「{title}」を挿入しました。VBA はコピーできなかったので、表示した内容を貼り付けてください', { title: t(recipe.title) });
+  }
   return t('レシピ「{title}」を挿入し、VBAをクリップボードにコピーしました{note}', { title: t(recipe.title), note: renamedNote });
 }
 
@@ -152,3 +243,19 @@ export async function saveAsRecipe(toast: Toast): Promise<void> {
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')), h('button', { type: 'button', class: 'primary', onclick: () => void save() }, t('保存'))],
   });
 }
+
+/** ThisWorkbook の既存のイベント処理に足してほしい行を、挿入のあとに示す。 */
+function showConflicts(inst: Instance): void {
+  const m = openModal(t('既存のイベントに次の行を追加してください'), h('div', { class: 'recipe-preview' }, ...conflictNotes(inst)), {
+    footer: [h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))],
+  });
+}
+
+function showCode(code: string): void {
+  const m = openModal(t('VBA'), h('div', { class: 'recipe-preview' }, h('pre', null, code)), {
+    wide: true,
+    footer: [h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))],
+  });
+}
+
+

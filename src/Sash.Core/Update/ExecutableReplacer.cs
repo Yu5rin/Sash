@@ -1,3 +1,5 @@
+using static Sash.Core.Localization.Text;
+
 namespace Sash.Core.Update;
 
 /// <summary>
@@ -23,9 +25,9 @@ public static class ExecutableReplacer
         {
             File.Copy(newExe, currentExe, overwrite: false);
         }
-        catch
+        catch (Exception ex)
         {
-            // 途中まで書かれたファイルを消し、退避した元の exe を戻す
+            // 途中まで書かれたファイルを消し、退避した元の exe を戻す。消せなくても（ウイルス対策ソフトが掴んでいるなど）戻すことは必ず試す
             try
             {
                 if (File.Exists(currentExe))
@@ -33,11 +35,22 @@ public static class ExecutableReplacer
                     File.Delete(currentExe);
                 }
             }
-            catch (IOException)
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
             {
             }
 
-            File.Move(backup, currentExe);
+            try
+            {
+                File.Move(backup, currentExe);
+            }
+            catch (Exception restore) when (restore is IOException or UnauthorizedAccessException)
+            {
+                // 戻せなかったときは、元の exe がどこに残っているかを伝える（利用者が手で名前を戻せるように）
+                throw new IOException(L(
+                    $"更新の入れ替えに失敗し、元に戻すこともできませんでした。元の版は {backup} に残っています。名前を {Path.GetFileName(currentExe)} に戻してください。（{ex.Message} / {restore.Message}）",
+                    $"Replacing the executable failed, and it could not be restored. The previous version remains at {backup}. Rename it back to {Path.GetFileName(currentExe)}. ({ex.Message} / {restore.Message})"), ex);
+            }
+
             throw;
         }
     }

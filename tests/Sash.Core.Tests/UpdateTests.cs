@@ -53,6 +53,39 @@ public class UpdateSourceTests
 
     [Fact]
     public void httpは使えない() => Assert.Throws<ArgumentException>(() => UpdateSource.Parse("http://intra.example.com/latest.json"));
+
+    [Theory]
+    [InlineData("file:///C:/Sash/latest.json")]
+    [InlineData("ftp://intra.example.com/sash/")]
+    [InlineData("updates")]
+    [InlineData(@"Sash\updates")]
+    [InlineData(@"C:Sash")]
+    [InlineData(@"\\")]
+    public void httpsでないURLや相対パスは使えない(string text) => Assert.Throws<ArgumentException>(() => UpdateSource.Parse(text));
+
+    [Theory]
+    [InlineData(@"C:\Sash\updates")]
+    [InlineData(@"\\fs\tools\Sash")]
+    [InlineData("D:/Sash")]
+    public void 完全なパスはフォルダとして使える(string text)
+    {
+        var s = UpdateSource.Parse(text);
+        Assert.Equal(UpdateSourceKind.Folder, s.Kind);
+        Assert.Equal(text, s.Location);
+    }
+
+    [Theory]
+    [InlineData("https://intra.example.com/社内 ツール/sash/", "https://intra.example.com/%E7%A4%BE%E5%86%85%20%E3%83%84%E3%83%BC%E3%83%AB/sash/latest.json")]
+    [InlineData("https://intra.example.com/my%20tools/", "https://intra.example.com/my%20tools/latest.json")]
+    public void フォルダのURLに足すlatest_jsonはエスケープしたままのURLにする(string text, string expected) =>
+        Assert.Equal(expected, UpdateSource.Parse(text).Location);
+
+    [Fact]
+    public void クエリの付いたURLもパスで判断する()
+    {
+        Assert.Equal("https://intra.example.com/sash/latest.json?token=abc", UpdateSource.Parse("https://intra.example.com/sash/latest.json?token=abc").Location);
+        Assert.Equal("https://intra.example.com/sash/latest.json?v=1", UpdateSource.Parse("https://intra.example.com/sash/?v=1").Location);
+    }
 }
 
 public class UpdateFeedLogicTests
@@ -73,7 +106,21 @@ public class UpdateFeedLogicTests
         var latest = UpdateFeedLogic.LatestFromAtom(Atom)!.Value;
         Assert.Equal("v1.10.0", latest.Tag);
         Assert.Equal(new UpdateVersion(1, 10, 0), latest.Version);
-        Assert.Null(UpdateFeedLogic.LatestFromAtom("<not xml"));
+    }
+
+    [Theory]
+    [InlineData("<not xml")]
+    [InlineData("<html><body>サインインしてください</body></html>")]
+    [InlineData("<feed><entry/></feed>")]
+    [InlineData("")]
+    public void Atomでない応答は最新とみなさず失敗にする(string body) =>
+        Assert.Throws<FormatException>(() => UpdateFeedLogic.LatestFromAtom(body));
+
+    [Fact]
+    public void 版のないフィードはnull()
+    {
+        Assert.Null(UpdateFeedLogic.LatestFromAtom("""<feed xmlns="http://www.w3.org/2005/Atom"></feed>"""));
+        Assert.Null(UpdateFeedLogic.LatestFromAtom("""<feed xmlns="http://www.w3.org/2005/Atom"><entry><link href="https://github.com/a/b/releases/tag/nightly"/></entry></feed>"""));
     }
 
     [Fact]
@@ -96,6 +143,14 @@ public class UpdateFeedLogicTests
     }
 
     [Fact]
+    public void 照合値ファイルの先頭のBOMは無視する()
+    {
+        var hash = new string('c', 64);
+        Assert.Equal(hash, UpdateFeedLogic.ParseChecksum($"\uFEFF{hash}  Sash-1.2.3-win-x64.exe\r\n", "Sash-1.2.3-win-x64.exe"));
+        Assert.Equal(hash, UpdateFeedLogic.ParseChecksum($"\uFEFF{hash}"));
+    }
+
+    [Fact]
     public void latest_jsonを共有フォルダとURLで読む()
     {
         var json = UpdateFeedLogic.BuildManifest(new UpdateVersion(1, 2, 3), new string('b', 64), "修正");
@@ -114,6 +169,9 @@ public class UpdateFeedLogicTests
     [InlineData("""{"version":"1.2.3","file":"https://evil.example.com/x.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}""")]
     [InlineData("""{"version":"1.2.3"}""")]
     [InlineData("""{"version":"x","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}""")]
+    [InlineData("""["1.2.3"]""")]
+    [InlineData("\"1.2.3\"")]
+    [InlineData("null")]
     public void 別の場所を指すものや照合値のないlatest_jsonは拒否する(string json) =>
         Assert.Throws<FormatException>(() => UpdateFeedLogic.ForManifest(UpdateSource.Parse("https://intra.example.com/sash/latest.json"), json));
 }
@@ -169,6 +227,17 @@ public class UpdatePolicyTests
         Assert.False(p.Disabled);
 
         File.WriteAllText(Path.Combine(book.BackupRoot, UpdatePolicy.FileName), "{ 壊れ");
+        Assert.True(UpdatePolicy.Load(book.BackupRoot)!.Disabled);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"\\\\fs\\tools\"")]
+    [InlineData("null")]
+    public void オブジェクトでない設定ファイルは止める(string json)
+    {
+        using var book = new TestWorkbook();
+        File.WriteAllText(Path.Combine(book.BackupRoot, UpdatePolicy.FileName), json);
         Assert.True(UpdatePolicy.Load(book.BackupRoot)!.Disabled);
     }
 }
