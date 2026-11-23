@@ -597,3 +597,7 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .catalog-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .catalog-grid .catalog-id { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; overflow: hidden; overflow-wrap: anywhere; }
 .catalog-fullname { min-height: 1.4em; padding: 0 var(--sp-1); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-subtle); overflow-wrap: anywhere; }
+/* I-1：1 属性 1 段（約 32px）。ラベル列は 2 行（日本語名＋属性名）ぶんの高さで、入力欄は上下中央に合わせる */
+.insp-row, .insp-row.has-mode { grid-template-columns: minmax(72px, 29%) 1fr; padding: 2px var(--sp-3); }
+.insp-label { padding-top: 0; justify-content: center; min-height: var(--ctl-h-sm); }
+.insp-row.has-mode .insp-bool button { font-size: 11px; }

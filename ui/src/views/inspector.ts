@@ -568,6 +568,8 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
           class: 'small',
           title: t('ラベルや連番から id を提案する'),
           'aria-haspopup': 'menu',
+          // 選んで描き直された後も、この「提案」ボタンにフォーカスが戻るように
+          dataset: { fkey: 'id:suggest' },
           onclick: (e: MouseEvent) => suggestIdMenu(el, value, input, e.currentTarget as HTMLElement),
         }, t('提案')),
       );
