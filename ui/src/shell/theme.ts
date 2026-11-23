@@ -3,7 +3,7 @@
 // こうしておくと、CSS とビューは data-theme だけを見ればよい（システムの設定を二重に調べなくてよい）。
 
 import { app } from '../app';
-import { invoke, type Settings } from '../bridge';
+import { invoke, isHosted, type Settings } from '../bridge';
 
 const darkQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 let onDarkChange: ((dark: boolean) => void) | null = null;
@@ -24,10 +24,26 @@ export function applyTheme(): void {
   document.documentElement.dataset['theme'] = dark ? 'dark' : 'light';
   document.documentElement.dataset['themeSetting'] = app.settings.theme;
   onDarkChange?.(dark);
+  syncTitleBar(dark);
   document.getElementById('app')?.classList.toggle('xml-on-top', app.settings.xmlOnTop);
 }
 
 darkQuery?.addEventListener('change', applyTheme);
+
+let titleBarDark: boolean | null = null;
+
+/**
+ * Windows が描くタイトルバーの明暗をホストに伝える。WebView2 の中のテーマはタイトルバーに届かず、
+ * ダークにしても上の帯だけ白く残るため。同じ値を何度も送らないよう、前回の値を覚えておく。
+ */
+function syncTitleBar(dark: boolean): void {
+  if (!isHosted || titleBarDark === dark) return;
+  titleBarDark = dark;
+  invoke('app.titleBarTheme', { dark }).catch(() => {
+    // 古い Windows などで失敗しても、タイトルバーの色が変わらないだけなので知らせない
+    titleBarDark = null;
+  });
+}
 
 /** 設定を変えて保存し、画面に映す。 */
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
