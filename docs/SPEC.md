@@ -145,6 +145,7 @@ XSDによる検証に加え、次の独自ルールを入力中に常時チェ�
 | EXE / DLL | 埋め込みのアイコンを一覧にして選んで取り出す（社内ツールのアイコンを流用する用途） |
 | クリップボード | Ctrl+Vで画像を貼り付ける |
 | imageMso | 組み込みアイコンをPNGとして書き出し、色替えなどの加工の元にする |
+| アイコン集（Fluent） | 同梱の Fluent UI System Icons（MIT License、24px の線 / 塗り、約2,900個）から、日本語・英語で検索して色を付けて選ぶ。出力サイズで描き直して PNG にし、アイコンエディタで加工できる。Excel は不要 |
 
 ### 6.2 アイコンエディタ（加工）
 
@@ -450,3 +451,30 @@ XMLとコールバックのVBAをセットにして挿入する。最初に用�
 ### 17.6 Windows 実機で確かめていないこと
 
 WebView2 での表示と操作、Excel 連携（COM の呼び出しのやり直し、OneDrive のパスの変換、アドインの読み直し）、VBE へのコード挿入、レシピの VBA と `modRibbonCore` の 32bit / 64bit での動作、OS のクリップボードと IME の実際の入力、バックアップからの復元は、Linux 上のビルドとテスト、ブラウザでの確認までしか行っていない。
+
+### 17.7 Excel の組み込みアイコン（imageMso）の取り込み
+
+Office のアイコンは Microsoft の著作物で、Sash（MIT）には同梱できない。そこで**利用者の PC の Excel から一度だけ取り出し、その PC の中（`%AppData%\Sash\cache\imageMso`）にだけ保存する**。取り込んだ後は、Excel を起動しなくても（Excel がなくなっても）キャッシュから表示する。
+
+| 項目 | 内容 |
+| --- | --- |
+| 取り出し方 | `CommandBars.GetImageMso(名前, 大きさ, 大きさ)` の戻り値（IPictureDisp）を、次の順に PNG にする。① `Handle`（HBITMAP）を `GetDIBits` で読む。② QueryInterface で `IPicture` を取り、`SaveAsFile` で HGLOBAL のストリームに BMP を書かせて読む。③ `IPersistStream.Save` で同じように書かせる（先頭の `lt\0\0` と長さを飛ばす）。GDI のハンドルはプロセスごとのもので、Excel は別のプロセスで動くため ① はふつう失敗する（以前アイコンがまったく出なかった原因）。BMP は Sash.Core の `BmpDecoder`（1/4/8/16/24/32bpp、BI_RGB / BI_BITFIELDS、上下どちらの並びも）で読み、アルファがすべて 0 なら不透明、そうでなければ乗算済みをストレートに戻す |
+| 一括の取り込み | 初めての起動で、Excel があり未取り込みなら、ホーム画面を出した後に裏で始める（編集は止めない）。カタログ（`excelControls.json`）から画像を持ちうる名前（タブ・タブの組・右クリックメニューを除く）を送り、32px → 16px の順に取り出す。利用者の Excel を何千回も呼ばないよう、**取り込み専用の見えない Excel を起動し、終わったら閉じる**（ブックが開かれていたら閉じずに見えるようにして引き渡す）。50 件ずつに分けて COM のスレッドに積み、その合間に反映や VBA の操作が割り込めるようにする |
+| 進み具合 | 右下の通知に「Excel のアイコンを取り込んでいます… 1,234 / 4,162」と「中止」を出す。× で閉じたら出し直さない。終わったら完了を知らせ、表示中のアイコンを描き直す。中止したら次の起動では自動で始めない（設定から始められる） |
+| キャッシュ | `<大きさ>\<名前>.png`。Excel に存在しない名前は大きさごとの `missing.json` に記録し、Excel がない PC でも「存在しない imageMso」の警告を正しく出す。取り込みを終えたら `manifest.json`（Excel の版＝`Version.Build`、大きさ、件数、日時）を書き、次の起動からは取り込み済みとして Excel を起動しない |
+| 取り込み直し | 自動ではしない。Excel の版（`EXCEL.EXE` のファイルの版から Excel を起動せずに読む）が manifest と違えば、設定画面で取り込み直しを勧める |
+| 1 件ずつの取得 | `excel.imageMso` はまずキャッシュを（COM のスレッドの外で）引き、ないものだけを起動中の Excel（なければ見えない Excel）から取る。存在しない名前は null、一時的に取れなかった名前は結果に含めない（UI は 60 秒後に取り直す）。Excel がない PC ではキャッシュだけを引く |
+| 打ち切り | 100 件続けて 1 件も画像にできなければ、変換の方法がその PC で動いていないとみなして打ち切り、失敗として理由を見せる |
+| 記録 | 取り出しの失敗は理由（例外の型と HRESULT）ごとに最初の 1 回だけ `%AppData%\Sash\logs\app.log` に書く。どの方法で取れたか（BMP の形式）も最初の 1 回だけ書く |
+| 画面 | 設定の「アイコン」に状態（取り込み済み・件数・Excel の版・日付）と「取り込む / 取り込み直す」「中止」、アイコンはこの PC の Excel から取り出しこの PC にだけ保存すること（Microsoft の著作物で同梱しないこと）を示す。imageMso のカタログでは、アイコンを出せないときに理由と「アイコンを取り込む」を出す |
+
+ホストとの要求は `icons.prefetchStatus`・`icons.prefetchStart { names, sizes?, force? }`・`icons.prefetchCancel`、進み具合はホストからの知らせ `{ event: 'iconPrefetch', state, done, total, … }`（形は `ui/src/bridge.ts` の `IconPrefetchStatus`）。状態は `none`（未取り込み・中止）・`running`・`done`・`failed`・`unavailable`（Excel がなくキャッシュもない）。
+
+**Windows 実機で確かめていないこと：** 別のプロセスの Excel から `IPicture` / `IPersistStream` を取れるか（プロキシの有無）、`SaveAsFile` が 32bpp のアルファを保った BMP を書くか、取り込み専用の Excel の起動と終了、所要時間は、Linux 上のビルドと BMP の読み込みなどの単体テスト、ブラウザでの確認までしか行っていない。
+
+### 17.8 同梱のアイコン集（Fluent UI System Icons）
+
+- 自分で作るボタン用に、Microsoft の Fluent UI System Icons（MIT License）を同梱する。Office の imageMso の画像は同梱しない（§17.7）。
+- データは `ui/src/fluent/fluentIcons.json`（24px の線 / 塗りのパスだけ）。`cd ui && npm run fluent-icons` で作り直し、生成物をコミットする（ビルドはパッケージを読まない）。ライセンスの全文は `ui/src/fluent/LICENSE-fluentui-system-icons.txt`。
+- ダイアログを開いたときだけ読み込む（起動を遅くしないため）。
+- 色の既定は Excel の明るいリボンになじむ #424242。取り込むときは自動カットを切り、余白を 0% にする（アイコン集は余白込みで大きさをそろえてあるため）。

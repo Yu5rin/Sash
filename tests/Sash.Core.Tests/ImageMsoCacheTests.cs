@@ -48,7 +48,8 @@ public class ImageMsoCacheTests
         cache.Store("AutoSum", 32, Png);
         cache.MarkMissing("Old", 16);
 
-        Assert.Equal(["AutoSum", "Old"], cache.Lookup(["AutoSum", "Old"], 16).Misses.Order());
+        // 32px の画像は 16px にはなく、16px で存在しない記録は 32px には効かない
+        Assert.Equal(["AutoSum"], cache.Lookup(["AutoSum", "Old"], 16).Misses);
         Assert.Equal(["Old"], cache.Lookup(["AutoSum", "Old"], 32).Misses);
         Assert.True(File.Exists(Path.Combine(dir.Path, "32", "AutoSum.png")));
         Assert.True(File.Exists(Path.Combine(dir.Path, "16", "missing.json")));
@@ -63,7 +64,7 @@ public class ImageMsoCacheTests
         cache.Store("../evil", 32, Png);
         var r = cache.Lookup(["../evil", "a:b", "x*", ".."], 32);
 
-        Assert.All(r.Found.Values, Assert.Null);
+        Assert.All(r.Found.Values, v => Assert.Null(v));
         Assert.Empty(r.Misses);
         Assert.False(File.Exists(Path.Combine(dir.Path, "evil.png")));
         Assert.False(ImageMsoCache.IsValidName("trailing."));

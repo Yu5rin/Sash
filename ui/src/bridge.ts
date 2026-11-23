@@ -137,6 +137,42 @@ export interface VbaModuleDto {
   code: string;
 }
 
+/** imageMso の取り込みの状態（仕様書 §17.7）。 */
+export type IconPrefetchState =
+  /** まだ取り込んでいない（中止した・一部だけ取り込んだも含む）。 */
+  | 'none'
+  | 'running'
+  | 'done'
+  | 'failed'
+  /** Excel がなく、キャッシュもない。 */
+  | 'unavailable';
+
+/** icons.prefetchStatus の応答。src/Sash.App/MessageRouter.cs の PrefetchStatusDto と対応させる。 */
+export interface IconPrefetchStatus {
+  state: IconPrefetchState;
+  /** 今回の取り込みで処理した数（名前 × 大きさ）。 */
+  done: number;
+  /** 今回の取り込みで処理する数。 */
+  total: number;
+  /** 処理中の大きさ（px）。 */
+  size: number;
+  /** 画像にできなかった数。 */
+  failed?: number;
+  /** キャッシュにある画像の数（32px）。 */
+  cached: number;
+  /** 取り込み済みのキャッシュを作った Excel の版。 */
+  excelVersion?: string | null;
+  /** 取り込みを終えた日時（ISO 8601）。 */
+  cachedAt?: string | null;
+  /** 失敗の理由・中止したことなど。 */
+  message?: string | null;
+  excelInstalled?: boolean;
+  /** いま入っている Excel の版。 */
+  currentExcelVersion?: string | null;
+  /** キャッシュを作った Excel と、いまの Excel の版が違う（取り込み直しを勧める）。 */
+  outdated?: boolean;
+}
+
 /** 要求の種類ごとの payload と応答の型。 */
 export interface HostApi {
   'app.ready': { req: undefined; res: { initialFile: string | null; updatedFrom?: string | null; version?: string } };
@@ -167,6 +203,10 @@ export interface HostApi {
   'library.chooseFolder': { req: undefined; res: string | null };
   'library.toggleFavorite': { req: { id: string }; res: boolean };
   'icons.fromExecutable': { req: undefined; res: { fileName: string; icons: { name: string; base64: string }[] } | null };
+  'icons.prefetchStatus': { req: undefined; res: IconPrefetchStatus };
+  /** 取り込みを始める（実行中ならそのまま）。force なら取り込み済みの名前も Excel から取り直す。 */
+  'icons.prefetchStart': { req: { names: string[]; sizes?: number[]; force?: boolean }; res: IconPrefetchStatus };
+  'icons.prefetchCancel': { req: undefined; res: IconPrefetchStatus };
   'recipes.list': { req: undefined; res: unknown[] };
   'recipes.save': { req: Record<string, unknown>; res: null };
   'recipes.delete': { req: { id: string }; res: null };
@@ -181,7 +221,9 @@ export interface HostApi {
 /** ホストから届く通知。 */
 export type HostEvent =
   | { event: 'closeRequested' }
-  | { event: 'fileDropped'; path: string };
+  | { event: 'fileDropped'; path: string }
+  /** imageMso の取り込みの進み具合。まとまり（50 件）ごとと、状態が変わったときに届く。 */
+  | { event: 'iconPrefetch'; state: IconPrefetchState; done: number; total: number; size?: number; failed?: number; cached?: number; message?: string | null };
 
 interface HostResponse {
   id: number;
@@ -279,6 +321,78 @@ const mockParams = new URLSearchParams(typeof location === 'undefined' ? '' : lo
 const mockExcel = mockParams.has('excel');
 const mockDelay = (ms: number) => new Promise((done) => setTimeout(done, mockParams.has('slow') ? ms : 0));
 
+// ---- imageMso の取り込みのダミー（?excel で Excel あり、?icons で取り込み済みとして始める） ----
+
+const mockPrefetch: IconPrefetchStatus & { timer?: number } = {
+  state: mockParams.has('icons') ? 'done' : mockExcel ? 'none' : 'unavailable',
+  done: 0,
+  total: 0,
+  size: 32,
+  failed: 0,
+  cached: mockParams.has('icons') ? 2081 : 0,
+  excelVersion: mockParams.has('icons') ? '16.0.19029' : null,
+  cachedAt: mockParams.has('icons') ? new Date().toISOString() : null,
+  message: null,
+  excelInstalled: mockExcel,
+  currentExcelVersion: mockExcel ? '16.0.19029' : null,
+  outdated: false,
+};
+
+function mockPrefetchSnapshot(): IconPrefetchStatus {
+  const { timer: _timer, ...rest } = mockPrefetch;
+  return { ...rest };
+}
+
+function emitMockPrefetch(): void {
+  const s = mockPrefetch;
+  const e: HostEvent = { event: 'iconPrefetch', state: s.state, done: s.done, total: s.total, size: s.size, failed: s.failed, cached: s.cached, message: s.message };
+  for (const l of eventListeners) l(e);
+}
+
+function startMockPrefetch(names: string[], sizes: number[]): void {
+  if (mockPrefetch.state === 'running') return;
+  Object.assign(mockPrefetch, { state: 'running', done: 0, total: names.length * sizes.length, size: sizes[0] ?? 32, message: null });
+  const step = Math.max(50, Math.ceil(mockPrefetch.total / 40));
+  mockPrefetch.timer = window.setInterval(() => {
+    mockPrefetch.done = Math.min(mockPrefetch.total, mockPrefetch.done + step);
+    mockPrefetch.size = mockPrefetch.done * 2 > mockPrefetch.total ? (sizes[1] ?? 32) : (sizes[0] ?? 32);
+    if (mockPrefetch.done >= mockPrefetch.total) {
+      window.clearInterval(mockPrefetch.timer);
+      Object.assign(mockPrefetch, { state: 'done', cached: names.length, excelVersion: '16.0.19029', cachedAt: new Date().toISOString() });
+    }
+    emitMockPrefetch();
+  }, mockParams.has('slow') ? 400 : 100);
+  emitMockPrefetch();
+}
+
+/** ブラウザ実行中の imageMso の代わり（名前の頭文字を色つきの四角に描く）。描けない環境（テスト）では空。 */
+function mockImageMso(names: string[], size: number): Record<string, string | null> {
+  if (mockPrefetch.state !== 'done' && mockPrefetch.cached === 0) return {};
+  const out: Record<string, string | null> = {};
+  for (const name of names) {
+    let ctx: CanvasRenderingContext2D | null = null;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    try {
+      ctx = canvas.getContext('2d');
+    } catch {
+      ctx = null;
+    }
+    if (!ctx) return {};
+    let hash = 0;
+    for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    ctx.fillStyle = `hsl(${hash % 360} 55% 45%)`;
+    ctx.fillRect(size * 0.1, size * 0.1, size * 0.8, size * 0.8);
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.round(size * 0.5)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(name.slice(0, 1), size / 2, size / 2);
+    out[name] = canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+  }
+  return out;
+}
+
 const mock = {
   settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '' } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
@@ -312,9 +426,27 @@ const mock = {
         return r(mockExcel ? [{ fullPath: 'C:\\sample\\集計ツール.xlam', isAddIn: true, isDirty: false }, { fullPath: 'C:\\Users\\you\\Documents\\月次レポート.xlsm', isAddIn: false, isDirty: true }] : []);
       case 'excel.apply':
         return mockDelay(1500).then(() => r({ status: 'written', message: t('ブラウザ実行中のため反映しません') }));
-      case 'excel.imageMso':
+      case 'excel.imageMso': {
+        const p = payload as { names: string[]; size: number };
+        return r(mockImageMso(p.names, p.size));
+      }
       case 'excel.labels':
         return r({});
+      case 'icons.prefetchStatus':
+        return r(mockPrefetchSnapshot());
+      case 'icons.prefetchStart': {
+        if (!mockExcel) return Promise.reject(new Error(t('Excel が見つからないため、アイコンを取り込めません。')));
+        const p = payload as { names: string[]; sizes?: number[] };
+        startMockPrefetch(p.names, p.sizes?.length ? p.sizes : [32, 16]);
+        return r(mockPrefetchSnapshot());
+      }
+      case 'icons.prefetchCancel':
+        if (mockPrefetch.state === 'running') {
+          window.clearInterval(mockPrefetch.timer);
+          Object.assign(mockPrefetch, { state: 'none', cached: Math.floor(mockPrefetch.done / 2), message: t('取り込みを中止しました。取り込めた分は使えます。') });
+          emitMockPrefetch();
+        }
+        return r(mockPrefetchSnapshot());
       case 'recipes.list':
         return r([]);
       case 'update.status':

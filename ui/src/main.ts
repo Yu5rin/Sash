@@ -19,7 +19,7 @@ import { openLibrary } from './dialogs/libraryDialog';
 import { uiIcons } from './icons';
 import { mountLayout } from './layout';
 import { elementAt } from './model';
-import { enableMsoIcons } from './msoIcons';
+import { initMsoIcons } from './msoIcons';
 import type { ImageEntry } from './store';
 import { defFor, titleOf } from './schema';
 import { builtinRecipes } from './recipes';
@@ -607,7 +607,8 @@ if (settings.language && settings.language !== lang && sessionGet(LANG_SYNC_KEY)
   location.reload();
 } else {
   if (settings.language === lang) sessionSet(LANG_SYNC_KEY, null);
-  enableMsoIcons(info.excelInstalled);
+  // Excel のアイコンは、取り込み済みのキャッシュがあれば Excel がなくても出す。初めての起動なら裏で取り込みを始める（仕様書 §17.7）
+  void initMsoIcons(info.excelInstalled);
   applyTheme();
   updateChrome();
   // app.info が届いてから取り直す（Excel で開いているブックが起動時に出なかった不具合の対策）
