@@ -73,12 +73,22 @@ describe('ダイアログの重なり', () => {
     expect(document.querySelectorAll('.modal').length).toBe(1);
   });
 
-  it('ask は主ボタンを右端に置き、閉じたら null を返す', async () => {
-    const p = ask('t', 'm', [{ value: 'save', label: '保存', primary: true }, { value: 'no', label: 'しない' }]);
-    const buttons = Array.from(document.querySelectorAll('.modal footer button'));
-    expect(buttons.at(-1)!.textContent).toBe('保存');
+  it('ask は Windows の並び（主ボタンが先、キャンセルが右端）にし、閉じたら null を返す', async () => {
+    // 渡す順に関係なく、［保存］［保存しない］［キャンセル］の順になる（Excel の「保存しますか？」と同じ）
+    const p = ask('t', 'm', [{ value: 'no', label: 'しない' }, { value: 'cancel', label: 'キャンセル' }, { value: 'save', label: '保存', primary: true }]);
+    const buttons = Array.from(document.querySelectorAll('.modal footer button')).map((b) => b.textContent);
+    expect(buttons).toEqual(['保存', 'しない', 'キャンセル']);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(await p).toBeNull();
+  });
+});
+
+describe('ダイアログのボタンの並び', () => {
+  it('キャンセルは主ボタンでも右端、class="left" は左端に残す', async () => {
+    const { orderFooter } = await import('../src/dialogs/modal');
+    const mk = (text: string, cls = '') => { const b = document.createElement('button'); b.textContent = text; b.className = cls; return b; };
+    const order = orderFooter([mk('キャンセル', 'primary'), mk('破棄する', 'danger'), mk('リンク', 'left')]).map((b) => b.textContent);
+    expect(order).toEqual(['リンク', '破棄する', 'キャンセル']);
   });
 });
 

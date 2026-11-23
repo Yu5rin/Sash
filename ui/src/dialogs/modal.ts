@@ -163,8 +163,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
   const closable = opts.closable ?? true;
   const size = opts.size ?? (opts.wide ? 'lg' : 'md');
   const titleId = `modal-title-${nextLayerId}`;
-  // 主ボタンは右端に置く（Microsoft 365 のダイアログと同じ並び）。class="left" のボタンは左に寄せる
-  const footerButtons = opts.footer ? [...opts.footer.filter((b) => !b.classList.contains('primary')), ...opts.footer.filter((b) => b.classList.contains('primary'))] : null;
+  const footerButtons = opts.footer ? orderFooter(opts.footer) : null;
   const dialog = h(
     'div',
     { class: `modal size-${size}${opts.wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabIndex: -1 },
@@ -222,6 +221,26 @@ export async function openOnce<T>(key: string, fn: () => T | Promise<T>): Promis
 }
 
 /** 選択肢つきの確認。押したボタンの値を返す（閉じたら null）。 */
+/** キャンセルのボタンか。ask() は data-role で、ほかのダイアログは文言で見分ける。 */
+function isCancelButton(el: HTMLElement): boolean {
+  return el.dataset['role'] === 'cancel' || (el.tagName === 'BUTTON' && el.textContent?.trim() === t('キャンセル'));
+}
+
+/**
+ * 足もとのボタンを Windows の並びにする：肯定（主ボタン）を先に、キャンセルを右端に置く。
+ * Excel の「保存しますか？」も［保存］［保存しない］［キャンセル］の順で、キャンセルが真ん中や左に来ると
+ * 押し慣れた位置と違って押し間違えやすいため。class="left" のもの（リンクなど）は左端に残す。
+ */
+export function orderFooter(items: HTMLElement[]): HTMLElement[] {
+  const left = items.filter((b) => b.classList.contains('left'));
+  const rest = items.filter((b) => !b.classList.contains('left'));
+  const cancel = rest.filter(isCancelButton);
+  const others = rest.filter((b) => !isCancelButton(b));
+  const primary = others.filter((b) => b.classList.contains('primary'));
+  const secondary = others.filter((b) => !b.classList.contains('primary'));
+  return [...left, ...primary, ...secondary, ...cancel];
+}
+
 export function ask<T extends string>(title: string, message: string, buttons: { value: T; label: string; primary?: boolean; danger?: boolean }[], opts: { detail?: HTMLElement } = {}): Promise<T | null> {
   return new Promise((resolve) => {
     let answered = false;
@@ -229,6 +248,7 @@ export function ask<T extends string>(title: string, message: string, buttons: {
       h('button', {
         type: 'button',
         class: [b.primary ? 'primary' : '', b.danger ? 'danger' : ''].filter(Boolean).join(' '),
+        dataset: b.value === 'cancel' ? { role: 'cancel' } : undefined,
         onclick: () => {
           answered = true;
           resolve(b.value);
