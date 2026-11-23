@@ -5,6 +5,7 @@
 // バージョン情報を開いたときにだけ読み込む（起動時の読み込みを重くしないため）。
 
 import fluentIcons from '../fluent/LICENSE-fluentui-system-icons.txt?raw';
+import tablerIcons from '../fluent/LICENSE-tabler-icons.txt?raw';
 import commandIds from '../catalog/LICENSE-office-fluent-ui-command-identifiers.txt?raw';
 import monacoLicense from 'monaco-editor/LICENSE?raw';
 import monacoNotices from 'monaco-editor/ThirdPartyNotices.txt?raw';
@@ -19,6 +20,7 @@ export interface LicenseEntry {
 
 export const THIRD_PARTY_LICENSES: readonly LicenseEntry[] = [
   { name: 'Fluent UI System Icons', usage: 'アイコン集', text: fluentIcons },
+  { name: 'Tabler Icons', usage: 'アイコン集', text: tablerIcons },
   { name: 'office-fluent-ui-command-identifiers', usage: 'idMso / imageMso の一覧', text: commandIds },
   { name: 'Monaco Editor', usage: 'XML エディタ', text: monacoLicense },
   { name: 'Monaco Editor — Third Party Notices', usage: 'XML エディタが含む部品', text: monacoNotices },

@@ -6,6 +6,9 @@ import { h } from '../dom';
 import { t } from '../i18n';
 import { openModal } from './modal';
 
+/** 計算が終わらないときに、エディタとモデルを捨てるまでの待ち時間の上限。 */
+const CLEANUP_TIMEOUT_MS = 5000;
+
 export function openDiff(): void {
   const s = app.session;
   if (!s) return;
@@ -23,6 +26,10 @@ export function openDiff(): void {
   const dark = document.documentElement.dataset['theme'] === 'dark' || (document.documentElement.dataset['theme'] !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
   let editor: monaco.editor.IStandaloneDiffEditor | null = null;
   let models: monaco.editor.ITextModel[] = [];
+  /** 最後に渡したモデルの差分の計算が終わったか。 */
+  let diffReady = false;
+  let disposed = false;
+  let pendingCleanup: (() => void) | null = null;
 
   const show = () => {
     const { added, removed } = current.imageChanges();
@@ -30,6 +37,7 @@ export function openDiff(): void {
     summary.replaceChildren(h('span', null, same ? t('保存済みの状態から変更はありません') : t('赤：保存済みから消えた行　緑：追加・変更した行')));
     if (added.length) summary.append(h('span', { class: 'tag' }, t('追加する画像：{list}', { list: added.join(t('、')) })));
     if (removed.length) summary.append(h('span', { class: 'tag removed' }, t('削除する画像：{list}', { list: removed.join(t('、')) })));
+    diffReady = false;
     const old = models;
     models = [monaco.editor.createModel(current.savedXml, 'xml'), monaco.editor.createModel(current.text, 'xml')];
     editor?.setModel({ original: models[0]!, modified: models[1]! });
@@ -41,11 +49,23 @@ export function openDiff(): void {
     wide: true,
     key: 'diff',
     onClose: () => {
-      // エディタを先に捨ててからモデルを捨てる（逆だと Monaco が捨てたモデルを参照して警告を出す）
-      editor?.dispose();
-      editor = null;
-      for (const m of models) m.dispose();
-      models = [];
+      // 差分の計算中に閉じると、Monaco は先にモデルを捨てられた計算結果を受け取って
+      // 「no diff result available」を投げる（dispose は計算を取り消さないため）。
+      // 計算が終わるまで（長くても数秒）エディタとモデルを捨てるのを待つ。画面（ダイアログ）はすぐ閉じる
+      const cleanup = () => {
+        if (disposed) return;
+        disposed = true;
+        // エディタを先に捨ててからモデルを捨てる（逆だと Monaco が捨てたモデルを参照して警告を出す）
+        editor?.dispose();
+        editor = null;
+        for (const m of models) m.dispose();
+        models = [];
+      };
+      if (diffReady) cleanup();
+      else {
+        pendingCleanup = cleanup;
+        window.setTimeout(cleanup, CLEANUP_TIMEOUT_MS);
+      }
     },
   });
   editor = monaco.editor.createDiffEditor(host, {
@@ -56,6 +76,10 @@ export function openDiff(): void {
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     theme: dark ? 'vs-dark' : 'vs',
+  });
+  editor.onDidUpdateDiff(() => {
+    diffReady = true;
+    pendingCleanup?.();
   });
   show();
   void modal;

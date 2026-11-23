@@ -170,6 +170,16 @@ export function setElementMenuHooks(h0: ElementMenuHooks): void {
   hooks = { ...hooks, ...h0 };
 }
 
+/**
+ * 挿入できたら、足した要素のラベルをキャンバスでその場編集に入れる（C-1。足した要素は毎回「クリック → F2 → 入力」が要ったため）。
+ * キャンバスから開いたメニューのときだけ行う（ツリーから開いたときに、フォーカスをキャンバスへ奪わないため）。
+ * canvas.ts を import すると循環するので、イベントで知らせる。
+ */
+function inserted(ok: boolean, source: Source): void {
+  const sel = app.store?.selection;
+  if (ok && source === 'canvas' && sel) window.dispatchEvent(new CustomEvent('sash:startRename', { detail: { path: [...sel] } }));
+}
+
 /** 要素の右クリックメニュー。開く前に、その要素を選択しておく。 */
 export function openElementMenu(x: number, y: number, path: Path, source: Source, restoreFocus?: HTMLElement | null): void {
   const store = app.store;
@@ -192,9 +202,9 @@ export function openElementMenu(x: number, y: number, path: Path, source: Source
     {
       label: t('前に挿入'),
       disabled: !parent || siblingTags(el).length === 0,
-      submenu: () => tagItems(siblingTags(el), (tag) => parent && insertNew(pathOf(parent), tag, childElements(parent).indexOf(el), source)),
+      submenu: () => tagItems(siblingTags(el), (tag) => parent && inserted(insertNew(pathOf(parent), tag, childElements(parent).indexOf(el), source), source)),
     },
-    { label: t('子を追加'), disabled: childTags(el).length === 0, submenu: () => tagItems(childTags(el), (tag) => insertNew(path, tag, null, source)) },
+    { label: t('子を追加'), disabled: childTags(el).length === 0, submenu: () => tagItems(childTags(el), (tag) => inserted(insertNew(path, tag, null, source), source)) },
     'sep',
     { label: t('上へ移動'), shortcut: 'Alt+↑', disabled: moveDisabledReason(-1) !== null, run: () => moveSelected(-1, source) },
     { label: t('下へ移動'), shortcut: 'Alt+↓', disabled: moveDisabledReason(1) !== null, run: () => moveSelected(1, source) },

@@ -64,6 +64,8 @@ export function refreshMsoIcons(): void {
 }
 
 async function flush(): Promise<void> {
+  // テスト環境の破棄後に遅れて発火したときは何もしない（window が無い）
+  if (typeof window === 'undefined') return;
   const names = [...queue].filter((n) => !cache.has(n));
   queue.clear();
   if (names.length === 0) return;

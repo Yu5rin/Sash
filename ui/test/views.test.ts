@@ -126,9 +126,12 @@ describe('インスペクタ', () => {
 
   it('固定 → VBA → 固定 で、入力していた値に戻る', () => {
     select('[id="b1"]');
-    const vbaButton = () => insp.querySelector<HTMLButtonElement>('[data-fkey="label:mode:vba"]')!;
-    const staticButton = () => insp.querySelector<HTMLButtonElement>('[data-fkey="label:mode:static"]')!;
+    // 「固定 | VBA」は入力欄の右端の切り替えボタン 1 個（押すたびに固定と VBA が入れ替わる）
+    const vbaButton = () => insp.querySelector<HTMLButtonElement>('[data-fkey="label:mode"]')!;
+    const staticButton = vbaButton;
+    expect(vbaButton().getAttribute('aria-pressed')).toBe('false');
     vbaButton().click();
+    expect(vbaButton().getAttribute('aria-pressed')).toBe('true');
     const el = app.store!.doc.querySelector('[id="b1"]')!;
     expect(el.hasAttribute('label')).toBe(false);
     expect(el.getAttribute('getLabel')).toBeTruthy();

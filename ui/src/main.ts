@@ -11,7 +11,7 @@ import { openCatalog } from './dialogs/catalogDialog';
 import { openDiff } from './dialogs/diffDialog';
 import { openCommandPalette, type Command } from './dialogs/commandPalette';
 import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
-import { isModalOpen, openOnce } from './dialogs/modal';
+import { ask, isModalOpen, openOnce } from './dialogs/modal';
 import { $, h, svg } from './dom';
 import { lang, storeLang, t, translateDocument } from './i18n';
 import { applyLibraryIcon, openIconDialog } from './icon/iconDialog';
@@ -24,7 +24,7 @@ import type { ImageEntry } from './store';
 import { defFor, titleOf } from './schema';
 import { builtinRecipes } from './recipes';
 import { mountBottom, showBottomTab } from './views/bottom';
-import { getCanvasMode, mountCanvas, setCanvasMode, type CanvasMode } from './views/canvas';
+import { getCanvasMode, mountCanvas, setCanvasGrowHandler, setCanvasMode, startRenameOf, type CanvasMode } from './views/canvas';
 import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
 import { flushPendingEdits, mountInspector } from './views/inspector';
@@ -214,6 +214,7 @@ function historyTitle(base: string, label: string | null | undefined): string {
 function commands(): AppCommand[] {
   const G = { file: t('ファイル'), edit: t('編集'), view: t('表示'), insert: t('挿入'), tools: t('ツール'), help: t('ヘルプ'), recipe: t('レシピ') };
   return [
+    { id: 'file.new', group: G.file, title: t('新しいリボンを作る…'), keywords: 'new create ribbon 新規 作成 はじめて', enabled: idle, run: () => void newRibbon() },
     { id: 'file.open', group: G.file, title: t('開く…'), shortcut: 'Ctrl+O', keywords: 'open file ファイルを開く', inText: true, enabled: idle, run: () => void openFile() },
     // 保存と反映は、実行中でも押せるようにしておき、押されたら「終わるまでお待ちください」と知らせる（黙って無視しない）
     { id: 'file.save', group: G.file, title: t('保存'), shortcut: 'Ctrl+S', keywords: 'save', inText: true, enabled: has, run: () => void save() },
@@ -288,7 +289,7 @@ function commands(): AppCommand[] {
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
     { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
-    { id: 'tools.library', group: G.tools, title: t('アイコンライブラリ…'), keywords: 'icon library', run: () => void openOnce('library', () => openLibrary(undefined, notify)) },
+    { id: 'tools.library', group: G.tools, title: t('アイコンライブラリ…'), keywords: 'icon library', run: () => void openOnce('library', () => openLibrary(undefined, notify, { onCreateIcon: (target) => openIconDialog(target) })) },
     { id: 'tools.settings', group: G.tools, title: t('設定…'), keywords: 'settings options', run: () => void openSettings() },
     { id: 'tools.language', group: G.tools, title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
 
@@ -330,6 +331,20 @@ function cmd(id: string, label?: string, extra: Partial<MenuItemDef> = {}): Menu
 
 const SEP: MenuItemDef = { type: 'separator' };
 
+/**
+ * 「新しいリボンを作る」。Sash はブックそのものは作れず、Excel のブックの中のリボン定義を編集する。
+ * 「新規作成」を押して空のリボンが出るのを期待した人が、ファイルの選択で戸惑わないよう、選ぶものを先に伝える。
+ * 選んだブックにリボン定義がなければ、openFile が新しく作る。
+ */
+async function newRibbon(): Promise<void> {
+  const answer = await ask(
+    t('新しいリボンを作る'),
+    t('リボンを付けたいブック（.xlsm / .xlam）を選んでください。リボン定義がなければ新しく作ります'),
+    [{ value: 'open', label: t('ブックを選ぶ…'), primary: true }, { value: 'cancel', label: t('キャンセル') }],
+  );
+  if (answer === 'open') void openFile();
+}
+
 async function recentItems(): Promise<MenuItemDef[]> {
   const recent = await invoke('file.recent').catch(() => []);
   if (recent.length === 0) return [{ label: t('最近使ったファイルはありません'), enabled: false }];
@@ -367,7 +382,10 @@ function insertItem(tag: string): MenuItemDef {
   // ツールチップには何ができる部品かを出す。追加できないときは、その理由を添える
   const desc = describeElement(tag);
   const hint = [desc || tag, reason].filter(Boolean).join('\n');
-  return { label: titleOf(tag), hint, enabled: reason === null, run: () => void insertNearSelection(tag) };
+  return { label: titleOf(tag), hint, enabled: reason === null, // 挿入メニューから足したときだけ、すぐ名前の入力にする（パレットのダブルクリックはパレットにフォーカスを残す）
+    run: () => {
+      if (insertNearSelection(tag)) startRenameOf(app.store?.selection);
+    } };
 }
 
 const CANVAS_MODES: readonly { mode: CanvasMode; label: string }[] = [
@@ -408,6 +426,7 @@ function runMacroHint(): string | undefined {
 const MENUS: MenuDef[] = [
   {
     id: 'file', label: t('ファイル'), mnemonic: 'F', items: () => [
+      cmd('file.new'),
       cmd('file.open'),
       { label: t('最近使ったファイル'), items: recentItems },
       cmd('file.sample'),
@@ -562,6 +581,28 @@ toolbarButton('btn-redo', uiIcons.redo, t('やり直し'));
 toolbarButton('btn-command', uiIcons.command, t('コマンド'));
 $('btn-apply').replaceChildren(svg(uiIcons.apply), h('span', { class: 'tb-label' }, t('Excelへ反映')), h('kbd', null, 'F5'));
 
+/** ツールバーのボタンと、同じ働きのコマンド。 */
+const TOOLBAR_COMMAND: Readonly<Record<string, string>> = {
+  'btn-open': 'file.open',
+  'btn-save': 'file.save',
+  'btn-undo': 'edit.undo',
+  'btn-redo': 'edit.redo',
+  'btn-command': 'edit.palette',
+  'btn-apply': 'tools.apply',
+};
+const toolbarKeys = new Map<string, string>();
+
+/** aria-keyshortcuts の書式（Control+S）で、コマンドのショートカット（別のキーも含む）を返す。 */
+function toolbarShortcuts(commandId: string): string {
+  let v = toolbarKeys.get(commandId);
+  if (v === undefined) {
+    const c = commands().find((x) => x.id === commandId);
+    v = [c?.shortcut, ...(c?.altKeys ?? [])].filter((k): k is string => !!k).map((k) => k.replace(/Ctrl/g, 'Control').replace(/Del$/, 'Delete')).join(' ');
+    toolbarKeys.set(commandId, v);
+  }
+  return v;
+}
+
 const tip = (title: string, shortcut?: string) => (shortcut ? `${title} (${shortcut})` : title);
 
 function updateChrome(): void {
@@ -590,6 +631,10 @@ function updateChrome(): void {
     b.disabled = !enabled;
     b.title = title;
     b.setAttribute('aria-label', title);
+    // ショートカットはコマンドの定義から取る（メニューと同じ値を支援技術にも伝える）
+    const keys = TOOLBAR_COMMAND[id] ? toolbarShortcuts(TOOLBAR_COMMAND[id]!) : '';
+    if (keys) b.setAttribute('aria-keyshortcuts', keys);
+    else b.removeAttribute('aria-keyshortcuts');
   };
   set('btn-open', busy === null, tip(t('開く'), 'Ctrl+O'));
   set('btn-save', !!s && busy === null, busy === 'save' ? t('保存しています…') : tip(t('保存'), 'Ctrl+S'));
@@ -688,7 +733,28 @@ setElementMenuHooks({
     return items;
   },
 });
+// 幅を比べるモードで、キャンバスの高さを一時的に広げる（保存しない）
+setCanvasGrowHandler((px) => layout.growTemporarily('top', px));
 const home = mountHome($('home'), (p) => void openFile(p));
+
+// XML ペインの名前に F6 での移り方を添える（index.html の既定は日本語のままなので、今の言語で付け直す）
+document.querySelector('.xml-pane')?.setAttribute('aria-label', t('XMLエディタ（F6 で次のペインへ）'));
+
+/**
+ * 下部パネルを畳んだ帯に、中身の要約を出す。畳むと問題の数が見えなくなり、エラーに気づけないため。
+ * 数えるのは、下部パネルのタブと同じもの（問題は情報を除く）。
+ */
+function updateBottomSummary(): void {
+  if (!app.store) {
+    layout.setCollapsedSummary('bottom', null);
+    return;
+  }
+  const problems = app.problems.filter((p) => p.severity !== 'info').length + (app.store.syncError ? 1 : 0);
+  layout.setCollapsedSummary('bottom', t('問題 {p} ・ コールバック {c}', { p: problems, c: vba.statuses().length }));
+}
+app.on('session', updateBottomSummary);
+app.on('problems', updateBottomSummary);
+app.on('vba', updateBottomSummary);
 
 /**
  * 左右のペイン（パレット・ツリーとインスペクタ）を一時的に畳む（キャンバスを広くして、広い幅のリボンを見るため。仕様書 §18.7）。

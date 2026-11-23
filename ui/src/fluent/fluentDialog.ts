@@ -1,24 +1,29 @@
-// アイコン集（Fluent UI System Icons）から選ぶダイアログ。Excel がなくても、見栄えのよいアイコンをボタンに付けられるようにする。
+// アイコン集（Fluent UI System Icons と Tabler Icons）から選ぶダイアログ。Excel がなくても、見栄えのよいアイコンをボタンに付けられるようにする。
 // 選んだアイコンは色を付けた SVG にして返す。PNG にするのはアイコンエディタの役目（出力サイズで描き直し、バッジなどの加工もそこでできる）。
 // このモジュールとデータは使うときに動的 import で読む（最初の画面の読み込みを重くしないため）。
+// 検索は概念の辞書による絞り込み（iconSearch.ts）。「お金」「配送」「ねこ」のようなあいまいな言葉で探せる。
 
 import './fluent.css';
 import { h, svg } from '../dom';
 import { openModal, openOnce } from '../dialogs/modal';
 import { notify } from '../clipboard';
-import { t } from '../i18n';
+import { lang, t } from '../i18n';
 import {
-  buildSvg, COLOR_PRESETS, DEFAULT_COLOR, displayName, loadFluentIcons, safeColor, searchIcons,
-  type FluentIcon, type FluentVariant,
+  buildSvg, COLOR_PRESETS, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor,
+  type FluentIcon, type FluentVariant, type IconSet,
 } from './fluent';
+import { CATEGORIES } from './iconCategories';
+import { buildIndex, relatedConcepts, searchIconSet, type IconHit, type SearchResult } from './iconSearch';
 
 export interface FluentPick {
   /** 色を付けた SVG。 */
   blob: Blob;
-  /** 元画像の名前として使うファイル名（例：save_regular.svg）。 */
+  /** 元画像の名前として使うファイル名（例：save_regular.svg、tabler-home_regular.svg）。 */
   fileName: string;
   /** アイコンの名前（例：save）。 */
   name: string;
+  /** どのアイコン集か（省略したら Fluent。Fluent だけだった頃の呼び出しを壊さないため）。 */
+  set?: IconSet;
   variant: FluentVariant;
   color: string;
 }
@@ -32,18 +37,25 @@ export interface FluentPickerOptions {
 const PAGE = 240;
 const STORAGE_KEY = 'sash.fluent';
 
+type SetFilter = 'all' | IconSet;
+
 interface Remembered {
   variant: FluentVariant;
   color: string;
+  set: SetFilter;
 }
 
-/** 前回の種類と色（この利用者の手元だけの好み。保存できない環境では既定に戻るだけ）。 */
+/** 前回の種類・色・アイコン集（この利用者の手元だけの好み。保存できない環境では既定に戻るだけ）。 */
 function loadRemembered(): Remembered {
   try {
     const v = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<Remembered>;
-    return { variant: v.variant === 'filled' ? 'filled' : 'regular', color: safeColor(v.color ?? DEFAULT_COLOR) };
+    return {
+      variant: v.variant === 'filled' ? 'filled' : 'regular',
+      color: safeColor(v.color ?? DEFAULT_COLOR),
+      set: v.set === 'fluent' || v.set === 'tabler' ? v.set : 'all',
+    };
   } catch {
-    return { variant: 'regular', color: DEFAULT_COLOR };
+    return { variant: 'regular', color: DEFAULT_COLOR, set: 'all' };
   }
 }
 
@@ -55,6 +67,11 @@ function saveRemembered(r: Remembered): void {
   }
 }
 
+/** 出どころの表示名（固有名詞なので訳さない）。 */
+function setLabel(set: IconSet): string {
+  return set === 'tabler' ? 'Tabler' : 'Fluent';
+}
+
 /** 開く。選んだら onPick を呼んで閉じる。 */
 export function openFluentPicker(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions = {}): Promise<void> {
   return openOnce('fluent-icons', () => build(onPick, opts)).then(() => undefined);
@@ -62,22 +79,36 @@ export function openFluentPicker(onPick: (pick: FluentPick) => void, opts: Fluen
 
 function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): void {
   const state = loadRemembered();
+  let category = 'all';
   let icons: FluentIcon[] | null = null;
-  let results: FluentIcon[] = [];
+  let result: SearchResult | null = null;
+  let results: IconHit[] = [];
   let shown = 0;
   let selected: FluentIcon | null = null;
   let picked = false;
 
-  const search = h('input', { type: 'search', class: 'fluent-search', placeholder: t('アイコンを検索（例：保存、表、arrow）'), spellcheck: false, 'aria-label': t('アイコンを検索') });
+  const search = h('input', { type: 'search', class: 'fluent-search', placeholder: t('アイコンを検索（例：お金、配送、ねこ、A）'), spellcheck: false, 'aria-label': t('アイコンを検索') });
   const variantButtons = (['regular', 'filled'] as const).map((v) =>
     h('button', { type: 'button', dataset: { variant: v }, 'aria-pressed': String(state.variant === v), class: state.variant === v ? 'active' : '', onclick: () => setVariant(v) }, v === 'regular' ? t('線') : t('塗り')),
   );
   const variantSwitch = h('div', { class: 'segmented', role: 'group', 'aria-label': t('アイコンのスタイル') }, variantButtons);
+  const setButtons = (['all', 'fluent', 'tabler'] as const).map((v) =>
+    h('button', { type: 'button', dataset: { set: v }, 'aria-pressed': String(state.set === v), class: state.set === v ? 'active' : '', onclick: () => setSet(v) }, v === 'all' ? t('すべて') : setLabel(v)),
+  );
+  const setSwitch = h('div', { class: 'segmented', role: 'group', 'aria-label': t('アイコン集の出どころ') }, setButtons);
   const colorInput = h('input', { type: 'color', value: state.color, title: t('色を選ぶ'), 'aria-label': t('色を選ぶ'), oninput: () => setColor(colorInput.value) });
   const swatches = COLOR_PRESETS.map((p) =>
     h('button', { type: 'button', class: 'fluent-swatch', style: `--swatch:${p.color}`, title: `${t(p.label)}（${p.color}）`, 'aria-label': t(p.label), dataset: { color: p.color }, onclick: () => setColor(p.color) }),
   );
   const colorRow = h('div', { class: 'fluent-colors', role: 'group', 'aria-label': t('色') }, h('span', { class: 'muted small' }, t('色')), ...swatches, colorInput);
+
+  // カテゴリのチップ。件数は、今の検索語・出どころ・スタイルで絞った結果の中の数（チップを押す前に、どこに何があるか分かるように）
+  const chipDefs = [{ id: 'all', ja: 'すべて' }, ...CATEGORIES];
+  const chips = chipDefs.map((c) =>
+    h('button', { type: 'button', class: 'fluent-chip', dataset: { category: c.id }, 'aria-pressed': String(c.id === category), onclick: () => setCategory(c.id) },
+      h('span', null, t(c.ja)), h('span', { class: 'fluent-chip-count' })),
+  );
+  const chipRow = h('div', { class: 'fluent-chips', role: 'group', 'aria-label': t('カテゴリで絞り込む') }, chips);
 
   const grid = h('div', { class: 'fluent-grid', role: 'listbox', 'aria-label': t('アイコンの一覧'), tabIndex: -1 });
   const more = h('button', { type: 'button', class: 'small fluent-more', hidden: true, onclick: () => renderMore() });
@@ -93,19 +124,20 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     previewName,
     previewRow,
     h('p', { class: 'muted small' }, t('「使う」を押すとアイコンエディタが開き、出力サイズの PNG にして設定します。バッジなどの加工もそこでできます。')),
-    h('p', { class: 'muted small fluent-credit' }, t('アイコン：Microsoft Fluent UI System Icons（MIT License）')),
+    h('p', { class: 'muted small fluent-credit' }, t('アイコン：Microsoft Fluent UI System Icons と Tabler Icons（MIT License）')),
   );
 
   const useButton = h('button', { type: 'button', class: 'primary', disabled: true, onclick: () => confirm() }, t('使う'));
   const content = h(
     'div',
     { class: 'catalog fluent-picker' },
-    h('div', { class: 'fluent-toolbar' }, search, variantSwitch),
+    h('div', { class: 'fluent-toolbar' }, search, variantSwitch, setSwitch),
+    chipRow,
     colorRow,
     h('div', { class: 'fluent-main' }, gridWrap, previewPane),
     status,
   );
-  const modal = openModal(t('アイコン集（Fluent）から選ぶ'), content, {
+  const modal = openModal(t('アイコン集から選ぶ'), content, {
     wide: true,
     initialFocus: search,
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')), useButton],
@@ -123,13 +155,20 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
 
   // ---- 描画 ----
 
-  function itemFor(icon: FluentIcon): HTMLElement {
-    const markup = buildSvg(icon, state.variant, '#000000', 24);
+  /** 一覧のホバーに出す説明：名前（出どころ）と、当たった理由（例：お金 → money）。 */
+  function tooltipFor(hit: IconHit): string {
+    const base = `${displayName(hit.icon.name)}（${setLabel(iconSet(hit.icon))}）`;
+    return hit.via ? `${base}\n${hit.via}` : base;
+  }
+
+  function itemFor(hit: IconHit): HTMLElement {
+    const icon = hit.icon;
+    // 一覧は画面の文字色で描く（暗いテーマでも見えるように）。実際の色はプレビューで確かめる
+    const markup = buildSvg(icon, state.variant, 'currentColor', 24);
     const item = h(
       'div',
-      { class: `fluent-item${icon === selected ? ' selected' : ''}`, role: 'option', 'aria-selected': String(icon === selected), 'aria-label': displayName(icon.name), title: displayName(icon.name), tabIndex: -1, dataset: { name: icon.name } },
-      // 一覧は画面の文字色で描く（暗いテーマでも見えるように）。実際の色はプレビューで確かめる
-      markup ? svg(markup.replace(/fill="#000000"/, 'fill="currentColor"')) : null,
+      { class: `fluent-item${icon === selected ? ' selected' : ''}`, role: 'option', 'aria-selected': String(icon === selected), 'aria-label': `${displayName(icon.name)}（${setLabel(iconSet(icon))}）`, title: tooltipFor(hit), tabIndex: -1, dataset: { name: icon.name, set: iconSet(icon) } },
+      markup ? svg(markup) : null,
     );
     item.addEventListener('click', () => select(icon, item));
     item.addEventListener('dblclick', () => {
@@ -148,23 +187,56 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     updateTabStop();
   }
 
+  /** チップの件数と押された状態を、今の結果に合わせる。 */
+  function renderChips(): void {
+    for (const chip of chips) {
+      const id = chip.dataset['category']!;
+      const n = id === 'all' ? (result?.total ?? 0) : (result?.counts[id] ?? 0);
+      const countEl = chip.querySelector<HTMLElement>('.fluent-chip-count')!;
+      countEl.textContent = result ? String(n) : '';
+      const on = id === category;
+      chip.setAttribute('aria-pressed', String(on));
+      chip.classList.toggle('active', on);
+      // 件数が 0 のチップは隠す（選んでいるものは、外せるよう残す）。検索語に関係のないカテゴリが並んで、場所を取らないように
+      chip.hidden = !on && result !== null && n === 0;
+    }
+  }
+
   function render(): void {
     if (!icons) return;
-    results = searchIcons(icons, search.value, state.variant);
+    const query = search.value;
+    result = searchIconSet(icons, query, { variant: state.variant, set: state.set, category });
+    results = result.hits;
     shown = 0;
     grid.replaceChildren();
     gridWrap.scrollTop = 0;
+    renderChips();
     if (results.length === 0) {
       more.hidden = true;
+      const q = query.trim();
+      const related = q ? relatedConcepts(q, 6, lang) : [];
       grid.append(
         h('div', { class: 'empty-state fluent-empty' },
-          h('strong', null, t('「{q}」に合うアイコンはありません', { q: search.value.trim() })),
-          h('span', null, t('別の言葉か、英語の名前（例：save, table, arrow）で探してください。'))),
+          h('strong', null, q ? t('「{q}」に合うアイコンはありません', { q }) : t('この条件に合うアイコンはありません')),
+          h('span', null, t('言葉を変えるか、カテゴリ・アイコン集の絞り込みを外してください。')),
+          related.length
+            ? h('div', { class: 'fluent-related' }, h('span', { class: 'muted small' }, t('近い言葉：')),
+                ...related.map((w) => h('button', { type: 'button', class: 'small', onclick: () => trySearch(w) }, w)))
+            : null),
       );
     } else {
       renderMore();
     }
-    status.textContent = t('{shown} / {total} 件', { shown: results.length, total: icons.length });
+    const count = t('{shown} / {total} 件', { shown: results.length, total: icons.length });
+    status.textContent = result.relaxed ? `${t('すべての語に合うものがないので、いずれかに合うものを出しています')}　${count}` : count;
+  }
+
+  /** 近い言葉のボタン：検索欄に入れて探す。 */
+  function trySearch(word: string): void {
+    search.value = word;
+    category = 'all';
+    render();
+    search.focus();
   }
 
   /** 矢印キーで移れるよう、フォーカスを受ける項目は1つだけにする（Tab で格子の中を一つずつ巡らないように）。 */
@@ -181,7 +253,11 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
       previewRow.replaceChildren();
       return;
     }
-    previewName.textContent = displayName(selected.name);
+    previewName.replaceChildren(
+      displayName(selected.name),
+      ' ',
+      h('span', { class: `fluent-badge ${iconSet(selected)}`, title: t('アイコン集の出どころ') }, setLabel(iconSet(selected))),
+    );
     const cell = (bg: 'light' | 'dark', px: number) => {
       const markup = buildSvg(selected!, state.variant, state.color, px);
       return h('div', { class: `icon-preview ${bg}` }, markup ? svg(markup) : null, h('span', null, px === 16 ? t('小') : t('大')));
@@ -218,6 +294,27 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     renderPreview();
   }
 
+  function setSet(v: SetFilter): void {
+    if (state.set === v) return;
+    state.set = v;
+    saveRemembered(state);
+    for (const b of setButtons) {
+      const on = b.dataset['set'] === v;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    // 外したアイコン集のアイコンを選んでいたら、選択を外す
+    if (selected && v !== 'all' && iconSet(selected) !== v) selected = null;
+    render();
+    renderPreview();
+  }
+
+  function setCategory(id: string): void {
+    // 押されているチップをもう一度押したら、「すべて」に戻す
+    category = category === id ? 'all' : id;
+    render();
+  }
+
   function setColor(c: string): void {
     state.color = safeColor(c);
     colorInput.value = state.color;
@@ -231,10 +328,13 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     const markup = buildSvg(selected, state.variant, state.color);
     if (!markup) return;
     picked = true;
+    const set = iconSet(selected);
     const pick: FluentPick = {
       blob: new Blob([markup], { type: 'image/svg+xml' }),
-      fileName: `${selected.name}_${state.variant}.svg`,
+      // Tabler と Fluent に同じ名前（home など）があるので、Tabler のファイル名には出どころを付ける
+      fileName: `${set === 'tabler' ? 'tabler-' : ''}${selected.name}_${state.variant}.svg`,
       name: selected.name,
+      set,
       variant: state.variant,
       color: state.color,
     };
@@ -267,8 +367,8 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
       e.preventDefault();
       const first = grid.querySelector<HTMLElement>('.fluent-item');
       if (first) {
-        const icon = results[0];
-        if (icon) select(icon, first);
+        const hit = results[0];
+        if (hit) select(hit.icon, first);
       }
     }
   });
@@ -294,7 +394,7 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     if (idx < 0) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      const icon = results[idx];
+      const icon = results[idx]?.icon;
       if (!icon) return;
       // 選んであるものでもう一度 Enter を押したら決定する
       if (e.key === 'Enter' && selected === icon) confirm();
@@ -320,9 +420,12 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
 
   setColor(state.color);
   renderPreview();
-  void loadFluentIcons()
+  renderChips();
+  void loadIconSet()
     .then((data) => {
       icons = data.icons;
+      // 索引は最初の検索の前に作っておく（初回の検索だけ遅くならないように）
+      buildIndex(icons);
       render();
     })
     .catch((e: unknown) => {

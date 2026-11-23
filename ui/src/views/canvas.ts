@@ -9,13 +9,13 @@ import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard
 import { canDropInto, canDropManyAt, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
 import {
-  allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, pathOf, samePath, isAncestorPath, type Path,
+  allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, isSameElementAt, pathOf, samePath, isAncestorPath, snapshotOf, type Path,
 } from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
-import { closeMenu, openElementMenu } from './contextMenu';
+import { closeMenu, openElementMenu, openMenu } from './contextMenu';
 import { focusField } from './inspector';
-import { defFor, inBackstage } from '../schema';
+import { defFor, inBackstage, titleOf } from '../schema';
 import { lang, t as tr } from '../i18n';
 import { notify } from '../shell/toast';
 import { openRecipes } from '../dialogs/recipeDialog';
@@ -41,6 +41,33 @@ const BUILTIN_TABS: readonly [string, string, string][] = [
   ['HelpTab', 'ヘルプ', 'Help'],
 ];
 
+/**
+ * よく使うタブの組み込みグループの日本語名（Excel の表示名）。Excel がない環境では表示名が取れず、
+ * グループ名が Clipboard のような英語の ID になってしまうため、同梱の対応表で補う（C-7）。Excel から表示名が届けばそちらを使う。
+ * 日本語版 Excel（Microsoft 365）の見え方からの対応で、実機のバージョンによる呼び名の違いまでは確かめていない。
+ */
+const BUILTIN_GROUP_JA: Readonly<Record<string, string>> = {
+  GroupClipboard: 'クリップボード', GroupFont: 'フォント', GroupAlignmentExcel: '配置', GroupNumber: '数値', GroupStyles: 'スタイル',
+  GroupCells: 'セル', GroupEditingExcel: '編集', GroupIdeas: 'アイデア', GroupClassifyLabelProtect: '秘密度',
+  GroupInsertTablesExcel: 'テーブル', GroupInsertIllustrations: '図', GroupOfficeExtension: 'アドイン', GroupInsertChartsExcel: 'グラフ',
+  GroupPowerMap: 'ツアー', GroupSparklinesInsert: 'スパークライン', GroupSlicerInsert: 'フィルター', GroupInsertLinks: 'リンク',
+  GroupInsertComments: 'コメント', GroupInsertText: 'テキスト', GroupInsertSymbols: '記号と特殊文字',
+  GroupThemesExcel: 'テーマ', GroupPageSetup: 'ページ設定', GroupPageLayoutScaleToFit: '拡大縮小印刷', GroupPageLayoutSheetOptions: 'シートのオプション', GroupArrange: '配置',
+  GroupFunctionLibrary: '関数ライブラリ', GroupNamedCells: '定義された名前', GroupFormulaAuditing: 'ワークシート分析', GroupCalculation: '計算方法',
+  GroupGetExternalData: '外部データの取り込み', GroupPowerQueryGetTransformData: 'データの取得と変換', GroupConnections: 'クエリと接続',
+  GroupDataQueriesAndConnections: 'クエリと接続', GroupSortFilter: '並べ替えとフィルター', GroupDataTools: 'データ ツール', GroupForecast: '予測', GroupOutline: 'アウトライン',
+  GroupProofing: '文章校正', GroupAccessibility: 'アクセシビリティ', GroupInsights: 'インサイト', GroupLanguage: '言語', GroupComments: 'コメント',
+  GroupThreadedComments: 'コメント', GroupCommentsLegacy: 'コメント', GroupChangesExcel: '変更', GroupProtectExcel: '保護', GroupInk: 'インク',
+  GroupNamedSheetView: 'シート ビュー', GroupWorkbookViews: 'ブックの表示', GroupViewShowHide: '表示', GroupZoom: 'ズーム', GroupWindow: 'ウィンドウ', GroupMacros: 'マクロ',
+  GroupCode: 'コード', GroupAddins: 'アドイン', GroupControls: 'コントロール', GroupXml: 'XML',
+  GroupHelpAndSupport: 'ヘルプ', GroupExcelCommunity: 'コミュニティ',
+};
+
+/** 組み込みグループの表示名。Excel から届いた名前、日本語の対応表、ID の順。 */
+export function builtinGroupName(id: string): string {
+  return labels.get(id) ?? (lang === 'ja' ? BUILTIN_GROUP_JA[id] : undefined) ?? id.replace(/^Group/, '');
+}
+
 /** 組み込みタブの表示名。「表示」は属性の分類名と同じ文言なので、辞書ではなくここで英語にする。 */
 function tabName(ja: string, en: string): string {
   return lang === 'en' ? en : ja;
@@ -64,6 +91,12 @@ let flashPath: Path | null = null;
 let scrollToSelection = false;
 /** その場でラベルを編集している間は描き直さない（入力中の文字が消えるため）。 */
 let renaming = false;
+/**
+ * 入力中のその場リネームを、確定せずに捨てる関数（入力中だけ入る）。
+ * 入力中に別の経路（XML エディタ・元に戻す・インスペクタなど）で文書が変わると、入力欄が持つパスが古くなり、
+ * 確定したときに別の要素のラベルを書き換えかねないため、ストアの変更を受けたらこれで捨てる。
+ */
+let cancelRename: ((doc: Document) => void) | null = null;
 /** 枠の大きさの変化を見張る。mountCanvas が二度呼ばれても前のものを外せるよう、モジュールで持つ。 */
 let popupObserver: ResizeObserver | null = null;
 let layoutObserver: MutationObserver | null = null;
@@ -90,6 +123,13 @@ let measuring = false;
 let readOnlyRender = false;
 /** 測った幅の控え。鍵はグループの XML・言語・試し表示。描き直しのたびに全部を測り直さないため。 */
 const widthCache = new Map<string, FitGroupInput['widths']>();
+
+/**
+ * 縮小率がこれより小さくなったら、「ペインを畳む」を勧める（0.5 だと 57% など実用にならない小ささでも出なかったため 0.8 にした）。
+ * さらに LOW_ZOOM_NOTICE（70%）より小さいときは、状態の文言で文字が小さく表示されることを知らせる。
+ */
+const LOW_ZOOM_SUGGEST = 0.8;
+const LOW_ZOOM_NOTICE = 0.7;
 
 /**
  * 大きいボタンのラベルの折り返し。Excel は大きいボタンのラベルを 2 行までに収め、
@@ -229,6 +269,8 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
+      // テスト環境の破棄後に遅れて発火しても DOM を触らない
+      if (typeof window === 'undefined') return;
       // 枠の幅が変わったら「収める」の縮小率も変わる
       updateZoom(host);
       placePopups(host);
@@ -262,6 +304,9 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   app.on('store', (c) => {
     const store = app.store;
     if (!c || !store) return;
+    // 入力中に文書が変わって入力欄のパスが別の要素を指すようになったら（自分の確定は renaming を下ろしてから編集するので、
+    // ここには来ない）入力を捨てて描き直す。捨てないと、確定したとき別の要素のラベルを書き換えてしまう
+    if (renaming && c.kinds.has('doc')) cancelRename?.(store.doc);
     if (c.kinds.has('selection')) {
       dismissedPopup = null;
       followSelection(c.source === 'canvas');
@@ -302,6 +347,11 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     render();
   });
   attachScreentips(host, (node) => tipFor(node));
+  // 右クリックメニュー（contextMenu.ts）の「前に挿入／子を追加」の直後。contextMenu は canvas を import できない（循環するため）ので、イベントで受ける
+  window.addEventListener('sash:startRename', (e) => {
+    const path = (e as CustomEvent<{ path?: number[] }>).detail?.path;
+    if (Array.isArray(path)) startRenameOf(path);
+  });
   // インスペクタの「キャンバスで試す」：その要素を選び、リボンの表示で「動的な状態を試す」を開く
   window.addEventListener('sash:dynamicSim', (e) => {
     const path = (e as CustomEvent<{ path?: number[] }>).detail?.path;
@@ -540,13 +590,35 @@ function multiBadge(n: number): HTMLElement {
 }
 
 /**
+ * 選んだ要素の読み上げ文。「ボタン 集計する、集計 グループ、4 個中 1 個目」。
+ * 種類・名前・親（種類と名前）・兄弟の中での位置の順。名前がなければ種類だけにし、親がなければ（ルートなど）位置も省く。
+ */
+export function describeSelection(el: Element): string {
+  const name = (e: Element) => labelOf(e) || e.getAttribute('id') || '';
+  // 自分は「ボタン 集計する」、親は「集計 グループ」の順（Excel の読み上げと同じく、親は名前を先に言う）
+  const self = name(el) ? tr('{kind} {name}', { kind: titleOf(el.localName), name: name(el) }) : titleOf(el.localName);
+  const parts = [self];
+  const parent = el.parentElement;
+  if (parent) {
+    const sibs = childElements(parent);
+    parts.push(name(parent) ? tr('{name} {kind}', { kind: titleOf(parent.localName), name: name(parent) }) : titleOf(parent.localName));
+    parts.push(tr('{n} 個中 {i} 個目', { n: sibs.length, i: sibs.indexOf(el) + 1 }));
+  }
+  return parts.join(lang === 'en' ? ', ' : '、');
+}
+
+/**
  * 選択の数を読み上げる領域。描き直しのたびに作り直すと、読み上げソフトが変化として拾わないことがあるので、
  * 1 つだけ作って残し、文字だけを書き換える（同じ文字なら書き換えず、描き直しのたびに読み上げないようにする）。
  */
 let liveRegion: HTMLElement | null = null;
 function announceSelection(): void {
   const store = app.store;
-  const text = store?.isMulti ? tr('{n} 個選択中', { n: store.selections.length }) : '';
+  let text = '';
+  if (store?.isMulti) text = tr('{n} 個選択中', { n: store.selections.length });
+  // 1 つだけ選んだときは「ボタン 集計する、集計 グループ、4 個中 1 個目」の形で読み上げる（C-5）。
+  // ツリーなどキャンバスの外を操作しているときは、そちらが自分で読み上げるので二重にならないよう書かない
+  else if (store?.selectedElement && hostEl && hostEl.contains(document.activeElement)) text = describeSelection(store.selectedElement);
   if (!liveRegion || !liveRegion.isConnected) {
     liveRegion = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', dataset: { live: 'selection' } });
     document.body.append(liveRegion);
@@ -687,7 +759,7 @@ function renderStatus(fit: ViewFit | null): HTMLElement[] {
     type: 'button',
     class: 'cv-link cv-lowzoom',
     hidden: true,
-    title: tr('50% より小さく縮めて表示しています。左右のペインを一時的に畳むと大きく表示できます（［実寸］で実物の大きさにもできます）'),
+    title: tr('80% より小さく縮めて表示しています。左右のペインを一時的に畳むと大きく表示できます（［実寸］で実物の大きさにもできます）'),
     onclick: () => window.dispatchEvent(new CustomEvent('sash:collapseSidePanes')),
   }, tr('ペインを畳む'));
   return [status, low];
@@ -896,6 +968,7 @@ function renderCanvas(host: HTMLElement): void {
   if (active) Array.from(host.querySelectorAll<HTMLElement>('[data-fk]')).find((n) => n.dataset['fk'] === active)?.focus({ preventScroll: true });
 
   updateZoom(host);
+  syncCompareGrow(host);
   const strip = editableTabStrip(host);
   if (strip) {
     strip.scrollLeft = tabScroll;
@@ -1062,6 +1135,51 @@ function measureAndReport(host: HTMLElement, doc: Document): Map<Element, GroupW
   return out;
 }
 
+// ---- 「2つの幅を比べる」のときにキャンバスの高さを広げる（C-4） ----
+
+let growHandler: ((px: number) => () => void) | null = null;
+let growRelease: (() => void) | null = null;
+/** 広げたときの、比べる枠の下端までに要る高さと、そのあとのキャンバスの枠の高さ。大きく変わったときだけ広げ直すために覚える。 */
+let grownNeeded = 0;
+let grownClient = 0;
+
+/**
+ * 比べるモードのとき、足りない高さだけキャンバスの高さを一時的に広げる処理を登録する（main.ts が layout.growTemporarily('top', px) を渡す）。
+ * px は「足りない分」（比べる枠の下端までに要る高さ − いまのキャンバスの高さ）。渡した関数は、元に戻す関数を返す。
+ * 大きさは保存しない。canvas.ts が layout に依存しないよう、注入にしている。
+ */
+export function setCanvasGrowHandler(fn: ((px: number) => () => void) | null): void {
+  growHandler = fn;
+}
+
+/**
+ * 比べる枠があれば、足りない高さだけ広げ、なくなったら戻す。
+ * 比べる枠の全高を足すと、もともと余裕があるときも広げすぎて、下の XML エディタが潰れる（1366×768 で高さ 0 になった）ため、
+ * 広げる前のキャンバスの高さを測り、枠の下端までに足りない分だけを求める。
+ * 枠の高さやキャンバスの高さが変わったときだけ測り直す（描き直しのたびに動かさないため）。
+ */
+function syncCompareGrow(host: HTMLElement): void {
+  const compare = mode === 'ribbon' && preview().compare ? host.querySelector<HTMLElement>('.cv-compare') : null;
+  if (!compare) {
+    growRelease?.();
+    growRelease = null;
+    grownNeeded = 0;
+    grownClient = 0;
+    return;
+  }
+  const pane = paneOf(host);
+  // 枠の下端までの高さ（スクロールを含む、キャンバスの枠の上端から）。下に少し余白を足す
+  const needed = Math.ceil(compare.getBoundingClientRect().bottom - pane.getBoundingClientRect().top + pane.scrollTop) + 12;
+  if (growRelease && Math.abs(needed - grownNeeded) < 8 && Math.abs(pane.clientHeight - grownClient) < 8) return;
+  // いったん戻して、広げる前の高さを測る
+  growRelease?.();
+  growRelease = null;
+  const missing = needed - pane.clientHeight;
+  if (missing > 0 && growHandler) growRelease = growHandler(missing);
+  grownNeeded = needed;
+  grownClient = pane.clientHeight;
+}
+
 /** 編集する枠と、「2つの幅を比べる」ときの比べる側の枠。 */
 function renderRibbonViews(host: HTMLElement, doc: Document, errorPaths: Set<string>, measured: Map<Element, GroupWidths>): { node: HTMLElement; fit: ViewFit } {
   const p = preview();
@@ -1141,6 +1259,12 @@ function renderRuler(eff: number | null): HTMLElement {
  */
 function updateZoom(host: HTMLElement): void {
   const p = preview();
+  // 実寸で横にあふれるときも、見出し（切り替え・幅の選択）は左端に貼り付けて流れ去らないようにする（C-2）。
+  // 見出しは position:sticky; left:0 で貼り付けるが、貼り付け先（#canvas）が枠の幅のままだと動く余地がないので、
+  // 実寸のときだけ #canvas を中身の幅まで広げ、見出しの幅は枠の表示幅（--cv-pane-w）に固定する
+  const actual = mode === 'ribbon' && p.width !== null && p.fit === 'actual';
+  host.classList.toggle('cv-actual', actual);
+  host.style.setProperty('--cv-pane-w', `${paneOf(host).clientWidth}px`);
   const cs = getComputedStyle(host);
   const avail = host.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) - 1;
   const zooms = Array.from(host.querySelectorAll<HTMLElement>('.cv-zoom'));
@@ -1151,14 +1275,18 @@ function updateZoom(host: HTMLElement): void {
   const status = host.querySelector<HTMLElement>('.cv-status');
   const info = status?.querySelector<HTMLElement>('.cv-zoominfo');
   if (status && info) {
-    info.textContent = p.width === null || primary === null ? '' : tr('{pct}% で表示・Excel から見た幅 {w}px', { w: effectiveWidth(p.width, p.scale), pct: Math.round(primary * 100) });
+    // 70% より小さいときは、文字が読みにくくなっていることを状態の文言で知らせる（C-4）
+    const key = primary !== null && primary < LOW_ZOOM_NOTICE ? '{pct}%（文字が小さく表示されます）で表示・Excel から見た幅 {w}px' : '{pct}% で表示・Excel から見た幅 {w}px';
+    info.textContent = p.width === null || primary === null ? '' : tr(key, { w: effectiveWidth(p.width, p.scale), pct: Math.round(primary * 100) });
     const fitText = status.querySelector('.cv-fitinfo')?.textContent ?? '';
     if (info.textContent && fitText) info.textContent += '・';
     // 「…」で切れても全文が読めるよう、ツールチップに全部を出す
     status.title = [info.textContent + fitText, status.dataset['detail'] ?? ''].filter((x) => x).join('\n');
   }
   const low = host.querySelector<HTMLElement>('.cv-lowzoom');
-  if (low) low.hidden = !(primary !== null && primary < 0.5);
+  if (low) low.hidden = !(primary !== null && primary < LOW_ZOOM_SUGGEST);
+  // 枠の幅や縮小率が変わるたびに、組み込みタブをまとめ直す（C-3）
+  foldBuiltinTabs(host);
 }
 
 /** マウスを乗せたときのヒントの中身。 */
@@ -1240,7 +1368,11 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
             class: ['rb-tab', x.builtin && !x.el ? 'builtin' : '', x === active ? 'active' : '', x.el && isSelected(x.el) ? 'selected' : ''].join(' '),
             role: 'tab',
             'aria-selected': String(x === active),
-            dataset: x.el ? { path: pathOf(x.el).join('.'), sel: '1' } : {},
+            // data-fold は、幅が足りないときに「…」へまとめてよい組み込みタブの印（foldBuiltinTabs）。
+            // 自作タブ・手を加えた組み込みタブ・ホーム・表示中のタブは、まとめない
+            dataset: x.el
+              ? { path: pathOf(x.el).join('.'), sel: '1' }
+              : x.builtin && x.idMso && x.idMso !== 'TabHome' && x !== active ? { fold: '1', idmso: x.idMso } : {},
             draggable: x.el !== null && !x.builtin,
             title: x.el?.getAttribute('id') ?? x.idMso ?? '',
             onclick: (e: MouseEvent) => {
@@ -1260,6 +1392,19 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
         ),
       ),
     ),
+    // 幅が足りないときにまとめた組み込みタブの入り口（普段は隠す。出すかどうかは foldBuiltinTabs が測って決める）
+    h('button', {
+      type: 'button',
+      class: 'rb-tab-more',
+      hidden: true,
+      'aria-haspopup': 'menu',
+      'aria-label': tr('ほかの組み込みタブ'),
+      title: tr('ほかの組み込みタブ'),
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        openFoldedTabsMenu(host, e.currentTarget as HTMLElement);
+      },
+    }, '…'),
     h('button', {
       type: 'button',
       class: `rb-tab-add${hasCustom ? '' : ' empty'}`,
@@ -1311,7 +1456,7 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
           body.append(renderOne(g));
           placed.add(g);
         }
-        body.append(h('div', { class: 'rb-group builtin', title: tr('組み込みのグループ（編集できません）') }, h('div', { class: 'rb-controls' }), h('div', { class: 'rb-group-label' }, h('span', null, labels.get(bg.id) ?? bg.id.replace(/^Group/, '')))));
+        body.append(h('div', { class: 'rb-group builtin', title: tr('組み込みのグループ（編集できません）') }, h('div', { class: 'rb-controls' }), h('div', { class: 'rb-group-label' }, h('span', null, builtinGroupName(bg.id)))));
         for (const g of groups) if (g.getAttribute('insertAfterMso') === bg.id && !placed.has(g)) {
           body.append(renderOne(g));
           placed.add(g);
@@ -1346,26 +1491,82 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
   return { ribbon, fit };
 }
 
-/** 新しいタブを作って選択する。 */
+/**
+ * 組み込みタブの列が枠より広いとき、選んでいない組み込みタブ（挿入〜ヘルプ）を右から「…」1 個にまとめる（C-3）。
+ * 収まらないまま欄がスクロールすると、「ファイル」が「イル」のように途中で切れて見えるため。
+ * 自作タブ・「ファイル」・「ホーム」・表示中のタブは必ず見せる。測り直すたびに一度すべて戻してから測る
+ * （枠の幅は変わるので、前回の結果は引き継がない）。「2つの幅を比べる」の下の枠にも同じように行う。
+ */
+function foldBuiltinTabs(host: HTMLElement): void {
+  for (const bar of Array.from(host.querySelectorAll<HTMLElement>('.rb-tabs'))) {
+    const strip = bar.querySelector<HTMLElement>('.rb-tabs-scroll');
+    const more = bar.querySelector<HTMLElement>('.rb-tab-more');
+    if (!strip || !more) continue;
+    const candidates = Array.from(strip.querySelectorAll<HTMLElement>('.rb-tab[data-fold]'));
+    for (const c of candidates) c.classList.remove('folded');
+    more.hidden = true;
+    const overflow = () => strip.scrollWidth > strip.clientWidth + 1;
+    if (candidates.length === 0 || !overflow()) continue;
+    // 「…」自身も幅を取るので、先に出してから測る
+    more.hidden = false;
+    for (const c of candidates.reverse()) {
+      if (!overflow()) break;
+      c.classList.add('folded');
+    }
+  }
+}
+
+/** 「…」で開く、まとめた組み込みタブの一覧。選ぶとそのタブを表示する。 */
+function openFoldedTabsMenu(host: HTMLElement, opener: HTMLElement): void {
+  const bar = opener.closest<HTMLElement>('.rb-tabs');
+  const folded = Array.from(bar?.querySelectorAll<HTMLElement>('.rb-tab.folded[data-idmso]') ?? []);
+  const r = opener.getBoundingClientRect();
+  openMenu(r.left, r.bottom, folded.map((n) => ({
+    label: n.querySelector('.rb-label')?.textContent ?? n.textContent ?? '',
+    run: () => {
+      activeTab = { kind: 'builtin', idMso: n.dataset['idmso']! };
+      renderCanvas(host);
+    },
+  })), { restoreFocus: opener });
+}
+
+/**
+ * 足した要素のラベルを、その場で全選択して書き換えられる状態にする（C-1）。
+ * 足したあとは「クリック → F2 → 入力」が要ったため、足した直後にそのまま名前を打てるようにする。
+ * Enter で確定、Esc で既定名のまま（どちらも終わるとキャンバスにフォーカスが戻る）。
+ * ［＋］・挿入メニュー・右クリックの「前に挿入／子を追加」から呼ぶ。ラベルを持たない要素や VBA で返すラベルでは何もしない（false）。
+ */
+export function startRenameOf(path: Path | null | undefined): boolean {
+  if (!hostEl || !path || !app.store) return false;
+  return startRename(hostEl, path);
+}
+
+/** 新しいタブを作って選択し、名前をその場で打てる状態にする。 */
 function addTab(): void {
-  runEdit('canvas', (doc) => {
+  let added: Path | undefined;
+  const ok = runEdit('canvas', (doc) => {
     const tabs = ensureTabs(doc);
     const el = createElement(doc, 'tab', tabs);
     tabs.insertBefore(el, tabs.children[allowedIndex(tabs, 'tab', tabs.children.length) ?? tabs.children.length] ?? null);
-    return pathOf(el);
+    added = pathOf(el);
+    return added;
   }, tr('タブを追加'));
+  if (ok) startRenameOf(added);
 }
 
 function addChild(parentPath: Path, tag: string): void {
-  runEdit('canvas', (doc) => {
+  let added: Path | undefined;
+  const ok = runEdit('canvas', (doc) => {
     const parent = elementAt(doc, parentPath);
     if (!parent) return undefined;
     const at = allowedIndex(parent, tag, parent.children.length);
     if (at === null) return undefined;
     const el = createElement(doc, tag, parent);
     parent.insertBefore(el, parent.children[at] ?? null);
-    return pathOf(el);
+    added = pathOf(el);
+    return added;
   }, tr('<{tag}> を追加', { tag }));
+  if (ok) startRenameOf(added);
 }
 
 /** コンテキストメニュー（右クリックメニュー）に足す項目を、メニューの形で並べる。 */
@@ -2011,13 +2212,19 @@ function startRename(host: HTMLElement, path: Path): boolean {
   if (!store || !el || !node || el.hasAttribute('getLabel') || !defFor(el)?.attrs.includes('label')) return false;
   const labelNode = node.querySelector<HTMLElement>(':scope > .rb-label, :scope > .rb-group-label > .rb-label, :scope > .rb-split-main > .rb-label, :scope > .rb-split-drop > .rb-label, :scope > span:not([class])') ?? (inBackstage(el) ? node : null);
   if (!labelNode) return false;
+  // 畳んだ枠の中（非表示）では入力欄にフォーカスが移らず、blur も来ないので、始めない
+  if (!isShown(node)) return false;
   const original = el.getAttribute('label') ?? '';
+  const saved = Array.from(labelNode.childNodes);
+  const wasDraggable = node.draggable;
+  const snap = snapshotOf(el);
   const input = h('input', { type: 'text', class: 'cv-rename', value: original, spellcheck: false, 'aria-label': tr('ラベル') });
   let done = false;
   const finish = (commit: boolean) => {
     if (done) return;
     done = true;
     renaming = false;
+    cancelRename = null;
     const v = input.value;
     if (commit && v !== original) {
       runEdit('canvas', (doc) => {
@@ -2041,12 +2248,34 @@ function startRename(host: HTMLElement, path: Path): boolean {
   input.addEventListener('blur', () => finish(true));
   input.addEventListener('click', (e) => e.stopPropagation());
   input.addEventListener('mousedown', (e) => e.stopPropagation());
+  /** 入力欄を外して元の表示に戻す（確定も描き直しもしない）。 */
+  const undo = () => {
+    done = true;
+    renaming = false;
+    cancelRename = null;
+    labelNode.replaceChildren(...saved);
+    node.draggable = wasDraggable;
+  };
   renaming = true;
+  cancelRename = (doc) => {
+    if (!isSameElementAt(doc, path, snap)) undo();
+  };
   labelNode.replaceChildren(input);
   node.draggable = false;
   input.focus();
+  // フォーカスが取れなかった（見えない枠の中など）なら、blur が来ないまま入力中が続くので、始めなかったことにする
+  if (document.activeElement !== input) {
+    undo();
+    return false;
+  }
   input.select();
   return true;
+}
+
+/** 画面に出ているか（display: none や visibility: hidden の枠の中ではない）。 */
+function isShown(node: HTMLElement): boolean {
+  // jsdom など checkVisibility のない環境は、見えるものとして扱う（getClientRects は jsdom で常に空になる）
+  return typeof node.checkVisibility === 'function' ? node.checkVisibility({ visibilityProperty: true }) : true;
 }
 
 // ---- ドラッグ＆ドロップ ----

@@ -546,3 +546,58 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .insp-mixed-tag { font-size: var(--fs-xs); color: var(--text-subtle); font-style: italic; }
 .insp-bulk-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); }
 .monaco-editor .sash-secondary-tag { background: var(--sel-bg); border-bottom: 1px dashed var(--sel-border); }
+
+/* ---- UI 使い勝手の見直し（キャンバス・インスペクタ・カタログ） ---- */
+
+/* C-2：実寸で横にあふれても、見出し（切り替え・幅の選択）は左端に貼り付けて流れ去らせない。
+ * #canvas を中身の幅まで広げ（貼り付ける余地を作る）、見出しの幅は枠の表示幅（canvas.ts が --cv-pane-w に入れる）に固定する */
+#canvas.cv-actual { width: max-content; min-width: 100%; }
+#canvas.cv-actual > .cv-header { left: 0; width: var(--cv-pane-w, 100%); margin-right: 0; box-sizing: border-box; }
+
+/* C-3：幅が足りないときにまとめた組み込みタブは隠し、「…」から開く */
+.rb-tab.folded { display: none; }
+.rb-tab-more { flex-shrink: 0; align-self: flex-end; height: 30px; min-height: 0; margin: 0; padding: 0 var(--sp-2); border: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: transparent; color: var(--text-subtle); font-weight: 600; }
+.rb-tab-more:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }
+.rb-tab-more:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.rb-tab-more[hidden] { display: none; }
+
+/* C-6：無効のボタンは、押されている（active）印も無効の色にする（幅「自由」のとき、使えない「全体」が選択色のまま見えるため） */
+.segmented button[disabled].active, .segmented button:disabled.active { background: var(--surface); color: var(--text-disabled); font-weight: 400; }
+
+/* I-1：1 属性を 1 段（約 32px）にする。「固定 | VBA」は入力欄の右端の小さな切り替えボタン 1 個 */
+.insp-row.has-mode > .insp-value { display: flex; align-items: flex-start; gap: var(--sp-1); }
+.insp-row.has-mode > .insp-value > :first-child { flex: 1 1 auto; min-width: 0; }
+.insp-modebtn {
+  flex: none;
+  min-height: 0;
+  height: var(--ctl-h-sm);
+  min-width: 36px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-subtle);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.insp-modebtn:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }
+.insp-modebtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.insp-modebtn.on:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
+.insp-modebtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+/* 真偽値の 3 択は、ボタンが並ぶ幅が狭いときに文字を切って詰める（切り替えボタンのぶん幅が減るため。全文は選択肢の読み上げと同じ） */
+.insp-row.has-mode .insp-bool button { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 3px; }
+/* I-5：ラベル列の日本語名は 2 行まで折り返す（「詳細」の長い名前が切れて読めなかったため） */
+.insp-label-ja { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; overflow: hidden; overflow-wrap: anywhere; line-height: 1.3; }
+/* I-3：アイコンの見本（24px）。取れなければ「？」 */
+.insp-icon-preview { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; object-fit: contain; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-subtle); font-size: var(--fs-xs); }
+.insp-icon-preview.placeholder { border-style: dashed; }
+
+/* D-3：カタログの長い名前は 2 行まで折り返し、列の最小幅を広げる。注目している項目の全文は下に出す */
+.catalog-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.catalog-grid .catalog-id { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; overflow: hidden; overflow-wrap: anywhere; }
+.catalog-fullname { min-height: 1.4em; padding: 0 var(--sp-1); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-subtle); overflow-wrap: anywhere; }
+/* I-1：1 属性 1 段（約 32px）。ラベル列は 2 行（日本語名＋属性名）ぶんの高さで、入力欄は上下中央に合わせる */
+.insp-row, .insp-row.has-mode { grid-template-columns: minmax(72px, 29%) 1fr; padding: 2px var(--sp-3); }
+.insp-label { padding-top: 0; justify-content: center; min-height: var(--ctl-h-sm); }
+.insp-row.has-mode .insp-bool button { font-size: 11px; }

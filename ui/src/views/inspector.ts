@@ -10,16 +10,17 @@ import { openLibrary } from '../dialogs/libraryDialog';
 import { h, svg } from '../dom';
 import { applyLibraryIcon, openFluentIcons, openIconDialog } from '../icon/iconDialog';
 import { kindIcon, uiIcons } from '../icons';
-import { identifierOf, samePath, setAttr, suggestId, usedIds, type Path } from '../model';
+import { identifierOf, samePath, setAttr, suggestId, suggestIdFromLabel, usedIds, type Path } from '../model';
 import type { ImageEntry } from '../store';
 import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, type AttrDef } from '../schema';
 import { bareCallbackName, generateStub, type CallbackStatus } from '../vba';
 import { attrValueError } from '../attrValidate';
 import { lang, t } from '../i18n';
 import { imageMsoNames, labels as msoLabels } from '../catalog/catalog';
-import { buildSvg, DEFAULT_COLOR, displayName as fluentName, loadFluentIcons, type FluentIcon } from '../fluent/fluent';
-import { suggestFluent, suggestImageMso, suggestTerms } from '../iconSuggest';
-import { msoIcon } from '../msoIcons';
+import { buildSvg, DEFAULT_COLOR, displayName as fluentName, iconSet, loadIconSet, type FluentIcon } from '../fluent/fluent';
+import { hasSuggestTerms, suggestFluent, suggestImageMso } from '../iconSuggest';
+import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
+import { openMenu } from './contextMenu';
 import { renderBulkInspector } from './bulkInspector';
 import '../styles-w3.css';
 
@@ -31,7 +32,11 @@ export interface InspectorHooks {
 }
 
 export type Section = '基本' | '表示' | '画像' | 'コールバック' | '詳細';
-export const SECTIONS: readonly Section[] = ['基本', '表示', '画像', 'コールバック', '詳細'];
+/**
+ * 並び順。よく使う「画像」「コールバック」を「基本」の直後に置く（I-1。「表示」「詳細」は、触る機会が少ないので後ろ）。
+ * 狭いインスペクタでも、アイコンとクリック時の処理が、下へスクロールしなくても目に入るようにするため。
+ */
+export const SECTIONS: readonly Section[] = ['基本', '画像', 'コールバック', '表示', '詳細'];
 
 /** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
 export function sectionName(s: Section): string {
@@ -64,6 +69,15 @@ export const BOOL_DEFAULT: Readonly<Record<string, boolean>> = {
   startFromScratch: false, autoScale: false, centerVertically: false, invalidateContentOnDrop: false, noWrap: false,
   isDefinitive: false, showInRibbon: true,
 };
+
+/** 列挙値の属性の既定値（分かっているものだけ）。「既定（normal）」のように出す（I-4）。 */
+export const ENUM_DEFAULT: Readonly<Record<string, string>> = { size: 'normal', itemSize: 'normal', boxStyle: 'horizontal' };
+
+/** 列挙値の「指定なし」の選択肢の文字。既定値が分かっていれば「既定（normal）」、分からなければ「未指定」。 */
+export function enumUnsetText(name: string): string {
+  const def = ENUM_DEFAULT[name];
+  return def === undefined ? t('未指定') : t('既定（{value}）', { value: def });
+}
 
 export function attrLabel(name: string): string {
   const ja = ATTR_LABEL[name];
@@ -121,6 +135,8 @@ export function mountInspector(host: HTMLElement, h0: InspectorHooks): void {
   });
   app.on('problems', render);
   app.on('vba', render);
+  // アイコンの見本は Excel から取るので、届いたら描き直す（I-3）
+  onMsoIconsLoaded(render);
   app.on('store', (c) => {
     if (c && (c.kinds.has('selection') || c.kinds.has('doc') || c.kinds.has('images'))) render();
   });
@@ -131,8 +147,12 @@ export function mountInspector(host: HTMLElement, h0: InspectorHooks): void {
  * 終わってから描き直す。change の処理中に DOM を差し替えると、移動先の欄が消えてフォーカスを失うため。
  */
 function schedule(host: HTMLElement): void {
+  // テスト環境の破棄後に遅れて呼ばれると window が無く落ちるため、何もしない
+  if (typeof window === 'undefined') return;
   window.clearTimeout(renderTimer);
-  if (host.contains(document.activeElement)) renderTimer = window.setTimeout(() => renderInspector(host), 0);
+  if (host.contains(document.activeElement)) renderTimer = window.setTimeout(() => {
+      if (typeof window !== 'undefined') renderInspector(host);
+    }, 0);
   else renderInspector(host);
 }
 
@@ -351,6 +371,8 @@ interface TextOpts {
   /** 入力を確かめる。問題があればその理由を返す（空なら確定してよい）。 */
   validate?: (v: string) => string | null;
   inputMode?: string;
+  /** 読み上げ用の名前。見えるラベルと結びつかない欄（アイコン欄など）に付ける。 */
+  ariaLabel?: string;
   /**
    * 確定する。値が変わらなければ何もしない。false（または false になる Promise）を返したら、
    * 断られた・取りやめたとみなして、欄を確定前の値に戻す。
@@ -369,6 +391,7 @@ function textInput(attr: string, value: string, opts: TextOpts = {}): { input: H
     spellcheck: false,
     autocomplete: 'off',
     inputmode: opts.inputMode,
+    'aria-label': opts.ariaLabel,
     dataset: { attr, fkey: `${attr}:text`, orig: value },
   });
   const error = h('div', { class: 'field-error', role: 'alert', hidden: true });
@@ -421,6 +444,56 @@ function textInput(attr: string, value: string, opts: TextOpts = {}): { input: H
   return { input, wrap: h('div', { class: 'insp-field' }, input, error) };
 }
 
+export interface IdSuggestion {
+  id: string;
+  /** label はラベルから、seq は種類の接頭辞と連番から。 */
+  kind: 'label' | 'seq';
+}
+
+/**
+ * id の提案の選択肢（I-2）。ラベルから作ったもの（英字なら単語をつなげ、日本語などはそのまま使う。id には Unicode の文字を使える。
+ * 仕様書 §17.2）と、種類と連番のもの。両方が同じ（ラベルが空など）なら 1 つだけ返す。
+ */
+export function idSuggestions(tag: string, label: string | null, used: ReadonlySet<string>): IdSuggestion[] {
+  const seq = suggestId(tag, null, used);
+  const ascii = label !== null && /^[\x20-\x7e]+$/.test(label);
+  const fromLabel = label === null || label.trim() === '' ? null : ascii ? suggestId(tag, label, used) : suggestIdFromLabel(tag, label, used);
+  const out: IdSuggestion[] = [];
+  if (fromLabel && fromLabel !== seq) out.push({ id: fromLabel, kind: 'label' });
+  out.push({ id: seq, kind: 'seq' });
+  return out;
+}
+
+/** 「提案」を押したとき。選択肢が 2 つ以上なら小メニューで選ばせ、1 つならそのまま入れる。 */
+function suggestIdMenu(el: Element, current: string, input: HTMLInputElement, opener: HTMLElement): void {
+  const used = usedIds(el.ownerDocument);
+  used.delete(current);
+  const label = el.getAttribute('label');
+  const options = idSuggestions(el.localName, label, used);
+  const apply = (next: string) => {
+    const before = input.value;
+    if (next === current) {
+      // 何も起きないと、押したのに反応がないように見える。変わらないことだけを知らせる。
+      // 「日本語のラベルからは英字の ID を作れない」とは言わない：ラベルから作った案が別にあった（これは連番を選んだだけ）か、
+      // 記号だけのラベルで作れなかっただけで、理由が違うため
+      notify({ kind: 'info', message: t('ID は {id} のままです', { id: next }) });
+      return;
+    }
+    input.value = next;
+    // 断られたら、提案した値を欄に残さない
+    if (!commit('id', next, { idMso: null, idQ: null })) input.value = before;
+  };
+  if (options.length === 1) {
+    apply(options[0]!.id);
+    return;
+  }
+  const r = opener.getBoundingClientRect();
+  openMenu(r.left, r.bottom + 2, options.map((o) => ({
+    label: o.kind === 'label' ? t('{id}（ラベルから）', { id: o.id }) : t('{id}（連番）', { id: o.id }),
+    run: () => apply(o.id),
+  })), { restoreFocus: opener });
+}
+
 /** 既定 / はい / いいえ の3択。 */
 function boolEditor(el: Element, d: AttrDef): HTMLElement {
   const raw = el.getAttribute(d.name);
@@ -470,7 +543,7 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
       return h(
         'select',
         { dataset: { attr: d.name, fkey: `${d.name}:enum` }, onchange: (e: Event) => commit(d.name, (e.target as HTMLSelectElement).value || null) },
-        h('option', { value: '' }, t('未指定')),
+        h('option', { value: '' }, enumUnsetText(d.name)),
         (d.values ?? []).map((v) => h('option', { value: v, selected: v === value }, v)),
         value && !(d.values ?? []).includes(value) ? h('option', { value, selected: true }, value) : null,
       );
@@ -493,16 +566,11 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
         h('button', {
           type: 'button',
           class: 'small',
-          title: t('種類と連番からidを提案する'),
-          onclick: () => {
-            const used = usedIds(el.ownerDocument);
-            used.delete(value);
-            const next = suggestId(el.localName, el.getAttribute('label'), used);
-            const before = input.value;
-            input.value = next;
-            // 断られたら、提案した値を欄に残さない
-            if (!commit('id', next, { idMso: null, idQ: null })) input.value = before;
-          },
+          title: t('ラベルや連番から id を提案する'),
+          'aria-haspopup': 'menu',
+          // 選んで描き直された後も、この「提案」ボタンにフォーカスが戻るように
+          dataset: { fkey: 'id:suggest' },
+          onclick: (e: MouseEvent) => suggestIdMenu(el, value, input, e.currentTarget as HTMLElement),
         }, t('提案')),
       );
     }
@@ -604,16 +672,21 @@ function row(el: Element, d: AttrDef, key: string): HTMLElement {
       const name = remembered.get(`${key}|${dyn.name}`) || defaultCallbackName(el, dyn.name);
       if (commit(dyn.name, name, { [d.name]: null }, t('{attr} を VBA で返す', { attr: d.name }))) offerStub(name);
     };
-    modeSwitch = h(
-      'div',
-      { class: 'segmented insp-mode', role: 'radiogroup', 'aria-label': t('値の決め方') },
-      h('button', { type: 'button', role: 'radio', class: useDynamic ? '' : 'active', 'aria-checked': String(!useDynamic), title: t('固定の値（{name}）', { name: d.name }), dataset: { fkey: `${d.name}:mode:static` }, onclick: () => useDynamic && toStatic() }, t('固定')),
-      h('button', { type: 'button', role: 'radio', class: useDynamic ? 'active' : '', 'aria-checked': String(useDynamic), title: t('VBAで動的に返す（{name}）', { name: dyn.name }), dataset: { fkey: `${d.name}:mode:vba` }, onclick: () => !useDynamic && toDynamic() }, 'VBA'),
-    );
+    // 「固定 | VBA」は、入力欄の右端の小さな切り替えボタン 1 個にする（I-1）。以前はラベルの下に 1 段使っていて、
+    // 1 属性が約 62px になり、高さ 768px では 6 属性しか見えなかった。固定は輪郭だけ、VBA で返しているときは色付き。
+    // 押すたびに描き直されるので、描き直した後も同じボタンにフォーカスが戻るよう、状態によらず同じ data-fkey にする
+    modeSwitch = h('button', {
+      type: 'button',
+      class: `insp-modebtn${useDynamic ? ' on' : ''}`,
+      'aria-pressed': String(useDynamic),
+      'aria-label': t('VBA で動的に返す（{name}）', { name: dyn.name }),
+      title: useDynamic ? t('VBA で返しています。押すと固定の値（{name}）に戻します', { name: d.name }) : t('VBA で動的に返す（{name}）', { name: dyn.name }),
+      dataset: { fkey: `${d.name}:mode` },
+      onclick: () => (useDynamic ? toStatic() : toDynamic()),
+    }, 'VBA');
   }
-  // 「固定 | VBA」はラベルの下に置く（インスペクタは幅が狭く、入力欄の横に置くと値の欄が潰れるため）
   const label = labelCell(shown, el.localName, fieldId);
-  return h('div', { class: `insp-row${modeSwitch ? ' has-mode' : ''}` }, modeSwitch ? h('div', { class: 'insp-label-cell' }, label, modeSwitch) : label, h('div', { class: 'insp-value' }, editor));
+  return h('div', { class: `insp-row${modeSwitch ? ' has-mode' : ''}` }, label, h('div', { class: 'insp-value' }, editor, modeSwitch));
 }
 
 let msoNames: string[] | null = null;
@@ -635,7 +708,6 @@ function labelForSuggest(el: Element): string {
 function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean): HTMLElement | null {
   const label = labelForSuggest(el);
   if (!label) return null;
-  const hasTerms = suggestTerms(label).length > 0;
   msoNames ??= imageMsoNames();
   const mso = suggestImageMso(label, msoNames, msoLabels);
   const msoRow = mso.length
@@ -653,36 +725,38 @@ function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean
         }))
     : null;
   const fluentRow = h('div', { class: 'icon-suggest-row', hidden: true }, h('span', { class: 'icon-suggest-kind' }, t('アイコン集')));
-  const fillFluent = (icons: FluentIcon[]) => {
-    const picks = suggestFluent(icons, label);
-    if (picks.length === 0) return;
+  // 組み込みの候補がなく、アイコン集の候補も出せなかったときは、見出しだけの箱を出さないよう、箱ごと隠しておく
+  const box = h('div', { class: 'icon-suggest-box', 'aria-label': t('ラベルから選んだアイコンの候補'), hidden: !msoRow },
+    h('div', { class: 'icon-suggest-head muted' }, t('候補（ラベル「{label}」から）', { label })),
+    msoRow,
+    fluentRow);
+  const fillFluent = async (icons: FluentIcon[]) => {
+    const picks = await suggestFluent(icons, label);
+    // 待っている間に欄が描き直されて外れていたら、何もしない
+    if (picks.length === 0 || !fluentRow.isConnected) return;
     fluentRow.hidden = false;
+    box.hidden = false;
     fluentRow.append(...picks.map((icon) => {
-      const markup = buildSvg(icon, 'regular', '#000000', 20);
+      const markup = buildSvg(icon, 'regular', 'currentColor', 20);
       return h('button', {
         type: 'button',
         class: 'icon-suggest fluent',
         title: t('{name}（アイコン集）を加工して設定する', { name: fluentName(icon.name) }),
         'aria-label': fluentName(icon.name),
         onclick: () => openFluentCandidate(path, icon),
-      }, markup ? svg(markup.replace(/fill="#000000"/, 'fill="currentColor"')) : null);
+      }, markup ? svg(markup) : null);
     }));
   };
-  if (hasTerms) {
-    if (fluentIcons) fillFluent(fluentIcons);
-    else
-      void loadFluentIcons()
-        .then(({ icons }) => {
-          fluentIcons = icons;
-          if (fluentRow.isConnected) fillFluent(icons);
-        })
-        .catch(() => undefined);
-  }
-  if (!msoRow && !hasTerms) return null;
-  return h('div', { class: 'icon-suggest-box', 'aria-label': t('ラベルから選んだアイコンの候補') },
-    h('div', { class: 'icon-suggest-head muted' }, t('候補（ラベル「{label}」から）', { label })),
-    msoRow,
-    fluentRow);
+  // 概念の辞書（小さい）で言葉が見つかったときだけ、大きなアイコン集のデータを読み込む。
+  // 旧来の小さな辞書だけで足切りすると、「出荷」「精算する」「猫」のような言葉で候補が出なくなる
+  void hasSuggestTerms(label)
+    .then(async (ok) => {
+      if (!ok || !fluentRow.isConnected) return;
+      if (!fluentIcons) fluentIcons = (await loadIconSet()).icons;
+      await fillFluent(fluentIcons);
+    })
+    .catch(() => undefined);
+  return box;
 }
 
 /**
@@ -693,8 +767,18 @@ function openFluentCandidate(path: Path, icon: FluentIcon): void {
   const markup = buildSvg(icon, 'regular', DEFAULT_COLOR);
   if (!markup) return;
   openIconDialog(path, undefined, undefined, {
-    fluent: { blob: new Blob([markup], { type: 'image/svg+xml' }), fileName: `${icon.name}_regular.svg`, name: icon.name, variant: 'regular', color: DEFAULT_COLOR },
+    fluent: { blob: new Blob([markup], { type: 'image/svg+xml' }), fileName: `${iconSet(icon) === 'tabler' ? 'tabler-' : ''}${icon.name}_regular.svg`, name: icon.name, set: iconSet(icon), variant: 'regular', color: DEFAULT_COLOR },
   });
+}
+
+/**
+ * 組み込みアイコン（imageMso）の見本（24px）。キャンバスと同じ取得（msoIcon）で、取れなければ「？」を出す（I-3）。
+ * まだ取得中（undefined）のときは空の枠だけにして、届いたら onMsoIconsLoaded で描き直す。
+ */
+function iconPreview(name: string): HTMLElement {
+  const src = name ? msoIcon(name) : null;
+  if (src) return h('img', { class: 'insp-icon-preview', src, width: 24, height: 24, alt: '', title: name, draggable: false });
+  return h('span', { class: 'insp-icon-preview placeholder', 'aria-hidden': 'true', title: name ? t('{name} の見本を出せません', { name }) : '' }, !name || src === undefined ? '' : '？');
 }
 
 /** アイコンの行。組み込み（imageMso）、埋め込み画像（image）、VBA（getImage）を切り替える。 */
@@ -763,7 +847,8 @@ function iconRow(el: Element, key: string): HTMLElement {
     detail = h(
       'div',
       { class: 'insp-inline' },
-      textInput('imageMso', v, { placeholder: t('例：AutoSum'), apply: (x) => (x ? setMso(x) : commit('imageMso', null)) }).wrap,
+      iconPreview(v),
+      textInput('imageMso', v, { placeholder: t('例：AutoSum'), ariaLabel: t('imageMso の名前'), apply: (x) => (x ? setMso(x) : commit('imageMso', null)) }).wrap,
       h('button', { type: 'button', class: 'small', onclick: () => openCatalog('imageMso', v, setMso, '', { onCancel: cancelPending }) }, t('選ぶ')),
     );
   } else if (mode === 'image') {
@@ -801,7 +886,7 @@ function iconRow(el: Element, key: string): HTMLElement {
         h('button', {
           type: 'button',
           class: 'small',
-          title: t('同梱のアイコン集（Fluent UI System Icons）から選ぶ。Excel がなくても使えます'),
+          title: t('同梱のアイコン集（Fluent・Tabler、約 8,000 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます'),
           onclick: () =>
             openFluentIcons(
               (pick) =>

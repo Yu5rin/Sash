@@ -40,7 +40,9 @@
 .onboarding { margin-top: var(--sp-5); }
 .onboarding > summary { cursor: pointer; list-style: none; }
 .onboarding > summary::-webkit-details-marker { display: none; }
-.onboarding > summary h2::before { content: "▸"; display: inline-block; width: 1.2em; color: var(--text-subtle); transition: transform 0.15s; }
+/* 文字の ▸ は字形ごとに上下の位置がずれて見出しとそろわないので、枠線で描いた三角にして中央に置く */
+.onboarding > summary h2 { display: flex; align-items: center; gap: var(--sp-2); }
+.onboarding > summary h2::before { content: ""; flex-shrink: 0; width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 7px; border-color: transparent transparent transparent var(--text-subtle); transition: transform 0.15s; }
 .onboarding[open] > summary h2::before { transform: rotate(90deg); }
 .onboarding > summary:focus-visible { outline: var(--focus-ring); outline-offset: -2px; border-radius: var(--radius-lg); }
 .onboarding .card-body { padding: 0 var(--sp-4) var(--sp-4); }
@@ -77,3 +79,31 @@
 .idr-vba ul { margin: 0; padding-left: var(--sp-4); }
 .idr-vba li { display: flex; gap: var(--sp-2); }
 .idr-loc { flex-shrink: 0; color: var(--text-subtle); font-family: var(--font-mono); }
+
+/* ---- レシピ：コピーできなかったときの VBA 表示（モジュールごとに［コピー］） ---- */
+.vba-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-1); }
+.vba-section-head:first-child { margin-top: 0; }
+.vba-section-head h3 { margin: 0; font-family: var(--font-mono); }
+
+/* ---- アイコンライブラリ：空のとき ---- */
+.library-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2); text-align: center; padding: var(--sp-5); }
+.library-empty[hidden] { display: none; }
+.library-empty p { margin: 0; max-width: 42ch; line-height: 1.6; }
+.library-empty-title { font-size: var(--fs-md); font-weight: 600; }
+.library-empty-reason { font-size: var(--fs-xs); }
+/* 切り替えは中身の幅に（縦に並ぶ入れ物で横いっぱいに伸びないように） */
+.library-filter { align-self: flex-start; max-width: 100%; }
+.library-filter[hidden], .library-grid[hidden], .catalog input[type="search"][hidden] { display: none; }
+
+/* ---- 設定：足もと ---- */
+.settings-footer-note { font-size: var(--fs-xs); }
+
+/* ---- XML エディタ：構文エラーで同期が止まっているとき ---- */
+.xml-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
+.xml-status-msg { flex: 1 1 24ch; min-width: 0; }
+.xml-status-actions { display: inline-flex; gap: var(--sp-2); flex-shrink: 0; }
+.xml-status-actions button[hidden] { display: none; }
+/* 画面の更新は止まっているので、ほかのペインは触れそうに見えないよう薄くする（操作自体は各所で断られる） */
+#app.xml-sync-error .pane.left,
+#app.xml-sync-error .canvas-pane,
+#app.xml-sync-error .pane.right { opacity: 0.6; transition: opacity 0.15s; }

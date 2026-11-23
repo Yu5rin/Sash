@@ -38,6 +38,28 @@ export function elementAt(doc: Document, path: Path): Element | null {
   return el;
 }
 
+/**
+ * その場で名前を入力している間、入力欄が持つパスがまだ同じ要素を指しているかを確かめるための控え。
+ * 文書が（XML の編集・元に戻す・並べ替えなどで）変わると、パスの先が別の要素になりうる。確定してしまうと別の要素の
+ * ラベルを書き換えるので、同じ種類・同じ id（id がなければ同じラベル）かどうかで見分ける。
+ */
+export interface ElementSnapshot {
+  tag: string;
+  id: string | null;
+  label: string | null;
+}
+
+export function snapshotOf(el: Element): ElementSnapshot {
+  return { tag: el.localName, id: el.getAttribute('id'), label: el.getAttribute('label') };
+}
+
+/** path の先が、snapshot を取ったときと同じ要素か。 */
+export function isSameElementAt(doc: Document, path: Path, snap: ElementSnapshot): boolean {
+  const cur = elementAt(doc, path);
+  if (!cur || cur.localName !== snap.tag) return false;
+  return snap.id !== null ? cur.getAttribute('id') === snap.id : cur.getAttribute('label') === snap.label;
+}
+
 export function pathOf(el: Element): number[] {
   const path: number[] = [];
   let cur: Element = el;
@@ -170,6 +192,21 @@ export function suggestId(tag: string, label: string | null, used: ReadonlySet<s
     for (let n = 2; ; n++) if (!used.has(base + n)) return base + n;
   }
   for (let n = 1; ; n++) if (!used.has(prefix + n)) return prefix + n;
+}
+
+/**
+ * 日本語などのラベルそのものを使った id の案（例：ボタン「出荷一覧を作る」→ btn出荷一覧を作る）。
+ * id には Unicode の文字を使える（仕様書 §17.2）ので、英字にできないラベルでも、読んで分かる id を選べるようにする。
+ * 空白や記号は落とし、文字・数字・_ だけを残す。使えない形になるとき（空・数字だけなど）は null。
+ */
+export function suggestIdFromLabel(tag: string, label: string | null, used: ReadonlySet<string>): string | null {
+  const prefix = ID_PREFIX[tag] ?? tag.slice(0, 3);
+  const body = (label ?? '').normalize('NFKC').replace(/[^\p{L}\p{N}_]/gu, '');
+  if (!body) return null;
+  const base = prefix + body;
+  if (!isXmlId(base)) return null;
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) if (!used.has(base + n)) return base + n;
 }
 
 // ---- 編集操作 ----

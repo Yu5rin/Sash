@@ -39,15 +39,15 @@ describe('アイコンの候補', () => {
     expect(suggestImageMso('保存', many, new Map())).toHaveLength(5);
   });
 
-  it('アイコン集：言葉ごとの候補を交互に並べる', () => {
+  it('アイコン集：言葉ごとの候補を交互に並べる', async () => {
     const icons = toIcons({
       source: '', version: '', license: '',
       icons: { save: ['M0 0', 'M0 0'], save_copy: ['M0 0', 'M0 0'], document_csv: ['M0 0', 'M0 0'], arrow_export: ['M0 0', 'M0 0'], share: ['M0 0', 'M0 0'], print: ['M0 0', 'M0 0'] },
     });
-    expect(suggestFluent(icons, '保存')[0]!.name).toBe('save');
-    const csv = suggestFluent(icons, 'CSV出力').map((i) => i.name);
+    expect((await suggestFluent(icons, '保存'))[0]!.name).toBe('save');
+    const csv = (await suggestFluent(icons, 'CSV出力')).map((i) => i.name);
     expect(csv).toContain('document_csv');
     expect(csv.length).toBeLessThanOrEqual(5);
-    expect(suggestFluent(icons, 'ほげ')).toEqual([]);
+    expect(await suggestFluent(icons, 'ほげ')).toEqual([]);
   });
 });

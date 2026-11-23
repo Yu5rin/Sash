@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import data from '../src/fluent/fluentIcons.json';
 import {
-  buildSvg, DEFAULT_COLOR, displayName, JA_KEYWORDS, jaToEnglish, normalize, safeColor, searchIcons, toIcons,
+  buildSvg, DEFAULT_COLOR, displayName, JA_KEYWORDS, jaToEnglish, normalize, safeColor, toIcons,
   type FluentData, type FluentIcon,
 } from '../src/fluent/fluent';
+import { searchIcons } from '../src/fluent/iconSearch';
 
 const all = toIcons(data as unknown as FluentData);
 

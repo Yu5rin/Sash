@@ -2,6 +2,8 @@
 
 import type { ToastKind } from '../shell/toast';
 import { invoke, type LibraryIconDetail, type LibraryIconDto } from '../bridge';
+import { app } from '../app';
+import type { Path } from '../model';
 import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { fuzzyScore } from '../catalog/catalog';
@@ -13,6 +15,12 @@ export type LibraryPick = (icon: LibraryIconDetail) => void;
 export interface LibraryOptions {
   /** 閉じたときに呼ぶ。picked はアイコンを選んだか（取り消したときに呼び出し元の表示を戻すため）。 */
   onClose?: (picked: boolean) => void;
+  /**
+   * 空のライブラリの［アイコンを作る…］が押されたときに、選んでいる要素を渡してアイコンエディタを開く関数。
+   * アイコンエディタ（iconDialog.ts）もライブラリを開くので、ここから直接 import すると循環する。
+   * 動的 import で逃げると、同じモジュールが静的にも読まれていて分割の効果がなく、ビルドが警告するため、呼び出し側から渡してもらう。
+   */
+  onCreateIcon?: (target: Path) => void;
 }
 
 let opening = false;
@@ -44,9 +52,11 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
   let tag = '';
   let favOnly = false;
   const search = h('input', { type: 'search', placeholder: tr('名前やタグで検索'), spellcheck: false });
-  const tags = h('div', { class: 'segmented wrap' });
+  const tags = h('div', { class: 'segmented wrap library-filter' });
   const grid = h('div', { class: 'library-grid' });
   const status = h('div', { class: 'catalog-status' });
+  // 空のときに検索欄・切り替え・空の格子を並べても意味がないので、代わりに次の一手を示す
+  const emptyState = buildEmptyState(() => modal.close(), !!onPick, opts.onCreateIcon);
 
   const allTags = () => [...new Set(data.icons.flatMap((i) => i.tags))].sort((a, b) => a.localeCompare(b));
   const renderTags = () =>
@@ -102,6 +112,11 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
   };
 
   const render = () => {
+    const empty = data.icons.length === 0;
+    search.hidden = empty;
+    tags.hidden = empty;
+    grid.hidden = empty;
+    emptyState.hidden = !empty;
     renderTags();
     const q = search.value.trim();
     const list = data.icons
@@ -128,7 +143,7 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
         ),
       ),
     );
-    status.textContent = data.icons.length === 0 ? tr('ライブラリは空です。アイコンエディタの「ライブラリにも保存」で追加できます') : tr('{shown} / {total} 件 ・ 場所：{root}', { shown: list.length, total: data.icons.length, root: data.root });
+    status.textContent = empty ? tr('場所：{root}', { root: data.root }) : tr('{shown} / {total} 件 ・ 場所：{root}', { shown: list.length, total: data.icons.length, root: data.root });
   };
 
   search.addEventListener('input', debounce(render, 120));
@@ -156,9 +171,37 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
     if (next < 0) search.focus();
     else items[Math.min(next, items.length - 1)]?.focus();
   });
-  const modal = openModal(onPick ? tr('ライブラリからアイコンを選ぶ') : tr('アイコンライブラリ'), h('div', { class: 'catalog' }, search, tags, grid, status), { wide: true, onClose: () => opts.onClose?.(picked) });
-  search.focus();
+  // 空かどうかで検索欄を隠すので、先に描いてから開く（開いた時点のフォーカス先を正しく決めるため）
   render();
+  const modal = openModal(onPick ? tr('ライブラリからアイコンを選ぶ') : tr('アイコンライブラリ'), h('div', { class: 'catalog' }, search, tags, grid, emptyState, status), { wide: true, onClose: () => opts.onClose?.(picked) });
+  if (!search.hidden) search.focus();
+}
+
+/**
+ * ライブラリが空のときの案内。アイコンを作る入口をここに置く（作ったあと「ライブラリにも保存」で入る）。
+ * 要素を選んでいないとアイコンエディタの対象がないので、無効にして理由を添える。
+ * 選ぶ目的で開いた場合（onPick あり）は、作る入口を出さず説明だけにする。
+ */
+export function buildEmptyState(closeLibrary: () => void, picking: boolean, onCreateIcon?: (target: Path) => void): HTMLElement {
+  const sel = app.store?.selection ?? null;
+  const reason = tr('先にキャンバスかツリーで、アイコンを付けるボタンなどを選んでください');
+  const box = h('div', { class: 'library-empty' },
+    h('p', { class: 'library-empty-title' }, tr('ライブラリは空です')),
+    h('p', { class: 'muted' }, tr('アイコンエディタで作ったアイコンを「ライブラリにも保存」すると、ここに並び、ほかのブックでも使えます。')));
+  if (!picking) {
+    box.append(h('button', {
+      type: 'button',
+      class: 'primary',
+      disabled: !sel,
+      title: sel ? null : reason,
+      onclick: () => {
+        closeLibrary();
+        if (sel) onCreateIcon?.(sel);
+      },
+    }, tr('アイコンを作る…')));
+    if (!sel) box.append(h('p', { class: 'muted library-empty-reason' }, reason));
+  }
+  return box;
 }
 
 /** ライブラリのアイコンを、画像として使える形にする。 */
