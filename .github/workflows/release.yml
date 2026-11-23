@@ -1,46 +1,62 @@
+# v で始まるタグ（例：v0.1.0）を push すると、テスト・発行・配布物の検査・本文の組み立てを行い、
+# GitHub Release を「下書き」で作る。本文を確かめて「Publish」を押すのは人の仕事（docs/リリース手順.md）。
+# 手作業で配布物を作って添付する経路とは二重に走らせない（Graft・Pane と同じ方針）。
 name: リリース
-
-# v で始まるタグ（例：v0.2.0）を push すると、テスト・発行をしてリリースを作る。
-# 配布物のファイル名は、アプリの更新処理（src/Sash.Core/Update/UpdateSource.cs の AssetFileName）と合わせること。
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   release:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+    name: 発行してリリースの下書きを作る
+    runs-on: ubuntu-latest
 
-      - uses: actions/setup-node@v4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: .NET SDK の準備
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+
+      - name: Node.js の準備
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-
-      - name: タグと版の確認
+      # 版を決める。タグ（v0.1.0 等）を選んで実行したときだけ進める。workflow_dispatch を
+      # ブランチで実行すると github.ref_name が "main" になり、添付の名前が崩れるため、ここで止める。
+      # Directory.Build.props の <Version> とタグがずれていると、アプリが名乗る版と添付の名前が
+      # 食い違う（更新処理は版の比較と添付の名前の両方をタグから決める）ため、これも止める。
+      - name: 版の確認
         id: ver
-        shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag.TrimStart('v')
-          [xml]$props = Get-Content Directory.Build.props
-          $declared = ($props.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
-          if ($version -ne $declared) {
-            Write-Error "タグ（$tag）と Directory.Build.props の <Version>（$declared）が一致しません"
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "tag" ] || [[ "${GITHUB_REF_NAME}" != v* ]]; then
+            echo "::error::v で始まるタグを選んで実行してください（今は ${GITHUB_REF_TYPE} の ${GITHUB_REF_NAME}）"
             exit 1
-          }
-          "version=$version" >> $env:GITHUB_OUTPUT
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          PROPS_VERSION="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -n 1)"
+          if [ "${VERSION}" != "${PROPS_VERSION}" ]; then
+            echo "::error::タグ（${GITHUB_REF_NAME}）と Directory.Build.props の <Version>（${PROPS_VERSION}）が一致しません"
+            exit 1
+          fi
+          if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::版は 1.2.3 の形にしてください（更新処理が解釈できる形。今は ${VERSION}）"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
-      - name: UIのビルド
+      # 壊れたものを配らないよう、発行の前に必ずテストを通す。
+      - name: UI のテストとビルド
         working-directory: ui
         run: |
           npm ci
@@ -50,28 +66,113 @@ jobs:
       - name: テスト
         run: dotnet test Sash.slnx -c Release
 
-      - name: 単一exeの発行
+      # self-contained の単一 exe として発行する（Windows 向けの発行は Linux 上でもできる。
+      # Directory.Build.props の EnableWindowsTargeting）。
+      - name: Windows 向けに発行
         run: dotnet publish src/Sash.App -p:PublishProfile=win-x64
 
-      - name: 配布物と照合値と latest.json を作る
-        shell: pwsh
-        run: |
-          $v = "${{ steps.ver.outputs.version }}"
-          $name = "Sash-$v-win-x64.exe"
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item artifacts/publish/win-x64/Sash.exe "dist/$name"
-          $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
-          # 照合値ファイル（sha256sum と同じ形式）
-          [IO.File]::WriteAllText("dist/$name.sha256", "$hash  $name`n")
-          # 社内の共有フォルダや Web サーバーに置くための latest.json
-          $manifest = [ordered]@{ version = $v; file = $name; sha256 = $hash; notes = "" } | ConvertTo-Json
-          [IO.File]::WriteAllText("dist/latest.json", $manifest)
-          Get-ChildItem dist
-
-      - name: リリースを作る
+      # 添付の名前は、更新処理が組み立てる名前（src/Sash.Core/Update/UpdateSource.cs の AssetFileName）と
+      # 必ず合わせる。ここを変えると、配ったあとで利用者の更新が配布物を見つけられなくなる。
+      - name: 配布物を置いて中身を確かめる
         env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          $v = "${{ steps.ver.outputs.version }}"
-          gh release create "${{ github.ref_name }}" dist/* --title "Sash $v" --generate-notes
+          set -euo pipefail
+          f="Sash-${VERSION}-win-x64.exe"
+          cp artifacts/publish/win-x64/Sash.exe "$f"
+          # Windows の実行ファイル（先頭が MZ）で、単一 exe として十分な大きさがあるか
+          if [ "$(head -c 2 "$f")" != "MZ" ]; then
+            echo "::error::$f が Windows の実行ファイルではありません"
+            exit 1
+          fi
+          size=$(stat -c %s "$f")
+          if [ "$size" -lt 20000000 ]; then
+            echo "::error::$f が小さすぎます（${size} バイト）。self-contained の単一 exe になっていない可能性があります"
+            exit 1
+          fi
+          ls -l "$f"
+
+      # 照合値ファイル（Sash-<版>-win-x64.exe.sha256）。中身は sha256sum と同じ書式の1行
+      # （<64桁の小文字16進>  <ファイル名>）。アプリの更新処理がこの URL から照合値を取る
+      # （GitHub API を使わないので、社内の共有回線でも回数上限に当たらない）。
+      # 書式と名前を変えないこと。作った直後に sha256sum -c で突き合わせ、食い違えばここで止める。
+      - name: 照合値ファイルを作る
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          f="Sash-${VERSION}-win-x64.exe"
+          sha256sum "$f" > "$f.sha256"
+          sha256sum -c "$f.sha256"
+          if ! grep -Eq "^[0-9a-f]{64}  ${f}$" "$f.sha256" || [ "$(wc -l < "$f.sha256")" != "1" ]; then
+            echo "::error::$f.sha256 の書式が想定と違います"
+            exit 1
+          fi
+          cat "$f.sha256"
+
+      # 社内の共有フォルダや Web サーバーに置くための latest.json（docs/更新と社内配布.md）。
+      # 照合値は上の .sha256 と同じ値を使う。
+      - name: latest.json を作る
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          f="Sash-${VERSION}-win-x64.exe"
+          python3 - "$VERSION" "$f" "$(cut -d' ' -f1 "$f.sha256")" <<'PY'
+          import json, sys
+          version, name, sha = sys.argv[1:4]
+          with open('latest.json', 'w', encoding='utf-8') as f:
+              json.dump({'version': version, 'file': name, 'sha256': sha, 'notes': ''}, f, ensure_ascii=False, indent=2)
+              f.write('\n')
+          PY
+          cat latest.json
+
+      # リリース本文は「## 変更点」と「## ダウンロード」の2節だけにし、最後に README への案内を1行置く。
+      # 変更点は docs/変更履歴.md の「## <版>」の節から取り、末尾の「### バージョン」は除く。
+      # 表の SHA256 は上で作った .sha256 の値をそのまま使うので、添付と食い違わない。
+      - name: リリース本文を組み立てる
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          CHANGES="$(awk -v ver="$VERSION" '
+            /^## / { if (found) exit; if ($0 == "## " ver) { found = 1; next } }
+            found { print }
+          ' docs/変更履歴.md | awk '
+            { lines[NR] = $0 }
+            END {
+              n = NR
+              while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
+              if (n >= 2 && lines[n] ~ /^- `[^`]*`$/ && lines[n-1] == "### バージョン") n -= 2
+              while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
+              s = 1
+              while (s <= n && lines[s] ~ /^[[:space:]]*$/) s++
+              for (i = s; i <= n; i++) print lines[i]
+            }')"
+          if [ -z "$CHANGES" ]; then
+            echo "::warning::docs/変更履歴.md に「## $VERSION」の節が見つかりません。変更点は空欄のまま下書きにします。"
+          fi
+          f="Sash-${VERSION}-win-x64.exe"
+          size=$(stat -c %s "$f")
+          {
+            printf '## 変更点\n\n%s\n\n' "$CHANGES"
+            printf '## ダウンロード\n\n| ファイル | サイズ | SHA256 |\n|---|---|---|\n'
+            printf '| `%s` | %s | `%s` |\n' "$f" \
+              "$(awk -v b="$size" 'BEGIN { printf "%.1f MB", b / 1048576 }')" \
+              "$(cut -d' ' -f1 "$f.sha256")"
+            printf '\nインストールと更新の方法は [README](https://github.com/Yu5rin/Sash#インストール) をご覧ください。\n'
+          } > release-body.md
+          cat release-body.md
+
+      - name: リリースを作成（下書き）
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          # タイトルはタグと同じ表記にする（例: v0.1.0）。
+          name: ${{ github.ref_name }}
+          draft: true
+          files: |
+            Sash-${{ steps.ver.outputs.version }}-win-x64.exe
+            Sash-${{ steps.ver.outputs.version }}-win-x64.exe.sha256
+            latest.json
+          body_path: release-body.md
