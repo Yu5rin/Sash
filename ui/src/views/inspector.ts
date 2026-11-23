@@ -17,7 +17,7 @@ import { bareCallbackName, generateStub, type CallbackStatus } from '../vba';
 import { attrValueError } from '../attrValidate';
 import { lang, t } from '../i18n';
 import { imageMsoNames, labels as msoLabels } from '../catalog/catalog';
-import { buildSvg, DEFAULT_COLOR, displayName as fluentName, loadFluentIcons, type FluentIcon } from '../fluent/fluent';
+import { buildSvg, DEFAULT_COLOR, displayName as fluentName, iconSet, loadIconSet, type FluentIcon } from '../fluent/fluent';
 import { suggestFluent, suggestImageMso, suggestTerms } from '../iconSuggest';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { openMenu } from './contextMenu';
@@ -731,20 +731,20 @@ function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean
     if (picks.length === 0) return;
     fluentRow.hidden = false;
     fluentRow.append(...picks.map((icon) => {
-      const markup = buildSvg(icon, 'regular', '#000000', 20);
+      const markup = buildSvg(icon, 'regular', 'currentColor', 20);
       return h('button', {
         type: 'button',
         class: 'icon-suggest fluent',
         title: t('{name}（アイコン集）を加工して設定する', { name: fluentName(icon.name) }),
         'aria-label': fluentName(icon.name),
         onclick: () => openFluentCandidate(path, icon),
-      }, markup ? svg(markup.replace(/fill="#000000"/, 'fill="currentColor"')) : null);
+      }, markup ? svg(markup) : null);
     }));
   };
   if (hasTerms) {
     if (fluentIcons) fillFluent(fluentIcons);
     else
-      void loadFluentIcons()
+      void loadIconSet()
         .then(({ icons }) => {
           fluentIcons = icons;
           if (fluentRow.isConnected) fillFluent(icons);
@@ -766,7 +766,7 @@ function openFluentCandidate(path: Path, icon: FluentIcon): void {
   const markup = buildSvg(icon, 'regular', DEFAULT_COLOR);
   if (!markup) return;
   openIconDialog(path, undefined, undefined, {
-    fluent: { blob: new Blob([markup], { type: 'image/svg+xml' }), fileName: `${icon.name}_regular.svg`, name: icon.name, variant: 'regular', color: DEFAULT_COLOR },
+    fluent: { blob: new Blob([markup], { type: 'image/svg+xml' }), fileName: `${iconSet(icon) === 'tabler' ? 'tabler-' : ''}${icon.name}_regular.svg`, name: icon.name, set: iconSet(icon), variant: 'regular', color: DEFAULT_COLOR },
   });
 }
 
@@ -885,7 +885,7 @@ function iconRow(el: Element, key: string): HTMLElement {
         h('button', {
           type: 'button',
           class: 'small',
-          title: t('同梱のアイコン集（Fluent UI System Icons）から選ぶ。Excel がなくても使えます'),
+          title: t('同梱のアイコン集（Fluent・Tabler、約 8,000 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます'),
           onclick: () =>
             openFluentIcons(
               (pick) =>
