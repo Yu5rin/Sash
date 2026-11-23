@@ -28,6 +28,12 @@ export interface LayoutHandle {
   isCollapsed(key: PaneKey): boolean;
   /** 既定の大きさに戻す。 */
   reset(): void;
+  /**
+   * 指定のペインを一時的に畳む（キャンバスを広く使って、リボンを広い幅で見るため。仕様書 §18.7）。
+   * 大きさは保存しない（次の起動では元の大きさに戻る）。返した関数を呼ぶと、畳む前の大きさに戻す
+   * （その間に利用者が自分で開き直したペインは、そのままにする）。
+   */
+  collapseTemporarily(keys: readonly PaneKey[]): () => void;
 }
 
 function load(): { sizes: Sizes; last: Sizes } {
@@ -149,6 +155,15 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
       Object.assign(last, DEFAULT_SIZES);
       apply();
       persist();
+    },
+    collapseTemporarily: (keys) => {
+      const before = keys.map((k) => [k, sizes[k]] as const);
+      for (const k of keys) sizes[k] = 0;
+      apply();
+      return () => {
+        for (const [k, v] of before) if (sizes[k] === 0) sizes[k] = v;
+        apply();
+      };
     },
   };
 }

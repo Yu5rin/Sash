@@ -46,6 +46,9 @@ public enum VbaReadStatus
 
 public sealed record VbaReadResult(VbaReadStatus Status, IReadOnlyList<VbaModule> Modules);
 
+/// <summary>Excel のウィンドウの幅を合わせた結果（仕様書 §18.1）。幅はすべて論理 px、Points は Application.Width に入れた値。</summary>
+public sealed record WindowWidthResult(double Points, double LogicalWidth, double WorkAreaWidth, string? Workbook);
+
 /// <summary>
 /// Excel との連携（仕様書 §7、§9.1）。COM は遅延バインド（dynamic）で呼び、Interop アセンブリは同梱しない。
 /// すべての COM 呼び出しは <see cref="ComThread"/> 上で行う。
@@ -645,6 +648,218 @@ public sealed class ExcelService : IDisposable
             throw VbaFailure(ex);
         }
     });
+
+    // ---- 幅の確認・試しに押す・VBE へ移る（仕様書 §18） ----
+
+    /// <summary>
+    /// Excel のウィンドウの幅を、画面の幅（物理 px）と拡大率から決めた幅に合わせる（仕様書 §18.1）。
+    /// 対象は fullPath のブックを開いている Excel のウィンドウ（なければ起動中の Excel の、いま前にあるウィンドウ）。
+    /// 最大化を解いてから幅を入れる（最大化のままでは Width を入れても変わらないため）。
+    /// モニターの作業領域より広い幅は断る（Windows がウィンドウを縮めてしまい、測りたい幅にならないため）。
+    /// Windows 実機の Excel では確かめていない（換算・複数モニター・DPI の違うモニターでの動きを含む）。
+    /// </summary>
+    public Task<WindowWidthResult> SetWindowWidthAsync(string? fullPath, int width, double scale) => _com.InvokeAsync(() =>
+    {
+        scale = ExcelWindowSizing.NormalizeScale(scale);
+        if (ExcelWindowSizing.Validate(width, scale) is { } invalid)
+        {
+            throw new UserFacingException(invalid);
+        }
+
+        dynamic? app = null;
+        string? workbookName = null;
+        if (!string.IsNullOrEmpty(fullPath) && FindWorkbook(fullPath) is { } found)
+        {
+            app = found.App;
+            dynamic wb = found.Workbook;
+            // アドイン（xlam）は自分のウィンドウを持たないので、そのときは Excel のいま前にあるウィンドウを使う。
+            // 普通のブックは、Excel 2013 以降（SDI）ではブックごとにウィンドウがあり、Application.Width は
+            // アクティブなウィンドウに効くので、先にそのブックのウィンドウを前にする
+            if (SafeValue(() => (bool)wb.IsAddin) != true)
+            {
+                Safe(() => { wb.Activate(); return true; });
+                workbookName = Safe(() => (string)wb.Name);
+            }
+        }
+
+        app ??= RunningExcel.Applications().FirstOrDefault()
+            ?? throw new UserFacingException(L("Excel が起動していません。Excel でブックを開いてから、もう一度やり直してください。", "Excel is not running. Open the workbook in Excel and try again."));
+        if (Safe(() => (object?)app.ActiveWindow) is null)
+        {
+            throw new UserFacingException(L("Excel に表示中のウィンドウがありません。ブックを開いてから、もう一度やり直してください。", "Excel has no visible window. Open a workbook and try again."));
+        }
+
+        var hwnd = new IntPtr((long)app.Hwnd);
+        // 座標を物理 px で受け取るため、呼び出しの間だけこのスレッドを Per-Monitor V2 にする
+        // （プロセスは PerMonitorV2 で起動するが、COM のスレッドの DPI の扱いに頼らないため）
+        var previous = NativeMethods.SetThreadDpiAwarenessContext(NativeMethods.DpiAwarenessContextPerMonitorAwareV2);
+        try
+        {
+            var monitor = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MonitorDefaultToNearest);
+            var info = new NativeMethods.MONITORINFO { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+            if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+            {
+                throw new UserFacingException(L("Excel のウィンドウがある画面の大きさを調べられませんでした。", "Could not get the size of the screen that shows the Excel window."));
+            }
+
+            int dpi = NativeMethods.GetDpiForMonitor(monitor, NativeMethods.MdtEffectiveDpi, out uint dpiX, out _) == 0 ? (int)dpiX : 96;
+            var work = info.rcWork;
+            var plan = ExcelWindowSizing.Plan(width, scale, work.Right - work.Left, dpi);
+            if (!plan.Fits)
+            {
+                throw new UserFacingException(L(
+                    $"幅 {width}px（拡大率 {scale * 100:0}%、アプリから見た幅 {plan.LogicalWidth:0}px）は、Excel のある画面の作業領域（{plan.WorkAreaLogicalWidth:0}px）より広いため、Excel のウィンドウを合わせられません。もっと広い画面で試すか、幅を狭くしてください。",
+                    $"The width {width}px (scale {scale * 100:0}%, {plan.LogicalWidth:0}px as seen by apps) is wider than the work area of the screen that shows Excel ({plan.WorkAreaLogicalWidth:0}px), so the Excel window cannot be resized. Try a wider screen or a narrower width."));
+            }
+
+            // xlNormal（-4143）。最大化・最小化のままでは Width を入れても効かない
+            app.WindowState = -4143;
+            app.Width = plan.Points;
+
+            // 右（または左）にはみ出したら、作業領域に収まるよう左端を動かす（はみ出したままだとリボンの右端が見えない）
+            if (NativeMethods.GetWindowRect(hwnd, out var rect))
+            {
+                var delta = ExcelWindowSizing.LeftAdjustmentPoints(rect.Left, rect.Right, work.Left, work.Right, dpi);
+                if (delta != 0)
+                {
+                    Safe(() => { app.Left = (double)app.Left + delta; return true; });
+                }
+            }
+
+            return new WindowWidthResult(plan.Points, plan.LogicalWidth, plan.WorkAreaLogicalWidth, workbookName);
+        }
+        finally
+        {
+            if (previous != IntPtr.Zero)
+            {
+                NativeMethods.SetThreadDpiAwarenessContext(previous);
+            }
+        }
+    });
+
+    /// <summary>
+    /// 開いているブックのマクロを Application.Run で実行する（「試しに押す」。仕様書 §18.4）。
+    /// リボンのコールバックは IRibbonControl を受け取る形のものが多く、Run からは IRibbonControl を渡せないので、
+    /// 引数のない Sub だけを実行する。ブックは書き換えない（IRibbonControl の代わりを差し込むためにコードを足すことはしない）。
+    /// VBA を読めるとき（信頼の設定がオン）は先に宣言を調べて断り、読めないときは実行してみて、失敗したら同じ案内を返す。
+    /// 実行の間（MsgBox を出しているあいだなど）は COM のスレッドがふさがり、ほかの Excel 連携は待たされる。
+    /// </summary>
+    public Task<bool> RunMacroAsync(string fullPath, string macro) => _com.InvokeAsync(() =>
+    {
+        var found = FindWorkbook(fullPath) ?? throw new UserFacingException(L("ブックがExcelで開かれていません。Excel で開いてから試してください。", "The workbook is not open in Excel. Open it in Excel, then try again."));
+        var (app, wb) = found;
+        var (module, procedure) = VbaProcedureLookup.Split(macro);
+        if (procedure.Length == 0)
+        {
+            throw new UserFacingException(L("実行するマクロの名前がありません。", "No macro name was given."));
+        }
+
+        var argumentsHint = L("引数に IRibbonControl を取るマクロは、Excel のリボンから押して試してください。", "Macros that take an IRibbonControl argument must be tried from the ribbon in Excel.");
+        bool checkedSignature = false;
+        dynamic? project = TryGetProjectQuietly(wb);
+        if (project is not null)
+        {
+            string? parameters = null;
+            foreach (var c in Safe(() => (List<object>)Enumerate(project.VBComponents)) ?? [])
+            {
+                dynamic comp = c;
+                if (module is not null && !string.Equals(Safe(() => (string)comp.Name), module, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string code = Safe(() => { dynamic cm = comp.CodeModule; int n = cm.CountOfLines; return n > 0 ? (string)cm.Lines(1, n) : string.Empty; }) ?? string.Empty;
+                parameters = VbaProcedureLookup.FindParameters(code, procedure);
+                if (parameters is not null)
+                {
+                    break;
+                }
+            }
+
+            if (parameters is null)
+            {
+                throw new UserFacingException(L($"VBA に {procedure} が見つかりません。", $"{procedure} was not found in the VBA project."));
+            }
+
+            if (parameters.Length > 0)
+            {
+                throw new UserFacingException(L($"{procedure} は引数（{parameters}）を取るため、Sash からは実行できません。", $"{procedure} takes arguments ({parameters}), so Sash cannot run it.") + " " + argumentsHint);
+            }
+
+            checkedSignature = true;
+        }
+
+        // マクロが MsgBox などを出したときに Sash の後ろに隠れないよう、Excel を前に出す（失敗しても実行は続ける）
+        Safe(() => NativeMethods.SetForegroundWindow(new IntPtr((long)app.Hwnd)));
+        var name = VbaProcedureLookup.QualifiedName((string)wb.Name, module, procedure);
+        try
+        {
+            app.Run(name);
+            return true;
+        }
+        catch (COMException ex) when (!IsBusy(ex))
+        {
+            throw new UserFacingException(checkedSignature
+                ? L($"マクロ {procedure} の実行中にエラーが起きました：{ex.Message}", $"An error occurred while running the macro {procedure}: {ex.Message}")
+                : L($"マクロ {procedure} を実行できませんでした（{ex.Message}）。", $"Could not run the macro {procedure} ({ex.Message}).") + " " + argumentsHint, ex);
+        }
+    });
+
+    /// <summary>
+    /// VBE を表示し、指定の Sub の宣言行を選ぶ（コールバック一覧から VBE の該当の Sub へ移る。仕様書 §18.5）。
+    /// ProcStartLine は Sub の前のコメント行から数えるので、宣言そのものの行（ProcBodyLine）を選ぶ。kind は vbext_pk_Proc（0）。
+    /// Windows 実機の Excel では確かめていない。
+    /// </summary>
+    public Task<bool> RevealVbaAsync(string fullPath, string moduleName, string procedure) => _com.InvokeAsync(() =>
+    {
+        try
+        {
+            dynamic project = RequireProject(fullPath, out _);
+            dynamic? comp = Safe(() => (object?)project.VBComponents.Item(moduleName));
+            if (comp is null)
+            {
+                throw new UserFacingException(L($"モジュール {moduleName} が見つかりません。コールバック一覧を再読み込みしてください。", $"The module {moduleName} was not found. Please reload the callback list."));
+            }
+
+            dynamic cm = comp.CodeModule;
+            int line;
+            try
+            {
+                line = cm.ProcBodyLine(procedure, 0);
+            }
+            catch (COMException ex)
+            {
+                throw new UserFacingException(L($"{moduleName} に {procedure} が見つかりません。コールバック一覧を再読み込みしてください。", $"{procedure} was not found in {moduleName}. Please reload the callback list."), ex);
+            }
+
+            dynamic vbe = project.VBE;
+            vbe.MainWindow.Visible = true;
+            dynamic pane = cm.CodePane;
+            pane.Show();
+            pane.SetSelection(line, 1, line, 1);
+            // 選んだ行が見える位置に来るよう、少し上の行から表示する
+            Safe(() => { pane.TopLine = Math.Max(1, line - 3); return true; });
+            Safe(() => NativeMethods.SetForegroundWindow(new IntPtr((long)vbe.MainWindow.HWnd)));
+            return true;
+        }
+        catch (COMException ex)
+        {
+            throw VbaFailure(ex);
+        }
+    });
+
+    /// <summary>VBA プロジェクトを読めれば返す。信頼の設定がオフ・保護されている・忙しいなどで読めなければ null（例外にしない）。</summary>
+    private static dynamic? TryGetProjectQuietly(dynamic wb)
+    {
+        try
+        {
+            return TryGetProject(wb, out VbaReadStatus _);
+        }
+        catch (UserFacingException)
+        {
+            return null;
+        }
+    }
 
     // ---- imageMso / 表示名（仕様書 §9.1） ----
 

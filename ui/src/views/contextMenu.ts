@@ -151,6 +151,11 @@ export function openMenu(x: number, y: number, entries: Entry[], opts: { restore
 export interface ElementMenuHooks {
   /** XML エディタでその要素を表示する。 */
   revealInXml?: (path: Path) => void;
+  /**
+   * 末尾に足す項目（「マクロを Excel で実行」「VBE で表示」など。仕様書 §18.4・§18.5）。
+   * Excel 連携の操作は main.ts 側で組み立て、このファイルは並べるだけにする（ビューが Excel 連携に依存しないように）。
+   */
+  extraItems?: (path: Path, el: Element) => MenuItem[];
 }
 
 let hooks: ElementMenuHooks = {};
@@ -188,5 +193,7 @@ export function openElementMenu(x: number, y: number, path: Path, source: Source
     { label: t('XML で表示'), disabled: !hooks.revealInXml, run: () => hooks.revealInXml?.(path) },
     { label: t('ID をコピー'), disabled: !(el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.getAttribute('idQ')), run: () => copyId() },
   ];
+  const extra = hooks.extraItems?.(path, el) ?? [];
+  if (extra.length) entries.push('sep', ...extra);
   openMenu(x, y, entries, { restoreFocus });
 }

@@ -221,6 +221,32 @@ export interface HostApi {
   'vba.read': { req: { path: string }; res: { status: VbaReadStatus; modules: VbaModuleDto[] } };
   'vba.insert': { req: { path: string; module: string; code: string; documentModule: boolean }; res: boolean };
   'vba.replaceLine': { req: { path: string; module: string; line: number; expected: string; replacement: string }; res: boolean };
+  /** VBE を表示し、module の procedure の宣言行を選ぶ（仕様書 §18.5）。 */
+  'vba.reveal': { req: { path: string; module: string; procedure: string }; res: boolean };
+  /**
+   * Excel のウィンドウの幅を合わせる（仕様書 §18.1）。width は拡大率をかける前の画面の幅（物理 px。例：1920）、
+   * scale は Windows の拡大率（1.5 = 150%。10 以上なら % とみなすので 150 でもよい）。Application.Width には width / scale × 0.75（ポイント）を入れる。
+   * path を付けると、そのブックを開いている Excel を対象にする（省略時は UI が開いているファイル）。
+   * モニターの作業領域より広いときは、理由を添えて失敗する。
+   */
+  'excel.setWindowWidth': { req: { width: number; scale: number; path?: string }; res: WindowWidthResult };
+  /**
+   * 開いているブックのマクロを Application.Run で実行する（試しに押す。仕様書 §18.4）。引数のない Sub だけを実行し、
+   * 引数（IRibbonControl など）を取るものは理由を添えて失敗する。ブックは書き換えない。
+   */
+  'excel.runMacro': { req: { path: string; macro: string; controlId?: string }; res: boolean };
+}
+
+/** excel.setWindowWidth の応答。幅は論理 px。 */
+export interface WindowWidthResult {
+  /** Application.Width に入れた値（ポイント）。 */
+  points: number;
+  /** 合わせた幅（width / scale）。 */
+  logicalWidth: number;
+  /** Excel のある画面の作業領域の幅。 */
+  workAreaWidth: number;
+  /** 前に出したブックの名前（アドインのときは null）。 */
+  workbook: string | null;
 }
 
 /** ホストから届く通知。 */
@@ -471,6 +497,23 @@ const mock = {
         return r({ status: 'noExcel', modules: [] });
       case 'backup.restore':
         return r({ backup: null });
+      case 'excel.setWindowWidth': {
+        // 本物のホストと同じ換算と断り方を確かめられるよう、作業領域は 1920px（100%）とみなす
+        const p = payload as { width: number; scale: number };
+        const logical = p.width / (p.scale >= 10 ? p.scale / 100 : p.scale);
+        if (!mockExcel) return Promise.reject(new Error(t('Excel が見つからないため、ウィンドウの幅を合わせられません。')));
+        if (logical > 1920.5) return Promise.reject(new Error(t('幅 {width}px は、Excel のある画面の作業領域（{work}px）より広いため、Excel のウィンドウを合わせられません。', { width: p.width, work: 1920 })));
+        return r({ points: Math.round(logical * 0.75 * 100) / 100, logicalWidth: logical, workAreaWidth: 1920, workbook: '集計ツール.xlam' });
+      }
+      case 'excel.runMacro': {
+        const p = payload as { macro: string };
+        if (!mockExcel) return Promise.reject(new Error(t('Excel が見つからないため、マクロを実行できません。')));
+        return /onAction$/i.test(p.macro)
+          ? Promise.reject(new Error(t('{name} は引数（{params}）を取るため、Sash からは実行できません。', { name: p.macro, params: 'control As IRibbonControl' }) + ' ' + t('引数に IRibbonControl を取るマクロは、Excel のリボンから押して試してください。')))
+          : r(true);
+      }
+      case 'vba.reveal':
+        return mockExcel ? r(true) : Promise.reject(new Error(t('Excelが見つからないため、VBAを読み書きできません。')));
       case 'backup.list': {
         // ブラウザ実行中の見た目の確認用。ホストは新しい順に返す
         const day = 24 * 60 * 60 * 1000;

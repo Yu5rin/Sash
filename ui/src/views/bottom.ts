@@ -13,6 +13,7 @@ import { insertStubs, setupRibbonHolder, vba } from '../callbacks';
 import type { ImageEntry, PartStore } from '../store';
 import { t } from '../i18n';
 import { generateStub, type CallbackState, type CallbackStatus } from '../vba';
+import { fitProblems, type FitProblem } from './ribbonFit';
 
 type Tab = 'problems' | 'callbacks' | 'images';
 
@@ -40,6 +41,8 @@ export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (ms
   app.on('store', (c) => {
     if (c && (c.kinds.has('doc') || c.kinds.has('images'))) render();
   });
+  // キャンバスが測ったリボンの幅の見積もり（畳まれる・収まらないグループ）も問題の一覧に出す
+  window.addEventListener('sash:fitreport', render);
 }
 
 export function showBottomTab(tab: Tab): void {
@@ -129,7 +132,9 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
   const tab = (id: Tab, label: string | HTMLElement[]) =>
     h('button', { type: 'button', role: 'tab', class: current === id ? 'active' : '', 'aria-selected': String(current === id), onclick: () => showBottomTab(id) }, label);
   const syncError = store?.syncError ?? null;
-  const count = (sev: Severity) => app.problems.filter((p) => p.severity === sev).length + (sev === 'error' && syncError ? 1 : 0);
+  // キャンバスで測った幅の問題。今の文書にない要素を指すもの（測る前の古い結果）は出さない
+  const fit: FitProblem[] = store ? fitProblems().filter((p) => elementAt(store.doc, p.path)?.localName === 'group') : [];
+  const count = (sev: Severity) => app.problems.filter((p) => p.severity === sev).length + fit.filter((p) => p.severity === sev).length + (sev === 'error' && syncError ? 1 : 0);
   const errorCount = count('error');
   const warnCount = count('warning');
   const infoCount = count('info');
@@ -171,13 +176,14 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
       );
     }
     const order: Record<Severity, number> = { error: 0, warning: 1, info: 2 };
-    const list = app.problems.filter((p) => shown.has(p.severity)).sort((a, b) => order[a.severity] - order[b.severity]);
+    const list = [...app.problems, ...fit].filter((p) => shown.has(p.severity)).sort((a, b) => order[a.severity] - order[b.severity]);
     for (const p of list) {
       const el = elementAt(store.doc, p.path);
       const go = () => store.select(p.path, 'other');
       items.push(
         h('li', {
-          class: `problem ${p.severity}`,
+          class: `problem ${p.severity}${fit.includes(p as FitProblem) ? ' fit' : ''}`,
+          title: fit.includes(p as FitProblem) ? t('キャンバスで測った幅からの見積もりです（実機の Excel と異なる場合があります）') : undefined,
           tabIndex: 0,
           role: 'button',
           onclick: go,

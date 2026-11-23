@@ -10,6 +10,53 @@ import { t } from '../i18n';
 import { shellIcons } from '../shell/icons';
 import { splitPath } from '../shell/text';
 import { toast } from '../shell/toast';
+import { openSample } from '../sample';
+import '../styles-w3.css';
+
+/** 「はじめての方へ」を畳んだかどうか（この利用者の手元だけの好み。保存できない環境では毎回開いて出すだけ）。 */
+const ONBOARDING_KEY = 'sash.home.onboarding';
+
+function onboardingCollapsed(): boolean {
+  try {
+    return localStorage.getItem(ONBOARDING_KEY) === 'collapsed';
+  } catch {
+    return false;
+  }
+}
+
+function rememberOnboarding(collapsed: boolean): void {
+  try {
+    if (collapsed) localStorage.setItem(ONBOARDING_KEY, 'collapsed');
+    else localStorage.removeItem(ONBOARDING_KEY);
+  } catch {
+    // 覚えられなくても表示には困らない
+  }
+}
+
+/**
+ * 「はじめての方へ」。Sash は Excel のブックの中のリボン定義を編集するもので、ブックそのものは作れない。
+ * 最初につまずくのは「何を開けばよいか」なので、Excel で保存するところから順に示し、ファイルがなくても試せるサンプルを置く。
+ */
+function onboardingCard(): HTMLElement {
+  const steps: [string, string][] = [
+    [t('Excel で .xlam / .xlsm を保存する'), t('リボンを付けたいブックを、Excel で「マクロ有効ブック」か「アドイン」として保存します。')],
+    [t('Sash で開く'), t('［ファイルを開く］か、このページへのドロップで開きます。リボン定義がなければ新しく作ります。')],
+    [t('レシピでタブを作る'), t('［挿入］→［レシピ］から、よく使う形のタブやボタンをまとめて追加できます。あとは見たまま直します。')],
+    [t('Excel へ反映する（F5）'), t('ブックを Excel で開いたまま F5 を押すと、保存して Excel のリボンを読み直します。')],
+  ];
+  const details = h('details', { class: 'card onboarding', open: !onboardingCollapsed() },
+    h('summary', { class: 'card-head' }, h('h2', null, t('はじめての方へ'))),
+    h('div', { class: 'card-body' },
+      h('ol', { class: 'onboarding-steps' }, steps.map(([title, body], i) =>
+        h('li', null,
+          h('span', { class: 'onboarding-num', 'aria-hidden': 'true' }, String(i + 1)),
+          h('div', null, h('strong', null, title), h('p', null, body))))),
+      h('div', { class: 'onboarding-actions' },
+        h('button', { type: 'button', onclick: () => void openSample() }, svg(uiIcons.recipe), t('サンプルを開いて試す')),
+        h('span', { class: 'muted' }, t('ファイルがなくても試せます。サンプルは保存できません。')))));
+  details.addEventListener('toggle', () => rememberOnboarding(!details.open));
+  return details;
+}
 
 export interface HomeHandle {
   /** 一覧を取り直して描き直す。 */
@@ -123,6 +170,7 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
             h('p', { class: 'home-lead' }, t('xlsm / xlam のリボンを、見たまま作って直せるエディタ')),
             h('button', { type: 'button', class: 'primary home-open', onclick: () => open() }, svg(uiIcons.open), t('ファイルを開く'), h('kbd', null, 'Ctrl+O'))),
           drop),
+        onboardingCard(),
         h('div', { class: 'home-cards' }, recentCard(), workbookCard())),
     );
     // 一覧を描き直してもフォーカスを失わないよう、同じ文字のボタンへ戻す

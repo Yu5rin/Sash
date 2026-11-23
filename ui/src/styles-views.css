@@ -13,15 +13,17 @@
   top: 0;
   z-index: 6;
   display: flex;
-  align-items: center;
-  gap: var(--sp-3);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
   margin: 0 calc(-1 * var(--sp-4)) var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
 .cv-modes button { height: var(--ctl-h-sm); padding: 0 var(--sp-3); }
-.cv-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; cursor: help; border-bottom: 1px dotted var(--border-strong); }
+.cv-hint:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .cv-stage { position: relative; }
 .cv-empty { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); color: var(--text-subtle); }
 .cv-empty.floating { position: absolute; right: var(--sp-3); bottom: var(--sp-2); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-xs); background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
@@ -40,7 +42,10 @@
 .rb-qat { display: inline-flex; align-items: center; gap: 2px; margin: 0 0 var(--sp-1); padding: 2px var(--sp-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
 .rb-qat.selected { border-style: solid; border-color: var(--sel-border); background: var(--sel-bg); }
 
-.rb-tabs { display: flex; align-items: flex-end; gap: 0; padding: 0 var(--sp-1); min-height: 32px; overflow-x: auto; scrollbar-width: thin; }
+/* タブだけを横スクロールの欄に入れ、「＋」は欄の外の右端に置く（タブがあふれても隠れないように） */
+.rb-tabs { display: flex; align-items: flex-end; gap: 0; padding: 0 var(--sp-1); min-height: 32px; }
+.rb-tabs-scroll { display: flex; align-items: flex-end; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.rb-tabs > .rb-tab-add { flex-shrink: 0; }
 .rb-tab {
   position: relative;
   display: inline-flex;
@@ -106,7 +111,8 @@
 .rb-group.selected { outline: 2px solid var(--sel-border); outline-offset: -2px; background: var(--sel-bg); }
 .rb-group.builtin, .rb-group.builtin-ref { color: var(--text-disabled); background: repeating-linear-gradient(135deg, transparent 0 6px, var(--placeholder-bg) 6px 12px); min-width: 64px; }
 .rb-group.hidden-ctl { opacity: 0.5; }
-.rb-controls { display: flex; align-items: flex-start; gap: 1px; flex: 1; min-height: 72px; padding-top: 2px; }
+.rb-controls { display: flex; align-items: flex-start; gap: 1px; flex: 1; min-height: 68px; padding-top: 2px; }
+.rb-controls.center-v { align-items: center; }
 .rb-group-label { position: relative; display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 20px; padding: 0 14px 2px; font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
 .rb-group-label .rb-label { max-width: 14em; overflow: hidden; text-overflow: ellipsis; }
 /* ダイアログ起動ツールは、グループ名の右下の小さな矢印 */
@@ -120,10 +126,11 @@
 .rb-ctl:hover { background: var(--pressed-bg); border-color: transparent; }
 .rb-ctl.selected { outline: 2px solid var(--sel-border); outline-offset: -2px; background: var(--sel-bg); }
 #canvas:focus .selected, #canvas:focus-within .selected { outline-color: var(--focus); }
-.rb-ctl.small { height: 24px; }
+.rb-ctl.small { height: 22px; }
 .rb-ctl.small .rb-label { max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
-.rb-ctl.large { flex-direction: column; justify-content: flex-start; gap: 2px; padding: 4px 4px 2px; height: 72px; min-width: 42px; max-width: 76px; text-align: center; white-space: normal; }
-.rb-ctl.large .rb-label { line-height: 1.25; font-size: var(--fs-xs); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+/* 大きいボタンは高さ 66px・アイコン 32px（Excel と同じ）。ラベルの折り返しの幅と行数は canvas.ts の LARGE_LABEL_WRAP で決める */
+.rb-ctl.large { flex-direction: column; justify-content: flex-start; gap: 1px; padding: 3px 3px 1px; height: 66px; min-width: 42px; max-width: calc(var(--rb-large-label-max, 76px) + 8px); text-align: center; white-space: normal; }
+.rb-ctl.large .rb-label { max-width: var(--rb-large-label-max, 76px); line-height: 1.2; font-size: var(--fs-xs); overflow: hidden; display: -webkit-box; -webkit-line-clamp: var(--rb-large-label-lines, 2); -webkit-box-orient: vertical; word-break: break-all; }
 .rb-ctl.large > .rb-arrow { margin: 0; }
 .rb-ctl.hidden-ctl { opacity: 0.45; }
 .rb-ctl.disabled { color: var(--text-disabled); }
@@ -131,7 +138,7 @@
 .rb-ctl.has-error, .rb-group.has-error { box-shadow: inset 0 -2px 0 var(--error); }
 .rb-ctl.builtin-ref { color: var(--text-subtle); }
 .rb-arrow { flex-shrink: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; margin-left: 1px; }
-.rb-sep { width: 1px; padding: 0; margin: 6px 3px; height: 62px; background: var(--border); border: none; }
+.rb-sep { width: 1px; padding: 0; margin: 4px 3px; height: 58px; background: var(--border); border: none; }
 .rb-sep.selected { outline-offset: 2px; }
 .rb-check { flex-shrink: 0; width: 13px; height: 13px; border: 1px solid var(--border-strong); border-radius: 2px; background: var(--surface); }
 .rb-field { display: inline-flex; align-items: stretch; justify-content: flex-end; width: 84px; height: 20px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: 2px; }
@@ -329,3 +336,138 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 
 /* メニューのポップアップは canvas.ts の placePopups が画面基準で置く。XML エディタなどの上にも重ねて見せる */
 .rb-menu-popup { z-index: 40; overflow-y: auto; }
+
+/* ---- キャンバス：幅のプレビュー（canvas.ts・ribbonFit.ts） ---- */
+
+.cv-row, .cv-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); min-width: 0; }
+.cv-bar { gap: var(--sp-1) var(--sp-2); }
+.cv-width { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); }
+.cv-field { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
+.cv-select { height: var(--ctl-h-sm); padding: 0 var(--sp-1); font-size: var(--fs-xs); }
+.cv-num { width: 6em; height: var(--ctl-h-sm); font-size: var(--fs-xs); }
+.cv-fit button { height: var(--ctl-h-sm); min-height: 0; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
+.cv-status { font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
+.cv-toggle.active, .cv-bar > .cv-menu-wrap > button.active { background: var(--sel-bg); border-color: var(--sel-border); }
+.cv-bar button { min-height: 0; }
+.cv-bar .rb-arrow { margin-left: 4px; }
+.cv-menu-wrap { position: relative; display: inline-flex; }
+.cv-disabled-wrap { display: inline-flex; cursor: not-allowed; }
+.cv-msgs { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); min-width: 0; }
+.cv-msg { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2); border-radius: var(--radius-sm); font-size: var(--fs-xs); border: 1px solid var(--border); background: var(--surface); }
+.cv-msg[hidden] { display: none; }
+.cv-msg.warning { border-color: var(--warning-border, var(--warning)); background: var(--warning-bg, var(--surface)); }
+.cv-msg.info { border-color: var(--border-strong); }
+.cv-msg button { height: 20px; min-height: 0; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
+.cv-estimate { font-size: var(--fs-xs); color: var(--text-subtle); font-style: italic; }
+
+/* 見出しのメニュー（動的な状態を試す・確かめる幅） */
+.cv-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 260px;
+  max-width: min(520px, 80vw);
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--fs-xs);
+}
+.cv-pop-title { font-weight: 600; font-size: var(--fs-sm); }
+.cv-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 1px solid var(--border); }
+.cv-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.cv-dyn-row { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--ctl-h-sm); }
+.cv-dyn-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-dyn-label { width: 10em; height: var(--ctl-h-sm); font-size: var(--fs-xs); }
+.cv-checks .cv-check { min-height: 22px; }
+
+/* 目盛り・幅を決めた枠 */
+.cv-views { display: flex; flex-direction: column; gap: var(--sp-3); }
+.cv-view { position: relative; }
+.cv-zoom { width: max-content; min-width: 0; }
+.cv-ruler { position: relative; height: 16px; margin-bottom: 2px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-subtle); }
+.cv-ruler.free { overflow: hidden; }
+.cv-mark { position: absolute; bottom: 0; transform: translateX(-100%); padding-right: 3px; white-space: nowrap; line-height: 14px; border-right: 1px solid var(--border-strong); }
+.cv-mark.end { color: var(--text); font-weight: 600; }
+.cv-frame { position: relative; box-shadow: 1px 0 0 var(--border-strong); }
+.cv-frame > .rb-window { width: 100%; }
+/* 枠を決めたときは、はみ出したグループも枠の外に描いて見えるようにする（隠すと編集できなくなるため） */
+.cv-frame .rb-body { overflow: visible; width: max-content; min-width: 100%; }
+.cv-frame .rb-tabs { width: 100%; }
+.cv-reserved { position: absolute; right: 0; bottom: var(--sp-1); height: 98px; border-left: 1px dashed var(--border-strong); background: repeating-linear-gradient(135deg, transparent 0 4px, var(--placeholder-bg) 4px 8px); pointer-events: auto; }
+.cv-compare { padding-top: var(--sp-2); border-top: 1px dashed var(--border-strong); }
+.cv-compare-caption { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-bottom: var(--sp-1); font-size: var(--fs-xs); }
+.cv-compare .rb-window { opacity: 0.95; }
+
+/* 測るための描画（canvas.ts の measureAndReport がすぐ外す） */
+.rb-measure { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; width: max-content; contain: layout style; }
+.rb-measure-row { display: flex; align-items: stretch; }
+
+/* 見積もりで縮めた・畳んだ・はみ出したグループ */
+.rb-group.nolabel .rb-ctl.small:is(.rb-button, .rb-toggleButton, .rb-menu, .rb-dynamicMenu, .rb-gallery, .rb-splitButton) .rb-label { display: none; }
+.rb-group.collapsed { padding: 0 2px; }
+.rb-group.collapsed .rb-group-label { min-height: 20px; }
+.rb-collapsed-btn { max-width: calc(var(--rb-large-label-max, 76px) + 8px); }
+.rb-icon.placeholder.generic { border-radius: 50%; border: 2px solid var(--excel-green); background: var(--accent-soft, var(--placeholder-bg)); }
+.rb-group.rb-clipped { opacity: 0.55; }
+.rb-group.rb-clipped::before { content: ""; position: absolute; inset: 0; border-radius: var(--radius-sm); background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--error) 18%, transparent) 6px 12px); pointer-events: none; }
+.rb-group.temp-expanded { box-shadow: inset 0 0 0 1px var(--focus); }
+.rb-chip { height: 16px; min-height: 0; padding: 0 6px; margin-left: 2px; font-size: 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
+.rb-chip:hover { background: var(--hover-bg); }
+.rb-group-popup { padding: var(--sp-1) var(--sp-1) 0; white-space: nowrap; }
+.rb-group-popup .rb-controls { min-height: 68px; }
+
+/* キーヒント */
+.rb-keytip {
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  z-index: 3;
+  transform: translateX(-50%);
+  min-width: 14px;
+  padding: 0 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 13px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: auto;
+  box-shadow: 0 1px 2px var(--shadow-color, rgba(0, 0, 0, 0.15));
+}
+.rb-tab .rb-keytip { bottom: -4px; }
+.rb-ctl.small .rb-keytip { left: 12px; bottom: -4px; transform: none; }
+.rb-keytip.auto { color: var(--text-subtle); font-weight: 400; border-style: dashed; background: var(--placeholder-bg); }
+.rb-keytip.builtin { color: var(--text-subtle); }
+.rb-keytip.dup { border-color: var(--error); background: var(--error); color: var(--on-error); }
+
+/* マウスを乗せたときのヒント（Excel のヒントに近い形） */
+.rb-screentip {
+  position: fixed;
+  z-index: 1100;
+  max-width: 320px;
+  padding: 6px 10px 6px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  pointer-events: none;
+}
+.rb-screentip-title { font-weight: 700; }
+.rb-screentip-body { margin-top: 4px; white-space: pre-wrap; }
+.rb-screentip .dynamic { font-weight: 400; font-style: italic; color: var(--text-subtle); }
+.rb-screentip-id { margin-top: 4px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle); }

@@ -64,6 +64,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "vba.read" => await ReadVbaAsync(Read<PathRequest>(body)),
                 "vba.insert" => await InsertVbaAsync(Read<VbaInsertRequest>(body)),
                 "vba.replaceLine" => await ReplaceLineAsync(Read<VbaReplaceRequest>(body)),
+                "vba.reveal" => await RevealVbaAsync(Read<VbaRevealRequest>(body)),
+                "excel.setWindowWidth" => await SetWindowWidthAsync(Read<WindowWidthRequest>(body)),
+                "excel.runMacro" => await RunMacroAsync(Read<RunMacroRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
                 "backup.list" => BackupList(Read<PathRequest>(body)),
                 "backup.restore" => BackupRestore(Read<BackupRestoreRequest>(body)),
@@ -612,8 +615,35 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     private async Task<object> InsertVbaAsync(VbaInsertRequest req) =>
         await RequireExcel().InsertVbaAsync(req.Path, req.Module, req.Code, req.DocumentModule);
 
+    /// <summary>VBE で Sub の宣言行を表示する（仕様書 §18.5）。</summary>
+    private async Task<object> RevealVbaAsync(VbaRevealRequest req) =>
+        await RequireExcel().RevealVbaAsync(req.Path, req.Module, req.Procedure);
+
     private async Task<object> ReplaceLineAsync(VbaReplaceRequest req) =>
         await RequireExcel().ReplaceVbaLineAsync(req.Path, req.Module, req.Line, req.Expected, req.Replacement);
+
+    /// <summary>Excel のウィンドウの幅を合わせる（仕様書 §18.1）。Excel がない PC では理由を返す。</summary>
+    private async Task<object> SetWindowWidthAsync(WindowWidthRequest req)
+    {
+        if (!ExcelInstalled)
+        {
+            throw new UserFacingException(L("Excel が見つからないため、ウィンドウの幅を合わせられません。", "Excel was not found, so the window width cannot be set."));
+        }
+
+        var r = await excel.Value.SetWindowWidthAsync(req.Path, req.Width, req.Scale);
+        return new { points = r.Points, logicalWidth = r.LogicalWidth, workAreaWidth = r.WorkAreaWidth, workbook = r.Workbook };
+    }
+
+    /// <summary>開いているブックのマクロを実行する（試しに押す。仕様書 §18.4）。</summary>
+    private async Task<object> RunMacroAsync(RunMacroRequest req)
+    {
+        if (!ExcelInstalled)
+        {
+            throw new UserFacingException(L("Excel が見つからないため、マクロを実行できません。", "Excel was not found, so the macro cannot be run."));
+        }
+
+        return await excel.Value.RunMacroAsync(req.Path, req.Macro);
+    }
 
     private async Task<object> ImageMsoAsync(ImageMsoRequest req)
     {
@@ -720,6 +750,14 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         bool Cancelled);
 
     private sealed record VbaInsertRequest(string Path, string Module, string Code, bool DocumentModule);
+
+    private sealed record VbaRevealRequest(string Path, string Module, string Procedure);
+
+    /// <summary>width は拡大率をかける前の画面の幅（物理 px）、scale は拡大率（1.5 = 150%）。Path があればそのブックの Excel を対象にする。</summary>
+    private sealed record WindowWidthRequest(int Width, double Scale, string? Path = null);
+
+    /// <summary>ControlId はどのコントロールから押したかの記録用（いまは使わない。将来、ログや IRibbonControl の代わりに使う余地を残す）。</summary>
+    private sealed record RunMacroRequest(string Path, string Macro, string? ControlId = null);
 
     private sealed record VbaReplaceRequest(string Path, string Module, int Line, string Expected, string Replacement);
 

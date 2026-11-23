@@ -4,12 +4,14 @@ import '../styles-views.css';
 import { app } from '../app';
 import { handleEditKey, moveSelected } from '../clipboard';
 import { canDropInto, drop, endDrag, startDrag } from '../dnd';
-import { h, svg } from '../dom';
+import { debounce, h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { allElements, displayName, identifierOf, pathOf, samePath, type Path } from '../model';
 import { openElementMenu } from './contextMenu';
 import { focusField } from './inspector';
 import { t } from '../i18n';
+import { filterTree, splitHighlight, type TreeFilterResult } from '../treeFilter';
+import '../styles-w3.css';
 
 /**
  * 畳んだ要素。id（なければパス）で覚える。
@@ -22,6 +24,16 @@ let known = new WeakSet<Element>();
 let flashPath: Path | null = null;
 let typeAhead = '';
 let typeAheadTimer: number | undefined;
+/** 絞り込みの検索語。空なら絞り込まない。 */
+let filterQuery = '';
+let filterInput: HTMLInputElement | null = null;
+let filterCount: HTMLElement | null = null;
+
+/** 絞り込みの欄にフォーカスを移す（コマンドから呼ぶ）。 */
+export function focusTreeFilter(): void {
+  filterInput?.focus();
+  filterInput?.select();
+}
 
 /** ツリーにフォーカスを移す（Ctrl+2 / F6）。 */
 export function focus(): void {
@@ -33,6 +45,7 @@ export function focus(): void {
 export function mountTree(host: HTMLElement): void {
   hostEl = host;
   host.tabIndex = 0;
+  mountFilter(host);
   host.addEventListener('keydown', (e) => onKey(e, host));
   host.addEventListener('contextmenu', (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>('.tree-row');
@@ -48,6 +61,8 @@ export function mountTree(host: HTMLElement): void {
   const render = () => renderTree(host);
   app.on('session', () => {
     known = new WeakSet();
+    // 別のファイルを開いたら、前のファイルの検索語は意味がないので消す
+    setFilter('', host);
     render();
   });
   app.on('problems', render);
@@ -95,13 +110,19 @@ function renderTree(host: HTMLElement): void {
     counts.set(k, c);
   }
 
+  const filter = filterTree(store.doc, filterQuery);
+  updateFilterCount(filter);
   const rows: HTMLElement[] = [];
   const walk = (el: Element, depth: number) => {
+    // 絞り込み中は、合った要素とその祖先だけを出す
+    if (filter && !filter.visible.has(el)) return;
     const path = pathOf(el);
     const k = path.join('.');
     const fk = foldKey(el, path);
-    const hasKids = el.children.length > 0;
-    const isCollapsed = collapsed.has(fk);
+    const hasKids = filter ? Array.from(el.children).some((c) => filter.visible.has(c)) : el.children.length > 0;
+    // 絞り込み中は畳んだ状態を無視して開く（畳んだ中に合った要素が隠れて「0 件ではないのに見えない」にならないよう）
+    const isCollapsed = !filter && collapsed.has(fk);
+    const hit = filter?.matches.has(el) ?? false;
     const c = counts.get(k);
     const selected = samePath(store.selection, path);
     const name = displayName(el);
@@ -112,10 +133,11 @@ function renderTree(host: HTMLElement): void {
       'div',
       {
         id: rowId(path),
-        class: `tree-row${selected ? ' selected' : ''}${el.getAttribute('visible') === 'false' ? ' hidden-el' : ''}`,
+        class: `tree-row${selected ? ' selected' : ''}${el.getAttribute('visible') === 'false' ? ' hidden-el' : ''}${filter ? (hit ? ' filter-hit' : ' filter-ancestor') : ''}`,
         role: 'treeitem',
         'aria-selected': String(selected),
-        'aria-expanded': hasKids ? String(!isCollapsed) : undefined,
+        // 絞り込み中は畳めないので、開閉の状態を伝えない（← で親へ移れるようにする）
+        'aria-expanded': hasKids && !filter ? String(!isCollapsed) : undefined,
         'aria-level': String(depth + 1),
         title: tooltip,
         draggable: depth > 0,
@@ -138,6 +160,7 @@ function renderTree(host: HTMLElement): void {
           class: `twisty${hasKids ? '' : ' empty'}${isCollapsed ? '' : ' open'}`,
           onclick: (e: MouseEvent) => {
             e.stopPropagation();
+            if (filter) return;
             if (isCollapsed) collapsed.delete(fk);
             else collapsed.add(fk);
             renderTree(host);
@@ -146,8 +169,8 @@ function renderTree(host: HTMLElement): void {
         hasKids ? svg(uiIcons.chevron) : null,
       ),
       h('span', { class: 'kind-icon', title: el.localName }, svg(kindIcon(el.localName))),
-      h('span', { class: 'tree-label' }, label),
-      id ? h('span', { class: 'tree-id' }, id) : null,
+      h('span', { class: 'tree-label' }, highlighted(label, hit)),
+      id ? h('span', { class: 'tree-id' }, highlighted(id, hit)) : null,
       c && c.error > 0 ? h('span', { class: 'badge error', 'aria-label': t('エラー {n}', { n: c.error }) }, String(c.error)) : null,
       c && c.error === 0 && c.warning > 0 ? h('span', { class: 'badge warning', 'aria-label': t('警告 {n}', { n: c.warning }) }, String(c.warning)) : null,
     );
@@ -163,6 +186,85 @@ function renderTree(host: HTMLElement): void {
   known = new WeakSet(allElements(store.doc));
   if (store.selection) host.setAttribute('aria-activedescendant', rowId(store.selection));
   else host.removeAttribute('aria-activedescendant');
+}
+
+/** 検索語に合った部分を <mark> で囲む。合った要素の行だけ強調する（祖先の行は場所を示すだけなので強調しない）。 */
+function highlighted(text: string, hit: boolean): (string | HTMLElement)[] {
+  if (!hit) return [text];
+  return splitHighlight(text, filterQuery).map((p) => (p.hit ? h('mark', { class: 'tree-mark' }, p.text) : p.text));
+}
+
+/** ツリーの上に絞り込みの欄を置く。#tree（role="tree"）の中に入れると行の並びと読み上げが崩れるので、兄弟として前に置く。 */
+function mountFilter(host: HTMLElement): void {
+  const input = h('input', {
+    type: 'search',
+    class: 'tree-filter-input',
+    placeholder: t('絞り込み（ラベル・ID・コールバック）'),
+    'aria-label': t('ツリーを絞り込む'),
+    'aria-controls': host.id || undefined,
+    spellcheck: false,
+    autocomplete: 'off',
+  });
+  const count = h('span', { class: 'tree-filter-count', 'aria-live': 'polite' });
+  filterInput = input;
+  filterCount = count;
+  // 日本語の変換中は絞り込まない（確定前の読みで一覧が跳ねないように）。確定したとき（compositionend）に絞り込む
+  let composing = false;
+  const apply = debounce(() => setFilter(input.value, host), 120);
+  input.addEventListener('compositionstart', () => (composing = true));
+  input.addEventListener('compositionend', () => {
+    composing = false;
+    apply();
+  });
+  input.addEventListener('input', (e) => {
+    if (composing || (e as InputEvent).isComposing) return;
+    apply();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing || composing) return;
+    if (e.key === 'Escape') {
+      // 検索語があれば消す。空ならツリーに戻る（Esc が上のダイアログなどに抜けないよう、ここで止める）
+      e.preventDefault();
+      e.stopPropagation();
+      if (input.value) {
+        input.value = '';
+        setFilter('', host);
+      } else {
+        host.focus({ preventScroll: true });
+      }
+    } else if (e.key === 'ArrowDown' || e.key === 'Enter') {
+      // ↓ と Enter でツリーへ移る。選択が見えていなければ、最初に合った行を選ぶ
+      e.preventDefault();
+      setFilter(input.value, host);
+      enterTree(host);
+    }
+  });
+  const bar = h('div', { class: 'tree-filter', role: 'search' }, svg(uiIcons.catalog), input, count);
+  host.before(bar);
+}
+
+function enterTree(host: HTMLElement): void {
+  const store = app.store;
+  host.focus({ preventScroll: true });
+  if (!store) return;
+  const selected = host.querySelector('.tree-row.selected');
+  if (selected) return;
+  const first = host.querySelector<HTMLElement>('.tree-row.filter-hit') ?? host.querySelector<HTMLElement>('.tree-row');
+  const path = first ? parsePath(first.dataset['path']) : null;
+  if (path) store.select(path, 'tree');
+}
+
+function setFilter(query: string, host: HTMLElement): void {
+  if (filterInput && filterInput.value !== query && query === '') filterInput.value = '';
+  if (query === filterQuery) return;
+  filterQuery = query;
+  renderTree(host);
+}
+
+function updateFilterCount(filter: TreeFilterResult | null): void {
+  if (!filterCount) return;
+  filterCount.textContent = filter ? (filter.matches.size ? t('{n} 件', { n: filter.matches.size }) : t('一致なし')) : '';
+  filterCount.classList.toggle('none', filter !== null && filter.matches.size === 0);
 }
 
 function scrollToSelected(host: HTMLElement): void {
@@ -236,7 +338,10 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
   const selRow = idx >= 0 ? rows[idx]! : null;
   const sel = store.selection;
 
-  if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
+    // ツリーの中で Ctrl+F を押したら絞り込みの欄へ（ブラウザのページ内検索を出さない）
+    focusTreeFilter();
+  } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     moveSelected(e.key === 'ArrowUp' ? -1 : 1, 'tree');
   } else if (e.key === 'ArrowDown') {
     if (idx < rows.length - 1) store.select(pathAt(idx + 1), 'tree');

@@ -76,6 +76,55 @@ internal static partial class NativeMethods
 
     [DllImport("kernel32.dll")]
     public static extern UIntPtr GlobalSize(IntPtr hMem);
+
+    // ---- Excel のウィンドウの幅（仕様書 §18.1）とウィンドウを前に出す操作 ----
+
+    public const uint MonitorDefaultToNearest = 2;
+
+    /// <summary>GetDpiForMonitor の MDT_EFFECTIVE_DPI（利用者が設定した拡大率を含む DPI）。</summary>
+    public const int MdtEffectiveDpi = 0;
+
+    /// <summary>DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2。座標を物理 px で受け取るために、呼び出しの間だけスレッドに設定する。</summary>
+    public static readonly IntPtr DpiAwarenessContextPerMonitorAwareV2 = new(-4);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("shcore.dll")]
+    public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 
 /// <summary>

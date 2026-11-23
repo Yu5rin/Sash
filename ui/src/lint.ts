@@ -30,6 +30,32 @@ export { NAMESPACES };
 /** グループ内のコントロールがこれを超えると、狭い画面で畳まれやすい。 */
 const MANY_CONTROLS = 12;
 
+/**
+ * 大きいボタン（size="large"）のラベルの幅の目安。全角を 2、半角を 1 と数え、これを超えたら警告する（全角 8 文字 / 半角 16 文字）。
+ * 大きいボタンのラベルは2行までで、2行目の後ろにはメニューの印（▼）が入ることもあるため、長いと切れて「…」になる。
+ * ※この値は見た目からの目安で、実機の Excel（表示倍率・フォント・ボタンの種類ごとの違い）ではまだ確かめていない。
+ */
+export const LARGE_LABEL_MAX_WIDTH = 16;
+
+/**
+ * 小さいボタンのラベルの文字数の目安。これを超えると、グループの幅が広がって狭い画面で畳まれやすくなる。
+ * ※大きいボタンと同じく見た目からの目安で、実機の Excel ではまだ確かめていない。
+ */
+export const SMALL_LABEL_MAX_CHARS = 20;
+
+/** ラベルの長さを調べるコントロール（グループに直接置くボタンの類）。 */
+const LABELED_CONTROLS: ReadonlySet<string> = new Set(['button', 'toggleButton', 'menu', 'gallery', 'dynamicMenu', 'checkBox']);
+
+/** 表示幅（全角を 2、半角を 1）。半角カナ（U+FF61〜FF9F）は 1 と数える。 */
+export function labelWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    w += c <= 0x7e || (c >= 0xff61 && c <= 0xff9f) ? 1 : 2;
+  }
+  return w;
+}
+
 export function lint(doc: Document, ctx: LintContext): Problem[] {
   const problems: Problem[] = [];
   const add = (severity: Severity, el: Element, message: string, attr?: string) =>
@@ -146,6 +172,8 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
     if (el.hasAttribute('image') && el.hasAttribute('imageMso')) add('error', el, t('{a} と {b} は同時に指定できません', { a: 'image', b: 'imageMso' }), 'imageMso');
     if (el.hasAttribute('imageMso') && el.hasAttribute('getImage')) add('error', el, t('{a} と {b} は同時に指定できません', { a: 'imageMso', b: 'getImage' }), 'getImage');
 
+    lintLabelLength(el, add);
+
     // グループ内のコントロール数
     if (el.localName === 'group' && el.children.length > MANY_CONTROLS) {
       add('info', el, t('コントロールが {n} 個あります。狭い画面ではグループが畳まれます', { n: el.children.length }));
@@ -169,6 +197,26 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
 
   const order: Record<Severity, number> = { error: 0, warning: 1, info: 2 };
   return problems.sort((x, y) => order[x.severity] - order[y.severity]);
+}
+
+/**
+ * ラベルの長さ。リボンのグループの中のボタンだけを見る（メニューの中の項目は横に伸びるだけで切れないため）。
+ * splitButton の中のボタンは、splitButton の size に従う。
+ */
+function lintLabelLength(el: Element, add: (s: Severity, el: Element, m: string, attr?: string) => void): void {
+  const label = el.getAttribute('label');
+  if (!label || !LABELED_CONTROLS.has(el.localName)) return;
+  const parent = el.parentElement;
+  const holder = parent?.localName === 'splitButton' ? parent : el;
+  const container = holder.parentElement?.localName;
+  // グループ・box・buttonGroup に直接置いたものだけ（menu・Backstage の中は対象外）
+  if (container !== 'group' && container !== 'box' && container !== 'buttonGroup') return;
+  const large = holder.getAttribute('size') === 'large';
+  if (large) {
+    if (labelWidth(label) > LARGE_LABEL_MAX_WIDTH) add('warning', el, t('大きいボタンのラベルが長いため、Excel では2行目で切れる可能性があります'), 'label');
+  } else if ([...label].length > SMALL_LABEL_MAX_CHARS) {
+    add('warning', el, t('ラベルが {n} 文字あります。小さいボタンでは横に伸びてグループの幅が広がり、狭い画面で畳まれやすくなります', { n: [...label].length }), 'label');
+  }
 }
 
 /** 子要素の並び順と個数（XSD の sequence と maxOccurs / minOccurs）。 */

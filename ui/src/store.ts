@@ -371,6 +371,45 @@ export class PartStore {
     this.restore(next);
   }
 
+  /**
+   * 操作の履歴（編集メニューの「操作の履歴…」。仕様書 §18.6）。
+   * labels は古い順に並べた操作の名前（元に戻せるもの → やり直せるもの）、index は今いる位置（適用済みの操作の数）。
+   * index が 0 なら、記録の始まり（開いたとき、または履歴の上限 200 件でそれより前が消えたところ）にいる。
+   */
+  history(): { labels: string[]; index: number } {
+    return {
+      labels: [...this.undoStack.map((s) => s.label), ...[...this.redoStack].reverse().map((s) => s.label)],
+      index: this.undoStack.length,
+    };
+  }
+
+  /**
+   * 履歴の index の位置へ移る。元に戻す・やり直しを続けて行うのと同じ結果になるが、
+   * 途中の状態では XML を読み直さず、ビューへの通知も最後の 1 回だけにする（何十件も戻るときに描き直しを繰り返さないため）。
+   * 動いたら true。範囲の外は端に丸める。
+   */
+  goTo(index: number): boolean {
+    const target = Math.max(0, Math.min(Math.trunc(index), this.undoStack.length + this.redoStack.length));
+    if (target === this.undoStack.length) return false;
+    const take = (s: Snapshot) => {
+      this.text = s.text;
+      this.images = s.images;
+      this.selection = s.selection;
+    };
+    while (this.undoStack.length > target) {
+      const prev = this.undoStack.pop()!;
+      this.redoStack.push(this.snapshot(prev.label));
+      take(prev);
+    }
+    while (this.undoStack.length < target) {
+      const next = this.redoStack.pop()!;
+      this.undoStack.push(this.snapshot(next.label));
+      take(next);
+    }
+    this.restore({ text: this.text, images: this.images, selection: this.selection, label: '' });
+    return true;
+  }
+
   private restore(s: Snapshot): void {
     this.lastTextEditAt = 0;
     this.text = s.text;

@@ -1,0 +1,70 @@
+/*
+ * ツリーの絞り込み・ID の一括置換・ホームの「はじめての方へ」・アイコンの候補・「動的」の印。
+ * 色はすべて styles.css の変数（light-dark）を使い、ライトとダークを一か所で定義する決まり（§17.1）に従う。
+ */
+
+/* ---- ツリーの絞り込み ---- */
+.tree-filter { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.tree-filter > svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-subtle); }
+.tree-filter-input { flex: 1; min-width: 0; height: var(--ctl-h-sm); }
+.tree-filter-count { font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
+.tree-filter-count.none { color: var(--warning-text); }
+.tree-row.filter-ancestor .tree-label, .tree-row.filter-ancestor .tree-id { color: var(--text-subtle); }
+.tree-mark { background: var(--warning-bg); color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px var(--warning-border); }
+
+/* ---- ID の一括置換 ---- */
+.idr { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.idr-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: var(--sp-2); }
+.idr-form label { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); color: var(--text-subtle); min-width: 0; }
+.idr-form input { font-family: var(--font-mono); }
+.idr-options { display: flex; flex-direction: column; gap: var(--sp-1); }
+.idr-options label.check { display: flex; align-items: center; gap: 6px; }
+.idr-summary { margin: 0; }
+.idr-summary.bad { color: var(--error-text); }
+.idr-preview { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.idr-preview:empty { display: none; }
+.idr-preview > p { padding: var(--sp-2) var(--sp-3); margin: 0; }
+.idr-preview table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.idr-preview th { position: sticky; top: 0; background: var(--surface-2); text-align: left; font-weight: 600; padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border); }
+.idr-preview td { padding: 2px var(--sp-2); border-bottom: 1px solid var(--border); word-break: break-all; }
+.idr-preview tr.bad td { background: var(--error-bg); }
+.idr-preview tr.bad .idr-note { color: var(--error-text); }
+.idr-kind { color: var(--text-subtle); white-space: nowrap; }
+.idr-arrow { color: var(--text-subtle); text-align: center; }
+.idr-note { color: var(--text-subtle); font-size: var(--fs-xs); }
+@media (max-width: 560px) {
+  .idr-form { grid-template-columns: 1fr; }
+}
+
+/* ---- ホーム：はじめての方へ ---- */
+.onboarding { margin-top: var(--sp-5); }
+.onboarding > summary { cursor: pointer; list-style: none; }
+.onboarding > summary::-webkit-details-marker { display: none; }
+.onboarding > summary h2::before { content: "▸"; display: inline-block; width: 1.2em; color: var(--text-subtle); transition: transform 0.15s; }
+.onboarding[open] > summary h2::before { transform: rotate(90deg); }
+.onboarding > summary:focus-visible { outline: var(--focus-ring); outline-offset: -2px; border-radius: var(--radius-lg); }
+.onboarding .card-body { padding: 0 var(--sp-4) var(--sp-4); }
+.onboarding-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--sp-3); }
+.onboarding-steps li { display: flex; gap: var(--sp-2); align-items: flex-start; }
+.onboarding-steps strong { display: block; font-size: var(--fs-sm); }
+.onboarding-steps p { margin: 2px 0 0; font-size: var(--fs-xs); color: var(--text-subtle); line-height: 1.5; }
+.onboarding-num { flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: var(--fs-xs); font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+.onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-3); }
+.onboarding-actions button svg { width: 16px; height: 16px; }
+.onboarding-actions .muted { font-size: var(--fs-xs); }
+
+/* ---- インスペクタ：アイコンの候補 ---- */
+.icon-suggest-box { display: flex; flex-direction: column; gap: var(--sp-1); margin-top: var(--sp-1); min-width: 0; }
+.icon-suggest-head { font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-suggest-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.icon-suggest-row[hidden] { display: none; }
+.icon-suggest-kind { font-size: 11px; color: var(--text-subtle); flex-basis: 100%; }
+.icon-suggest { display: inline-flex; align-items: center; gap: 4px; min-height: var(--ctl-h-sm); height: auto; padding: 1px 6px; font-size: 11px; max-width: 100%; }
+.icon-suggest span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.icon-suggest img { width: 16px; height: 16px; }
+.icon-suggest.fluent { width: var(--ctl-h-sm); padding: 0; justify-content: center; }
+.icon-suggest.fluent svg { width: 18px; height: 18px; }
+
+/* ---- インスペクタ：動的（getVisible / getEnabled） ---- */
+.insp-dynamic { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--fs-xs); }
+.insp-dynamic-badge { padding: 0 6px; border-radius: 8px; background: var(--info-bg); color: var(--info-text); border: 1px solid var(--info-border); font-size: 11px; }
