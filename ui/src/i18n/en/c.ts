@@ -502,4 +502,5 @@ export const en: Readonly<Record<string, string>> = {
   '{width}で［{name}］が畳まれます（目安）': '[{name}] collapses at {width} (estimate)',
   '［{name}］が畳まれたときのアイコンが未設定です': '[{name}] has no icon for when it is collapsed',
   'キャンバスで測った幅からの見積もりです（実機の Excel と異なる場合があります）': 'Estimated from widths measured on the canvas (may differ from real Excel)',
+  'レシピから始める': 'Start from a recipe',
 };

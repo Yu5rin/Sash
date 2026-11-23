@@ -29,7 +29,9 @@ import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
 import { flushPendingEdits, mountInspector } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
-import { mountTree } from './views/tree';
+import { focusTreeFilter, mountTree } from './views/tree';
+import { openIdReplaceDialog } from './idReplaceDialog';
+import { openSample } from './sample';
 import { mountXmlEditor, revealInXml } from './views/xmlEditor';
 import { probeInsert, setEditRefusedHandler } from './shell/compat';
 import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
@@ -212,6 +214,7 @@ function commands(): AppCommand[] {
     { id: 'file.import', group: G.file, title: t('.sash.json を読み込む…'), keywords: 'import json', enabled: has, run: importSashFile },
     { id: 'file.exportControls', group: G.file, title: t('コントロール一覧を CSV で書き出す…'), keywords: 'export csv controls list 一覧 書き出し', enabled: has, run: () => void exportControlList() },
     { id: 'file.copyControls', group: G.file, title: t('コントロール一覧をコピー（Excel に貼り付け用）'), keywords: 'copy tsv controls list 一覧 クリップボード', enabled: has, run: copyControlList },
+    { id: 'file.sample', group: G.file, title: t('サンプルを開く'), keywords: 'sample example サンプル 試す', enabled: idle, run: () => void openSample() },
     { id: 'file.quit', group: G.file, title: t('終了'), keywords: 'quit exit', enabled: () => isHosted, run: () => void quit() },
 
     { id: 'edit.undo', group: G.edit, title: historyTitle(t('元に戻す'), app.store?.undoLabel), shortcut: 'Ctrl+Z', keywords: 'undo', enabled: () => app.store?.canUndo === true, run: undo },
@@ -232,6 +235,8 @@ function commands(): AppCommand[] {
     { id: 'view.bottom', group: G.view, title: t('下部パネルの表示・非表示'), shortcut: 'Ctrl+J', inText: true, enabled: has, run: toggleBottom },
     { id: 'view.nextPane', group: G.view, title: t('次のペインへ移る'), shortcut: 'F6', inText: true, enabled: has, run: () => cyclePane(1) },
     { id: 'view.prevPane', group: G.view, title: t('前のペインへ移る'), shortcut: 'Shift+F6', inText: true, enabled: has, run: () => cyclePane(-1) },
+    // ツリーの絞り込みは、ツリーの中で Ctrl+F でも移れる。左のペインを畳んでいたら開いてから移る
+    { id: 'view.treeFilter', group: G.view, title: t('ツリーを絞り込む'), keywords: 'filter search tree 検索 絞り込み', enabled: has, run: () => { layout.expand('left'); focusTreeFilter(); } },
     { id: 'view.problems', group: G.view, title: t('問題の一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('problems'); } },
     { id: 'view.callbacks', group: G.view, title: t('コールバックの一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('callbacks'); } },
     { id: 'view.images', group: G.view, title: t('アイコンの一覧を表示'), enabled: has, run: () => { layout.expand('bottom'); showBottomTab('images'); } },
@@ -259,6 +264,7 @@ function commands(): AppCommand[] {
     { id: 'tools.distCheck', group: G.tools, title: t('配布前チェック…'), keywords: 'check distribute release 配布 確認 チェック', enabled: has, run: () => void openOnce('distributionCheck', () => openDistributionCheck({ onNavigate: navigateToCheck })) },
     { id: 'tools.runMacro', group: G.tools, title: t('マクロを Excel で実行'), keywords: 'run macro test 試しに押す 実行', enabled: () => has() && canRunMacro(), run: () => void runSelectedMacro() },
     { id: 'vba.reveal', group: 'VBA', title: t('選択中のコントロールのコールバックを VBE で表示'), keywords: 'vbe vba open procedure 開く', enabled: () => has() && revealableCallback() !== null, run: () => { const n = revealableCallback(); if (n) void revealInVbe(n); } },
+    { id: 'tools.replaceIds', group: G.tools, title: t('ID の一括置換…'), keywords: 'id rename replace prefix 置換', enabled: has, run: () => openIdReplaceDialog() },
     { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
     { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled, run: () => void vba.refresh() },
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
@@ -388,6 +394,7 @@ const MENUS: MenuDef[] = [
     id: 'file', label: t('ファイル'), mnemonic: 'F', items: () => [
       cmd('file.open'),
       { label: t('最近使ったファイル'), items: recentItems },
+      cmd('file.sample'),
       SEP,
       cmd('file.save'),
       cmd('file.close'),
@@ -446,6 +453,7 @@ const MENUS: MenuDef[] = [
         cmd('view.xml', t('XMLエディタ')),
         cmd('view.inspector', t('インスペクタ')),
         cmd('view.bottom', t('下部パネル'), { checked: !layout.isCollapsed('bottom') }),
+        cmd('view.treeFilter'),
         SEP,
         ...modes,
         ...parts,
@@ -485,6 +493,7 @@ const MENUS: MenuDef[] = [
       cmd('tools.apply', undefined, { hint: app.info.excelInstalled ? undefined : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)') }),
       cmd('tools.diff'),
       cmd('tools.distCheck'),
+      cmd('tools.replaceIds'),
       SEP,
       cmd('tools.runMacro', undefined, { hint: runMacroHint() }),
       cmd('vba.reveal'),
@@ -534,15 +543,17 @@ function updateChrome(): void {
   const chip = $('file-chip');
   chip.hidden = !s;
   if (s) {
-    const { name } = splitPath(s.path);
+    // 同梱のサンプルはパスが空なので、「サンプル」と出す
+    const name = s.path === '' ? t('サンプル') : splitPath(s.path).name;
     $('file-name').textContent = name;
-    chip.title = dirty ? t('{path}（未保存の変更があります）', { path: s.path }) : s.path;
+    const where = s.path === '' ? t('サンプル（保存できません）') : s.path;
+    chip.title = dirty ? t('{path}（未保存の変更があります）', { path: where }) : where;
     const dot = $('file-dirty');
     dot.hidden = !dirty;
     dot.setAttribute('aria-label', t('未保存の変更があります'));
     dot.setAttribute('role', 'img');
   }
-  document.title = s ? `${dirty ? '● ' : ''}${splitPath(s.path).name} - Sash` : 'Sash';
+  document.title = s ? `${dirty ? '● ' : ''}${s.path === '' ? t('サンプル') : splitPath(s.path).name} - Sash` : 'Sash';
 
   const set = (id: string, enabled: boolean, title: string) => {
     const b = $<HTMLButtonElement>(id);

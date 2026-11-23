@@ -147,4 +147,11 @@ export const en: Readonly<Record<string, string>> = {
   'Excelが見つからないため、VBAを読み書きできません。': 'Excel was not found, so VBA cannot be read or written.',
   '幅の試験用リボン': 'Ribbon for width testing',
   'Excel が狭い画面でグループを畳む順番を測るためのタブです。ラベルの長さ・大きさ・入力欄・自動調整（autoScale）の違うグループを7つ並べます。': 'A tab for measuring the order in which Excel collapses groups on narrow screens. It has seven groups with different label lengths, sizes, input boxes and autoScale settings.',
+  'ID の一括置換…': 'Replace IDs…',
+  'サンプルを開く': 'Open sample',
+  'ツリーを絞り込む': 'Filter the tree',
+  'サンプル（保存できません）': 'Sample (cannot be saved)',
+  '等倍': 'Actual size',
+  'サンプル': 'Sample',
+  'サンプルは保存できません。自分のブックで作るときは、Excel で保存した .xlsm / .xlam を開いてください': 'The sample cannot be saved. To build your own ribbon, open an .xlsm / .xlam file saved in Excel',
 };

@@ -19,6 +19,8 @@ import { defFor, inBackstage } from '../schema';
 import { lang, t as tr } from '../i18n';
 import { invoke } from '../bridge';
 import { notify } from '../shell/toast';
+import { openRecipes } from '../dialogs/recipeDialog';
+import { openOnce } from '../dialogs/modal';
 import {
   availableForGroups, effectiveWidth, getCheckWidths, RIBBON_RESERVED_PX, RULER_MARKS, SCALE_CHOICES, setCheckWidths, setFitReport, simulateFit, WIDTH_CHOICES,
   type FitGroupInput, type FitGroupResult, type FitReportEntry, type GroupFitState,
@@ -74,6 +76,8 @@ let lastPopupSelection: string | null = null;
 const tempExpanded = new Set<string>();
 /** 見出しで開いているメニュー。 */
 let headerMenu: 'dynamic' | 'checks' | null = null;
+/** 「動的な状態を試す」で目立たせる要素（インスペクタの「キャンバスで試す」から開いたとき）。 */
+let dynamicFocus: string | null = null;
 /** グループの幅を測っている間は、ポップアップやキーヒントを描かない（幅に関係せず、選択の検索の邪魔になるため）。 */
 let measuring = false;
 /** 比べる側（読み取り専用）の枠を描いている間。メニューのポップアップは開かない。 */
@@ -215,6 +219,20 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     render();
   });
   attachScreentips(host, (node) => tipFor(node));
+  // インスペクタの「キャンバスで試す」：その要素を選び、リボンの表示で「動的な状態を試す」を開く
+  window.addEventListener('sash:dynamicSim', (e) => {
+    const path = (e as CustomEvent<{ path?: number[] }>).detail?.path;
+    if (!app.store || !Array.isArray(path)) return;
+    dynamicFocus = path.join('.');
+    headerMenu = 'dynamic';
+    if (mode !== 'ribbon') setModeQuiet('ribbon');
+    if (!samePath(app.store.selection, path)) app.store.select(path, 'other');
+    render();
+    // 開いたメニューの中の、その要素の行へ送ってフォーカスする
+    const row = host.querySelector<HTMLElement>(`.cv-dyn-row[data-dyn-path="${dynamicFocus}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+    row?.querySelector<HTMLElement>('input')?.focus({ preventScroll: true });
+  });
   // 見出しのメニューは、外を押したら閉じる
   window.addEventListener('mousedown', (e) => {
     if (!headerMenu) return;
@@ -496,6 +514,7 @@ function renderPreviewBar(fit: ViewFit | null): HTMLElement {
       dataset: { menuButton: '1', fk: `menu-${which}` },
       onclick: () => {
         headerMenu = headerMenu === which ? null : which;
+        dynamicFocus = null;
         rerender();
       },
     }, label, h('span', { class: 'rb-arrow', 'aria-hidden': 'true' }));
@@ -594,7 +613,7 @@ function renderDynamicMenu(): HTMLElement {
         : null;
     return h(
       'div',
-      { class: 'cv-dyn-row' },
+      { class: `cv-dyn-row${dynamicFocus === path.join('.') ? ' focus' : ''}`, dataset: { dynPath: path.join('.') } },
       h('span', { class: 'cv-dyn-name', title: key }, `<${el.localName}> ${labelOf(el) || key}`),
       check('getVisible', 'visible', tr('表示する')),
       check('getEnabled', 'enabled', tr('有効')),
@@ -1083,7 +1102,10 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
     }
   }
   if (!hasCustom) {
-    body.append(h('div', { class: 'cv-empty floating' }, h('span', null, tr('まだ自分のタブがありません。タブを追加するか、組み込みタブにグループを足してください'))));
+    body.append(h('div', { class: 'cv-empty floating' },
+      h('span', null, tr('まだ自分のタブがありません。タブを追加するか、組み込みタブにグループを足してください')),
+      // 白紙から組むより、よく使う形から始めたほうが早いので、レシピへの入り口も置く
+      h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); void openOnce('recipes', () => openRecipes(notify)); } }, tr('レシピから始める'))));
   }
 
   const qat = renderQat(doc, errorPaths);

@@ -385,6 +385,7 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .cv-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-top: var(--sp-1); padding-top: var(--sp-1); border-top: 1px solid var(--border); }
 .cv-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .cv-dyn-row { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--ctl-h-sm); }
+.cv-dyn-row.focus { background: var(--sel-bg); box-shadow: inset 2px 0 0 var(--sel-border); }
 .cv-dyn-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cv-dyn-label { width: 10em; height: var(--ctl-h-sm); font-size: var(--fs-xs); }
 .cv-checks .cv-check { min-height: 22px; }
@@ -402,7 +403,7 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 /* 枠を決めたときは、はみ出したグループも枠の外に描いて見えるようにする（隠すと編集できなくなるため） */
 .cv-frame .rb-body { overflow: visible; width: max-content; min-width: 100%; }
 .cv-frame .rb-tabs { width: 100%; }
-.cv-reserved { position: absolute; right: 0; bottom: var(--sp-1); height: 98px; border-left: 1px dashed var(--border-strong); background: repeating-linear-gradient(135deg, transparent 0 4px, var(--placeholder-bg) 4px 8px); pointer-events: auto; }
+.cv-reserved { position: absolute; right: 0; bottom: var(--sp-1); height: 98px; border-left: 1px dashed var(--border-strong); background: repeating-linear-gradient(135deg, transparent 0 4px, var(--placeholder-bg) 4px 8px); pointer-events: none; }
 .cv-compare { padding-top: var(--sp-2); border-top: 1px dashed var(--border-strong); }
 .cv-compare-caption { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-bottom: var(--sp-1); font-size: var(--fs-xs); }
 .cv-compare .rb-window { opacity: 0.95; }
