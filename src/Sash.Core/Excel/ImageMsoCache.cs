@@ -39,8 +39,9 @@ public sealed record ImageMsoFailureRecord(string? ExcelVersion, DateTimeOffset 
     /// 3：Sash から（別のプロセスから）GetImageMso を呼ぶのをやめ、作業用のブックに一時的な VBA モジュールを入れて
     /// Excel の中で取り出す（ブックを開いても、利用者の Excel でも、別のプロセスからは E_UNEXPECTED が返ったため）。
     /// 2 までの失敗は別のプロセスから呼んだためのものなので、当てはめずにもう一度自動で試す。
+    /// 4：マクロを有効にし、Application.Run の名前の書き方を確認用の関数で決める（3 で「マクロを実行できません」になったため）。
     /// </summary>
-    public const int CurrentMethod = 3;
+    public const int CurrentMethod = 4;
 }
 
 /// <summary>キャッシュを引いた結果。Found は見つかった画像（存在しない名前は null）、Misses はキャッシュにない名前。</summary>
