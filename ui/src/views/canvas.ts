@@ -6,7 +6,7 @@ import '../styles-views.css';
 import { app } from '../app';
 import { catalog, labels, onLabelsLoaded } from '../catalog/catalog';
 import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard';
-import { canDropInto, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
+import { canDropInto, canDropManyAt, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
 import {
   allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, pathOf, samePath, isAncestorPath, type Path,
@@ -313,6 +313,23 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     hideIndicator(host);
     endDrag();
   }, true);
+  // Ctrl（⌘）+クリックで選び足す・外す、Shift+クリックで範囲を選ぶ（仕様書 §19）。
+  // 要素ごとのクリックの処理（タブの切り替え・メニューを開くなど）より先に、捕捉の段階で受けて止める
+  host.addEventListener('click', (e) => {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+    const node = (e.target as HTMLElement).closest<HTMLElement>('[data-sel][data-path]');
+    const path = parsePath(node?.dataset['path']);
+    const store = app.store;
+    if (!node || !path || !store || !host.contains(node) || node.closest('.cv-header, .cv-pop')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.shiftKey && !(e.ctrlKey || e.metaKey)) {
+      // 親が違うときは、キャンバスに描かれている順（文書の順と同じ先行順）で範囲を決める
+      store.selectRange(path, 'canvas', renderedPaths(host));
+    } else {
+      store.toggleSelect(path, 'canvas');
+    }
+  }, true);
   host.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     if (target === host || target.classList.contains('rb-body') || target.classList.contains('cv-stage') || target.classList.contains('cv-frame') || target.classList.contains('cv-zoom')) app.store?.select(null, 'canvas');
@@ -323,7 +340,8 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     const path = parsePath(node?.dataset['path']);
     if (!path || !app.store) return;
     e.preventDefault();
-    app.store.select(path, 'canvas');
+    // 複数選択の中の要素で開いたときは、選択を保ったまま、まとめての操作のメニューを出す
+    if (!(app.store.isMulti && app.store.isSelected(path))) app.store.select(path, 'canvas');
     openElementMenu(e.clientX, e.clientY, path, 'canvas', host);
   });
 }
@@ -468,11 +486,59 @@ function renderHeader(fit: ViewFit | null): HTMLElement {
     }, short ? [h('span', { class: 'cv-long' }, label), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, short)] : label);
   const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'), tr('右クリック')));
   // 操作の説明は長いので、小さな「?」のツールチップに回す（1 行に収めるため）
-  const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー') }, '?');
+  const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー・Ctrl+クリックで選び足す・Shift+クリックで範囲を選ぶ') }, '?');
+  // 複数選択の数（仕様書 §19）。見出しの 1 行に収まるよう、短い印にする。
+  // 状態の文字（縮むほう）より前に置く。後ろに置くと、狭い画面では見出しの右端からはみ出して見えなくなるため
+  const count = app.store?.isMulti ? multiBadge(app.store.selections.length) : null;
   // 見出しは 1 行に収める（2 段・3 段になると、既定の高さ 260px のキャンバスでリボンが見出しの下に隠れるため）。
   // 毎回は使わない切り替え（比べる・キーヒント・VBA で変わる表示・チェックする幅・Excel の幅）は「表示」メニューにまとめた
-  if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, modes, h('span', { class: 'cv-spacer' }), hint);
-  return h('div', { class: 'cv-header' }, modes, renderWidthControls(), renderStatus(fit), renderViewMenu(), hint);
+  if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, modes, count, h('span', { class: 'cv-spacer' }), hint);
+  return h('div', { class: 'cv-header' }, modes, renderWidthControls(), count, renderStatus(fit), renderViewMenu(), hint);
+}
+
+/** 「3 個選択中」の印。押すと、主な選択だけに戻す（Esc と同じ）。読み上げは announceSelection の領域が受け持つ。 */
+function multiBadge(n: number): HTMLElement {
+  const long = tr('{n} 個選択中', { n });
+  return h('button', {
+    type: 'button',
+    class: 'cv-multi',
+    'aria-label': long,
+    title: tr('Esc で主な選択だけに戻します'),
+    onclick: (e: MouseEvent) => {
+      e.stopPropagation();
+      app.store?.clearMulti('canvas');
+    },
+  }, h('span', { class: 'cv-long' }, long), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, tr('{n} 個', { n })));
+}
+
+/**
+ * 選択の数を読み上げる領域。描き直しのたびに作り直すと、読み上げソフトが変化として拾わないことがあるので、
+ * 1 つだけ作って残し、文字だけを書き換える（同じ文字なら書き換えず、描き直しのたびに読み上げないようにする）。
+ */
+let liveRegion: HTMLElement | null = null;
+function announceSelection(): void {
+  const store = app.store;
+  const text = store?.isMulti ? tr('{n} 個選択中', { n: store.selections.length }) : '';
+  if (!liveRegion || !liveRegion.isConnected) {
+    liveRegion = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', dataset: { live: 'selection' } });
+    document.body.append(liveRegion);
+  }
+  if (liveRegion.textContent !== text) liveRegion.textContent = text;
+}
+
+/**
+ * 複数選択のうち、主な選択以外の要素に印を付ける（主な選択はこれまでどおり selected で、フォーカスの枠も付く）。
+ * aria-selected は付けない。キャンバスの要素は選べる項目の役割（option・treeitem）を持たず、タブは role="tab" の
+ * aria-selected を「表示中のタブ」に使っているため、付けると意味が食い違う。選んだ数は announceSelection で知らせ、
+ * 選択の状態そのものはツリー（treeitem の aria-selected）で伝える。
+ */
+function markSecondary(host: HTMLElement): void {
+  const store = app.store;
+  if (!store?.isMulti) return;
+  for (const p of store.selections) {
+    if (samePath(p, store.selection)) continue;
+    for (const n of Array.from(host.querySelectorAll<HTMLElement>(`[data-sel][data-path="${p.join('.')}"]`))) n.classList.add('multi-selected');
+  }
 }
 
 function option(value: string, label: string, selected: boolean): HTMLOptionElement {
@@ -533,16 +599,18 @@ function renderWidthControls(): HTMLElement {
     },
     SCALE_CHOICES.map((s) => option(String(s), `${s}%`, p.scale === s)),
   );
-  const fitSeg = (m: 'fit' | 'actual', label: string, title: string) =>
+  // short は見出しが狭いときに出す短い名前（CSS のコンテナークエリで切り替える。読み上げは aria-label の長い名前）
+  const fitSeg = (m: 'fit' | 'actual', label: string, title: string, short?: string) =>
     h('button', {
       type: 'button',
       class: p.fit === m ? 'active' : '',
       'aria-pressed': String(p.fit === m),
+      'aria-label': short ? label : undefined,
       disabled: p.width === null,
       title,
       dataset: { fk: `fit-${m}` },
       onclick: () => applyPreview({ fit: m }),
-    }, label);
+    }, short ? [h('span', { class: 'cv-long' }, label), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, short)] : label);
   // 見出しが狭いときは「画面の幅」「拡大率」の文字を隠す（CSS のコンテナークエリ）。選択肢の aria-label と title は残す
   return h(
     'div',
@@ -551,7 +619,7 @@ function renderWidthControls(): HTMLElement {
     custom,
     h('label', { class: 'cv-field' }, h('span', { class: 'cv-field-label' }, tr('拡大率')), scaleSel),
     h('div', { class: 'segmented cv-fit', role: 'group', 'aria-label': tr('表示のしかた') },
-      fitSeg('fit', tr('全体を表示'), tr('枠に収まるように縮小して表示します')),
+      fitSeg('fit', tr('全体を表示'), tr('枠に収まるように縮小して表示します'), tr('全体')),
       fitSeg('actual', tr('実寸'), tr('実物と同じ大きさで表示し、横にスクロールします'))),
   );
 }
@@ -595,6 +663,16 @@ function renderStatus(fit: ViewFit | null): HTMLElement[] {
     onclick: () => window.dispatchEvent(new CustomEvent('sash:collapseSidePanes')),
   }, tr('ペインを畳む'));
   return [status, low];
+}
+
+/** 見出しのメニューを閉じ、「表示」ボタンにフォーカスを戻す。開いていなければ何もしない（false）。 */
+function closeHeaderMenu(): boolean {
+  if (!headerMenu) return false;
+  headerMenu = null;
+  dynamicFocus = null;
+  rerender();
+  hostEl?.querySelector<HTMLElement>('.cv-viewbtn')?.focus({ preventScroll: true });
+  return true;
 }
 
 /** 見出しの「表示 ▾」と、そこから開くメニュー（表示・VBA で変わる表示を試す・チェックする画面の幅）。 */
@@ -756,6 +834,7 @@ function renderCanvas(host: HTMLElement): void {
   const store = app.store;
   if (!store) {
     host.replaceChildren();
+    announceSelection();
     return;
   }
   const doc = store.doc;
@@ -784,6 +863,8 @@ function renderCanvas(host: HTMLElement): void {
   const tabScroll = resetTabScroll ? 0 : editableTabStrip(host)?.scrollLeft ?? 0;
   resetTabScroll = false;
   host.replaceChildren(renderHeader(fit), stage, h('div', { class: 'drop-indicator', hidden: true }));
+  markSecondary(host);
+  announceSelection();
   if (active) Array.from(host.querySelectorAll<HTMLElement>('[data-fk]')).find((n) => n.dataset['fk'] === active)?.focus({ preventScroll: true });
 
   updateZoom(host);
@@ -1737,6 +1818,11 @@ function selectableNodes(host: HTMLElement): HTMLElement[] {
   return Array.from(host.querySelectorAll<HTMLElement>('[data-sel][data-path]'));
 }
 
+/** キャンバスに描かれている要素のパス（描かれている順）。見出しのメニューの中は除く。 */
+function renderedPaths(host: HTMLElement): Path[] {
+  return selectableNodes(host).filter((n) => !n.closest('.cv-header, .cv-pop')).map((n) => parsePath(n.dataset['path'])!);
+}
+
 /** 同じ親を持つノードの中から、方向に一番近いものを選ぶ。 */
 function nearest(from: HTMLElement, candidates: HTMLElement[], dir: 'left' | 'right' | 'up' | 'down'): HTMLElement | null {
   const a = from.getBoundingClientRect();
@@ -1791,11 +1877,20 @@ function selectNode(n: HTMLElement | null | undefined): boolean {
 function onKey(e: KeyboardEvent, host: HTMLElement): void {
   if (e.isComposing || renaming) return;
   const target = e.target as HTMLElement;
+  // 見出しの「表示」メニュー（とその先のメニュー）が開いていれば、Esc は閉じるだけにする。
+  // 同じ Esc で複数選択まで解けると、選び直しになるため。メニューの中の入力欄やチェックボックスからでも閉じられるよう、先に見る
+  if (e.key === 'Escape' && headerMenu) {
+    e.preventDefault();
+    e.stopPropagation();
+    closeHeaderMenu();
+    return;
+  }
   if (target.closest('input, select, textarea, button')) {
     // ヘッダーの切り替えボタンなど、キャンバスの中のボタンでは既定の動作に任せる
     if (target.tagName !== 'BUTTON' || e.key === 'Enter' || e.key === ' ') return;
   }
-  if (handleEditKey(e, 'canvas')) return;
+  // Ctrl+A はキャンバスに描かれている要素だけを選ぶ（畳んだグループの中や、表示していないタブの中は選ばない）
+  if (handleEditKey(e, 'canvas', () => renderedPaths(host))) return;
   const store = app.store;
   if (!store) return;
   const sel = store.selection;
@@ -1857,6 +1952,11 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
     selectNode(key === 'Home' ? sibs[0] : sibs.at(-1));
   } else if (key === 'Escape') {
     closeMenu();
+    // 複数選択中なら、まず主な選択だけに戻す（親へ上がるのは、その次の Esc）
+    if (store.clearMulti('canvas')) {
+      e.preventDefault();
+      return;
+    }
     if (sel.length > 0 && nodeOf(host, sel.slice(0, -1))) {
       e.preventDefault();
       store.select(sel.slice(0, -1), 'canvas');
@@ -1942,6 +2042,9 @@ function checkOrder(doc: Document, spot: DropSpot | null): DropSpot | null {
   const parent = elementAt(doc, spot.parentPath);
   const tag = draggedTag(doc);
   if (!parent || !tag) return null;
+  // まとめて運んでいるときは、全部をその位置に置けるかを確かめる（1つでも置けなければ表示を出さない）
+  const payload = dragPayload();
+  if (payload?.kind === 'move' && payload.paths && payload.paths.length > 1) return canDropManyAt(doc, spot.parentPath, spot.index) ? spot : null;
   const moving = movingElement(doc);
   const allowed = allowedIndex(parent, tag, spot.index, moving && moving.parentElement === parent ? moving : null);
   return allowed === null ? null : spot;

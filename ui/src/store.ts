@@ -1,7 +1,7 @@
 // 編集中の customUI パーツ 1 つ分の状態。キャンバス・ツリー・XML のどこから変更しても、
 // ここを通して一つの Undo / Redo 履歴に記録する（仕様書 §5）。
 
-import { elementAt, parseXml, samePath, serialize, type Path } from './model';
+import { allElements, comparePaths, elementAt, isAncestorPath, parseXml, pathOf, samePath, serialize, type Path } from './model';
 import type { CustomUIVersion } from './bridge';
 import { NAMESPACES } from './schema';
 import { t } from './i18n';
@@ -22,6 +22,8 @@ export interface ImageEntry {
 interface Snapshot {
   text: string;
   selection: Path | null;
+  /** 複数選択（仕様書 §19）。元に戻すと、選んでいた組も戻す。 */
+  selections: Path[];
   images: Map<string, ImageEntry>;
   /** この状態から次の状態へ進めた操作の説明（元に戻す・やり直しのツールチップに出す）。 */
   label: string;
@@ -50,7 +52,45 @@ export interface Change {
 /** edit の fn がこれを返すと、編集を取り消す（履歴にも残さない）。 */
 export const ABORT: unique symbol = Symbol('sash.abort');
 
-type EditFn = (doc: Document) => Path | null | void | typeof ABORT;
+/**
+ * edit の fn が、編集のあとに選ぶ要素を複数返すときの入れ物（まとめて複製・貼り付けなど。仕様書 §19）。
+ * Path の配列をそのまま返せるようにすると、空の配列が「customUI（ルート）を選ぶ」と区別できないため、包んで返す。
+ */
+export class SelectionSet {
+  constructor(readonly paths: readonly Path[], readonly primary: Path | null = paths.at(-1) ?? null) {}
+}
+
+/** 編集のあとに paths をまとめて選ぶ（primary を省くと最後のものを主な選択にする）。 */
+export function selectMany(paths: readonly Path[], primary?: Path | null): SelectionSet {
+  return new SelectionSet(paths, primary === undefined ? paths.at(-1) ?? null : primary);
+}
+
+export type EditResult = Path | SelectionSet | null | void | typeof ABORT;
+
+type EditFn = (doc: Document) => EditResult;
+
+/** 同じパスを取り除き、文書の順に並べる。 */
+function uniqueSorted(paths: readonly Path[]): Path[] {
+  const out: Path[] = [];
+  for (const p of [...paths].sort(comparePaths)) if (!out.some((q) => samePath(p, q))) out.push(p);
+  return out;
+}
+
+/**
+ * 選択の組を整える。祖先と子孫を一緒に選ばない（祖先を残し、子孫を外す）。
+ * ただし主な選択（primary）が子孫のときは、primary を残して祖先を外す（いま選んだものを優先するため）。
+ * 祖先ごと消す・移すと子孫も一緒に動くので、両方を選ぶと同じ要素を二重に扱ってしまうため。
+ */
+export function normalizeSelections(paths: readonly Path[], primary: Path | null): Path[] {
+  let list = uniqueSorted(primary ? [...paths, primary] : paths);
+  if (primary) list = list.filter((p) => !isAncestorPath(p, primary));
+  return list.filter((p) => !list.some((q) => isAncestorPath(q, p)));
+}
+
+/** 範囲の中で、ほかの要素の祖先になっているものを外す（範囲選択では、葉の側を選んだとみなす）。 */
+function dropAncestorsOfOthers(paths: readonly Path[]): Path[] {
+  return paths.filter((p) => p.length > 0 && !paths.some((q) => isAncestorPath(p, q)));
+}
 
 let refusedHandler: ((message: string) => void) | null = null;
 
@@ -78,7 +118,15 @@ export class PartStore {
   /** XML エディタの中身。構文エラーの間は doc と一致しない。 */
   text: string;
   syncError: { message: string; line?: number } | null = null;
+  /** 主な選択（フォーカスのある要素）。インスペクタ・XML の強調・挿入の位置はこれで決める。 */
   selection: Path | null = null;
+  /**
+   * 選んでいる要素の全部（文書の順、主な選択を含む。仕様書 §19）。主な選択がなければ空。
+   * 祖先と子孫を一緒には含まない（normalizeSelections）。
+   */
+  selections: Path[] = [];
+  /** Shift+クリックの範囲の起点。最後に単独で選んだか、Ctrl+クリックで足した要素。 */
+  private anchor: Path | null = null;
   images: Map<string, ImageEntry>;
 
   /** 最後に保存した（または読み込んだ）ときの内容。新規に作ったパーツは null（何を書いても未保存）。 */
@@ -183,10 +231,39 @@ export class PartStore {
     return this.selection ? elementAt(this.doc, this.selection) : null;
   }
 
+  /** 選んでいる要素（文書の順）。 */
+  get selectedElements(): Element[] {
+    return this.selections.map((p) => elementAt(this.doc, p)).filter((e): e is Element => e !== null);
+  }
+
+  /** 2つ以上を選んでいるか。 */
+  get isMulti(): boolean {
+    return this.selections.length > 1;
+  }
+
+  /** path を選んでいるか（主な選択か、そのほかの選択か）。 */
+  isSelected(path: Path): boolean {
+    return this.selections.some((p) => samePath(p, path));
+  }
+
+  /** 主な選択と選択の組を置き換える（組は整えてから入れる）。 */
+  private setSelection(primary: Path | null, list: readonly Path[]): void {
+    this.selection = primary;
+    this.selections = primary ? normalizeSelections(list, primary) : [];
+  }
+
+  /** 今の文書で指せないパスを外す（XML の書き換え・元に戻すのあと）。主な選択が消えたら、残りの最後を主にする。 */
+  private dropInvalidSelections(): void {
+    const valid = this.selections.filter((p) => elementAt(this.doc, p) !== null);
+    const primary = this.selection && elementAt(this.doc, this.selection) ? this.selection : valid.at(-1) ?? null;
+    this.setSelection(primary, valid);
+    if (this.anchor && !elementAt(this.doc, this.anchor)) this.anchor = this.selection;
+  }
+
   // ---- 履歴 ----
 
   private snapshot(label: string): Snapshot {
-    return { text: this.text, selection: this.selection, images: new Map(this.images), label };
+    return { text: this.text, selection: this.selection, selections: [...this.selections], images: new Map(this.images), label };
   }
 
   private pushHistory(label: string): void {
@@ -219,7 +296,8 @@ export class PartStore {
     } else {
       this.syncError = { message: parsed.message, line: parsed.line };
     }
-    this.selection = null;
+    this.setSelection(null, []);
+    this.anchor = null;
     this.emit(['doc', 'selection', 'images'], 'other');
   }
 
@@ -247,9 +325,14 @@ export class PartStore {
     }
     const before = this.snapshot(label);
     const beforeXml = serialize(this.doc);
+    // 選んでいた要素を、パスではなく要素そのもので覚えておく。編集で前に挿入・削除・移動があっても、
+    // 編集のあとに同じ要素を選び直せる（パスのままだと、別の要素を指してしまうため）
+    const tracked = this.selections.map((p) => elementAt(this.doc, p));
+    const trackedPrimary = this.selection ? elementAt(this.doc, this.selection) : null;
     const rollback = () => {
       this.images = before.images;
       this.selection = before.selection;
+      this.selections = before.selections;
       // 文書が書き換わっていれば、編集前の XML から作り直す（変わっていなければ、ビューが持つ要素をそのまま使えるよう残す）
       if (serialize(this.doc) !== beforeXml) {
         const parsed = parseXml(before.text);
@@ -271,9 +354,30 @@ export class PartStore {
       rollback();
       return false;
     }
-    const selection = result !== undefined ? result : this.selection;
+    const root = this.doc.documentElement;
+    const alive = (e: Element | null): e is Element => e !== null && (e === root || root.contains(e));
+    let selection: Path | null;
+    let selections: Path[];
+    if (result instanceof SelectionSet) {
+      selection = result.primary;
+      selections = [...result.paths];
+    } else if (result !== undefined) {
+      selection = result;
+      selections = result ? [result] : [];
+    } else {
+      // 選択は変えない編集。選んでいた要素を、編集のあとの位置で選び直す（消えた要素は外す）
+      // 主な選択の要素が消えたときは、これまでどおりパスのまま残す（要素を作り直す編集で選択を保つため）
+      selection = alive(trackedPrimary) ? pathOf(trackedPrimary) : this.selection;
+      selections = tracked.filter(alive).map((e) => pathOf(e));
+    }
+    // 編集のあとで指せなくなったパスは外す（selections に無効なパスを残すと、まとめての操作が空振りしたり、
+    // 数の表示がずれたりするため）。主な選択が指せなければ、残りの最後を主にする（dropInvalidSelections と同じ決まり）
+    selections = selections.filter((p) => elementAt(this.doc, p) !== null);
+    if (selection && !elementAt(this.doc, selection)) selection = selections.at(-1) ?? null;
+    selections = selection ? normalizeSelections(selections, selection) : [];
     const xml = serialize(this.doc);
-    if (!image && xml === beforeXml && samePath(selection, before.selection)) {
+    const sameSelections = selections.length === before.selections.length && selections.every((p, i) => samePath(p, before.selections[i]!));
+    if (!image && xml === beforeXml && samePath(selection, before.selection) && sameSelections) {
       rollback();
       return false;
     }
@@ -282,6 +386,8 @@ export class PartStore {
     this.redoStack.length = 0;
     this.lastTextEditAt = 0;
     this.selection = selection;
+    this.selections = selections;
+    this.anchor = selection;
     this.text = xml;
     if (image) this.refreshIsNew();
     this.emit(image ? ['doc', 'selection', 'images'] : ['doc', 'selection'], source);
@@ -300,6 +406,7 @@ export class PartStore {
       this.doc = parsed.doc;
       this.syncError = null;
       if (this.selection && !elementAt(this.doc, this.selection)) this.selection = null;
+      this.dropInvalidSelections();
     } else {
       this.syncError = { message: parsed.message, line: parsed.line };
     }
@@ -317,9 +424,97 @@ export class PartStore {
     this.emit(['doc'], 'other');
   }
 
+  /** 1つだけを選ぶ（ほかの選択は外す）。null で何も選ばない。 */
   select(path: Path | null, source: Source): void {
-    this.selection = path;
+    this.setSelection(path, path ? [path] : []);
+    this.anchor = path;
     this.emit(['selection'], source);
+  }
+
+  /**
+   * Ctrl+クリック：選んでいなければ足して主な選択にし、選んでいれば外す（仕様書 §19）。
+   * 足した要素の祖先・子孫は外す（normalizeSelections）。最後の1つを外すと、何も選ばない。
+   */
+  toggleSelect(path: Path, source: Source): void {
+    if (this.isSelected(path)) {
+      const rest = this.selections.filter((p) => !samePath(p, path));
+      const primary = this.selection && !samePath(this.selection, path) ? this.selection : rest.at(-1) ?? null;
+      this.setSelection(primary, rest);
+      this.anchor = primary;
+    } else {
+      // 新しく足したものを優先する（祖先を選んでいたら祖先を外し、子孫を選んでいたら子孫を外す）
+      const rest = this.selections.filter((p) => !isAncestorPath(path, p) && !isAncestorPath(p, path));
+      this.setSelection(path, [...rest, path]);
+      this.anchor = path;
+    }
+    this.emit(['selection'], source);
+  }
+
+  /**
+   * Shift+クリック：起点（anchor）から path までを選ぶ。起点は変えない。
+   * 同じ親の兄弟なら、その間の兄弟を文書の順に選ぶ。親が違うときは order（ツリーに見えている行の順。
+   * 省けば文書の順）での範囲から、範囲の中のほかの要素の祖先になっているもの（間にある親のグループなど）を外して選ぶ。
+   * order を渡したときは、同じ親でも order にある（見えている）要素だけを選ぶ。絞り込みや畳んだ行で隠れている兄弟まで
+   * 選ぶと、続けて Delete を押したときに見えていない要素まで消えてしまうため。
+   */
+  selectRange(path: Path, source: Source, order?: readonly Path[]): void {
+    const anchor = this.anchor && elementAt(this.doc, this.anchor) ? this.anchor : this.selection;
+    if (!anchor || path.length === 0 || anchor.length === 0) {
+      this.select(path, source);
+      return;
+    }
+    let range: Path[];
+    if (samePath(anchor.slice(0, -1), path.slice(0, -1))) {
+      const parent = path.slice(0, -1);
+      const lo = Math.min(anchor.at(-1)!, path.at(-1)!);
+      const hi = Math.max(anchor.at(-1)!, path.at(-1)!);
+      range = [];
+      for (let i = lo; i <= hi; i++) range.push([...parent, i]);
+      if (order) {
+        const shown = new Set(order.map((p) => p.join('.')));
+        range = range.filter((p) => samePath(p, path) || shown.has(p.join('.')));
+      }
+    } else {
+      const rows = order ?? allElements(this.doc).map((e) => pathOf(e));
+      const a = rows.findIndex((p) => samePath(p, anchor));
+      const b = rows.findIndex((p) => samePath(p, path));
+      if (a < 0 || b < 0) {
+        this.select(path, source);
+        return;
+      }
+      range = dropAncestorsOfOthers(rows.slice(Math.min(a, b), Math.max(a, b) + 1));
+    }
+    this.setSelection(path, range);
+    this.anchor = anchor;
+    this.emit(['selection'], source);
+  }
+
+  /**
+   * Ctrl+A：主な選択の兄弟（同じ親の子）をすべて選ぶ。主な選択は変えない。
+   * order（ツリーに見えている行・キャンバスに描かれている要素）を渡したときは、その中にある兄弟だけを選ぶ
+   * （絞り込みや畳んだ行で隠れている兄弟を選ぶと、続けて Delete を押したときに見えない要素まで消えるため）。
+   */
+  selectAll(source: Source, order?: readonly Path[]): void {
+    const sel = this.selection;
+    if (!sel || sel.length === 0) return;
+    const parent = elementAt(this.doc, sel.slice(0, -1));
+    if (!parent) return;
+    let all = Array.from(parent.children, (_, i) => [...sel.slice(0, -1), i]);
+    if (order) {
+      const shown = new Set(order.map((p) => p.join('.')));
+      all = all.filter((p) => samePath(p, sel) || shown.has(p.join('.')));
+    }
+    this.setSelection(sel, all);
+    this.emit(['selection'], source);
+  }
+
+  /** Esc：複数選択をやめ、主な選択だけを残す。複数でなければ何もしない（false）。 */
+  clearMulti(source: Source = 'other'): boolean {
+    if (!this.isMulti) return false;
+    this.setSelection(this.selection, this.selection ? [this.selection] : []);
+    this.anchor = this.selection;
+    this.emit(['selection'], source);
+    return true;
   }
 
   addImage(entry: ImageEntry, label: string = t('画像「{id}」の追加', { id: entry.id })): void {
@@ -395,6 +590,7 @@ export class PartStore {
       this.text = s.text;
       this.images = s.images;
       this.selection = s.selection;
+      this.selections = s.selections;
     };
     while (this.undoStack.length > target) {
       const prev = this.undoStack.pop()!;
@@ -406,7 +602,7 @@ export class PartStore {
       this.undoStack.push(this.snapshot(next.label));
       take(next);
     }
-    this.restore({ text: this.text, images: this.images, selection: this.selection, label: '' });
+    this.restore({ text: this.text, images: this.images, selection: this.selection, selections: this.selections, label: '' });
     return true;
   }
 
@@ -423,6 +619,9 @@ export class PartStore {
       this.syncError = { message: parsed.message, line: parsed.line };
     }
     this.selection = s.selection && elementAt(this.doc, s.selection) ? s.selection : null;
+    this.selections = s.selections;
+    this.dropInvalidSelections();
+    this.anchor = this.selection;
     this.emit(['doc', 'selection', 'images'], 'history');
   }
 }

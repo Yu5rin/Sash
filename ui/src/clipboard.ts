@@ -3,9 +3,12 @@
 // 古い文書の要素を指したままになるため。OS のクリップボードにも、他のツールに貼れるよう XML を書く（失敗しても無視）。
 
 import { app } from './app';
-import { allowedInsertIndex, canDuplicate, childElements, createElement, duplicateElement, elementAt, importElement, parseXml, pathOf, renameDuplicateIds, serialize, usedIds, type Path } from './model';
+import { allowedInsertIndex, canDuplicate, childElements, createElement, duplicateElement, elementAt, importElement, parseXml, pathOf, renameDuplicateIds, samePath, serialize, usedIds, type Path } from './model';
 import { canContainEl, defFor, titleOf } from './schema';
-import type { Change, Source } from './store';
+import { ABORT, selectMany, type Change, type EditResult, type Source } from './store';
+import { applyBulkAttr, bulkLabel, supporting } from './bulkEdit';
+import { deleteMany, duplicateMany, moveBlock, moveBlockReason, moveToNewGroup, newGroupReason } from './multiEdit';
+import { attributes } from './schema';
 import { t } from './i18n';
 import { toast, type ToastKind as ShellToastKind } from './shell/toast';
 
@@ -35,7 +38,7 @@ export function copyText(text: string, message: string): void {
 // ---- ストアへの編集 ----
 
 /** store.edit を呼ぶ（履歴の名前を必ず付けるため、ビューからはこれを通す）。変更しなかった・断られたら false。 */
-export function runEdit(source: Source, fn: (doc: Document) => Path | null | void, label: string): boolean {
+export function runEdit(source: Source, fn: (doc: Document) => EditResult, label: string): boolean {
   return app.store?.edit(source, fn, label) ?? false;
 }
 
@@ -76,11 +79,17 @@ interface Clip {
   xml: string;
 }
 
-let clip: Clip | null = null;
+/** コピーした要素（文書の順）。複数選択をコピーしたときは複数になる（仕様書 §19）。 */
+let clip: Clip[] | null = null;
 
 /** 貼り付けられるものがあるか（メニューの有効・無効に使う）。 */
 export function hasClip(): boolean {
   return clip !== null;
+}
+
+/** コピーしてある要素の数（メニューの名前に数を出すため）。 */
+export function clipCount(): number {
+  return clip?.length ?? 0;
 }
 
 function fragmentXml(el: Element): string {
@@ -103,6 +112,16 @@ function selectedTarget(): Element | null {
   return el;
 }
 
+/** 選んでいる要素（文書の順。祖先と子孫を一緒には含まない）。 */
+function selectedTargets(): Element[] {
+  return app.store?.selectedElements ?? [];
+}
+
+/** 2つ以上を選んでいるか。 */
+function isMulti(): boolean {
+  return app.store?.isMulti === true;
+}
+
 function refuse(message: string): false {
   notify({ kind: 'warning', message });
   return false;
@@ -113,16 +132,21 @@ function nameOf(el: Element): string {
 }
 
 export function copy(): boolean {
-  const el = selectedTarget();
-  if (!el) return refuse(t('コピーする要素を選択してください'));
-  if (el === el.ownerDocument.documentElement) return refuse(t('customUI 全体はコピーできません'));
-  clip = { tag: el.localName, xml: fragmentXml(el) };
+  const els = isMulti() ? selectedTargets() : [selectedTarget()].filter((e): e is Element => e !== null);
+  if (els.length === 0) return refuse(t('コピーする要素を選択してください'));
+  if (els.some((el) => el === el.ownerDocument.documentElement)) return refuse(t('customUI 全体はコピーできません'));
+  clip = els.map((el) => ({ tag: el.localName, xml: fragmentXml(el) }));
   // OS のクリップボードへは失敗しても内部には残っているので、通知は出さない
-  void navigator.clipboard?.writeText(prettyXml(el)).catch(() => undefined);
+  void navigator.clipboard?.writeText(els.map(prettyXml).join('\n')).catch(() => undefined);
   return true;
 }
 
 export function cut(): boolean {
+  if (isMulti()) {
+    const els = selectedTargets();
+    if (!copy()) return false;
+    return removeMany(els.map((e) => pathOf(e)), t('{n} 個の要素を切り取り', { n: els.length }), false);
+  }
   const el = selectedTarget();
   if (!el) return refuse(t('切り取る要素を選択してください'));
   if (!copy()) return false;
@@ -154,26 +178,47 @@ export function findInsertSpot(selected: Element | null, tag: string, doc: Docum
   return null;
 }
 
-function insertClip(c: Clip, source: Source): boolean {
+/**
+ * コピーした要素を貼り付ける。置き場所は最初の要素で決め（選択中の要素の中か後ろ）、残りはその後ろに元の順で続ける。
+ * 1つでもそこに置けないものがあれば、何も貼り付けずに理由を知らせる（一部だけ貼られると気づきにくいため）。
+ */
+function insertClip(clips: Clip[], source: Source): boolean {
   const store = app.store;
-  if (!store) return false;
+  if (!store || clips.length === 0) return false;
   const ns = store.doc.documentElement.namespaceURI ?? '';
-  const parsed = parseXml(`<customUI xmlns="${ns}">${c.xml}</customUI>`);
-  if (!parsed.ok || !parsed.doc.documentElement.firstElementChild) return refuse(t('貼り付ける内容を読めませんでした'));
-  const spot = findInsertSpot(store.selectedElement, c.tag, store.doc);
+  const parsed = parseXml(`<customUI xmlns="${ns}">${clips.map((c) => c.xml).join('')}</customUI>`);
+  const fragments = parsed.ok ? childElements(parsed.doc.documentElement) : [];
+  if (fragments.length !== clips.length) return refuse(t('貼り付ける内容を読めませんでした'));
+  const first = clips[0]!;
+  const spot = findInsertSpot(store.selectedElement, first.tag, store.doc);
   if (!spot) {
     const sel = store.selectedElement;
-    return refuse(sel ? t('<{tag}> は <{parent}> の中にも後ろにも置けません', { tag: c.tag, parent: sel.localName }) : t('<{tag}> を置ける場所がありません。置き先の要素を選択してください', { tag: c.tag }));
+    return refuse(sel ? t('<{tag}> は <{parent}> の中にも後ろにも置けません', { tag: first.tag, parent: sel.localName }) : t('<{tag}> を置ける場所がありません。置き先の要素を選択してください', { tag: first.tag }));
   }
   const parentPath = pathOf(spot.parent);
-  return runEdit(source, (doc) => {
+  let failure: string | null = null;
+  const ok = runEdit(source, (doc) => {
     const parent = elementAt(doc, parentPath);
     if (!parent) return undefined;
-    const el = importElement(doc, parsed.doc.documentElement.firstElementChild!);
-    renameDuplicateIds(el, usedIds(doc));
-    parent.insertBefore(el, parent.children[spot.index] ?? null);
-    return pathOf(el);
-  }, t('<{tag}> を貼り付け', { tag: c.tag }));
+    const used = usedIds(doc);
+    const placed: Element[] = [];
+    let index = spot.index;
+    for (const f of fragments) {
+      const at = placed.length === 0 ? index : allowedIndex(parent, f.localName, index);
+      if (at === null) {
+        failure = t('<{tag}> は <{parent}> の中に置けません', { tag: f.localName, parent: parent.localName });
+        return ABORT;
+      }
+      const el = importElement(doc, f);
+      renameDuplicateIds(el, used);
+      parent.insertBefore(el, parent.children[at] ?? null);
+      placed.push(el);
+      index = Array.prototype.indexOf.call(parent.children, el) + 1;
+    }
+    return placed.length === 1 ? pathOf(placed[0]!) : selectMany(placed.map((e) => pathOf(e)));
+  }, clips.length === 1 ? t('<{tag}> を貼り付け', { tag: first.tag }) : t('{n} 個の要素を貼り付け', { n: clips.length }));
+  if (failure) return refuse(failure);
+  return ok;
 }
 
 export function paste(source: Source = 'other'): boolean {
@@ -184,6 +229,20 @@ export function paste(source: Source = 'other'): boolean {
 
 export function duplicate(source: Source = 'other'): boolean {
   const store = app.store;
+  if (store && isMulti()) {
+    const paths = store.selections;
+    let failure: string | null = null;
+    const ok = runEdit(source, (doc) => {
+      const r = duplicateMany(doc, paths);
+      if ('error' in r) {
+        failure = r.error;
+        return ABORT;
+      }
+      return selectMany(r.paths);
+    }, t('{n} 個の要素を複製', { n: paths.length }));
+    if (failure) return refuse(failure);
+    return ok;
+  }
   const el = selectedTarget();
   if (!store || !el) return refuse(t('複製する要素を選択してください'));
   if (el === el.ownerDocument.documentElement) return refuse(t('customUI 全体は複製できません'));
@@ -231,14 +290,41 @@ function offerUndoToast(message: string): void {
   app.on('session', watch);
 }
 
+/** まとめて削除する（一度の編集）。 */
+function removeMany(paths: Path[], label: string, offerUndo: boolean, source: Source = 'other'): boolean {
+  const store = app.store;
+  if (!store) return false;
+  if (paths.some((p) => p.length === 0)) return refuse(t('customUI は削除できません'));
+  const ok = runEdit(source, (doc) => deleteMany(doc, paths), label);
+  if (ok && offerUndo) offerUndoToast(t('{label}しました', { label }));
+  return ok;
+}
+
 export function removeSelected(source: Source = 'other'): boolean {
+  const store = app.store;
+  if (store && isMulti()) {
+    const paths = store.selections;
+    return removeMany([...paths], t('{n} 個の要素を削除', { n: paths.length }), true, source);
+  }
   const el = selectedTarget();
   if (!el) return refuse(t('削除する要素を選択してください'));
   return removeElement(el, t('「{name}」を削除', { name: nameOf(el) }), true, source);
 }
 
-/** 兄弟の中で1つ前・後ろへ動かす。並び順の決まりで動かせなければ通知する。 */
+/** 兄弟の中で1つ前・後ろへ動かす。並び順の決まりで動かせなければ通知する。複数選択なら、まとめて動かす。 */
 export function moveSelected(delta: -1 | 1, source: Source = 'other'): boolean {
+  const store = app.store;
+  if (store && isMulti()) {
+    const paths = store.selections;
+    const reason = moveBlockReason(store.doc, paths, delta);
+    if (reason) return refuse(reason);
+    return runEdit(source, (doc) => {
+      const r = moveBlock(doc, paths, delta);
+      // 動かしても選んだ要素どうしの並びは変わらないので、主な選択は同じ順番のものにする
+      const i = paths.findIndex((p) => samePath(p, store.selection));
+      return 'error' in r ? ABORT : selectMany(r.paths, r.paths[i] ?? r.paths.at(-1));
+    }, delta < 0 ? t('{n} 個の要素を上へ移動', { n: paths.length }) : t('{n} 個の要素を下へ移動', { n: paths.length }));
+  }
   const el = selectedTarget();
   const parent = el?.parentElement;
   if (!el || !parent) return false;
@@ -258,6 +344,64 @@ export function moveSelected(delta: -1 | 1, source: Source = 'other'): boolean {
     p.insertBefore(target, ref);
     return pathOf(target);
   }, delta < 0 ? t('「{name}」を上へ移動', { name: nameOf(el) }) : t('「{name}」を下へ移動', { name: nameOf(el) }));
+}
+
+/**
+ * 選択中の要素（複数ならまとめて）を上・下へ動かせないときの理由。動かせるなら null。
+ * メニューで、無効の理由を添えるために使う。
+ */
+export function moveDisabledReason(delta: -1 | 1): string | null {
+  const store = app.store;
+  if (!store?.selection) return t('動かす要素を選択してください');
+  if (store.isMulti) return moveBlockReason(store.doc, store.selections, delta);
+  const el = store.selectedElement;
+  return el && canMove(el, delta) ? null : delta < 0 ? t('これより上には動かせません') : t('これより下には動かせません');
+}
+
+/** 選んだコントロールを新しいグループに移せないときの理由（移せるなら null）。 */
+export function newGroupDisabledReason(): string | null {
+  const store = app.store;
+  if (!store?.selection) return t('動かす要素を選択してください');
+  return newGroupReason(store.doc, store.selections);
+}
+
+/**
+ * 選んだコントロールを、新しいグループに移す（仕様書 §19）。新しいグループは、選んだ最後の要素のグループの後ろに作る。
+ * 移したあとは、移したコントロールを選んだままにする（続けて大きさなどを変えられるように）。
+ */
+export function moveToNewGroupSelected(source: Source = 'other'): boolean {
+  const store = app.store;
+  if (!store) return false;
+  const reason = newGroupDisabledReason();
+  if (reason) return refuse(reason);
+  const paths = store.selections;
+  return runEdit(source, (doc) => {
+    const r = moveToNewGroup(doc, paths);
+    return 'error' in r ? ABORT : selectMany(r.paths);
+  }, t('{n} 個の要素を新しいグループに移動', { n: paths.length }));
+}
+
+/** 大きさを一括で変えられる要素（size を持つもの）。 */
+export function sizeTargets(): Element[] {
+  return supporting(selectedTargets(), 'size');
+}
+
+/**
+ * 選んだ要素の size をまとめて変える（右クリックメニューの「大きく / 小さく」）。size を持たない要素は飛ばす。
+ * 一度の編集で行い、「6 個の size を large に変更」の名前で履歴に残す。
+ */
+export function setSizeSelected(size: 'large' | 'normal', source: Source = 'other'): boolean {
+  const store = app.store;
+  const def = attributes.get('size');
+  const targets = sizeTargets();
+  if (!store || !def) return false;
+  if (targets.length === 0) return refuse(t('大きさ（size）を持つ要素を選択してください'));
+  const paths = targets.map((e) => pathOf(e));
+  return runEdit(source, (doc) => {
+    const els = paths.map((p) => elementAt(doc, p)).filter((e): e is Element => e !== null);
+    applyBulkAttr(els, def, size);
+    return undefined;
+  }, bulkLabel(paths.length, 'size', size));
 }
 
 /** 動かせるか（メニューの有効・無効用）。 */
@@ -340,11 +484,19 @@ export function isTextTarget(target: EventTarget | null): boolean {
  * キャンバス・ツリーで Ctrl+X / C / V / D と Delete を処理する。処理したら true（呼び出し側で既定の動作を止める）。
  * アプリ全体のショートカット（main.ts）と二重に動かないよう、処理したキーは伝播も止める。
  */
-export function handleEditKey(e: KeyboardEvent, source: Source): boolean {
+export function handleEditKey(e: KeyboardEvent, source: Source, visible?: () => readonly Path[]): boolean {
   if (e.isComposing || isTextTarget(e.target) || !app.store) return false;
   const ctrl = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
   let command: EditCommand | null = null;
+  if (ctrl && !e.shiftKey && !e.altKey && k === 'a') {
+    // Ctrl+A：主な選択の兄弟をすべて選ぶ（仕様書 §19）。入力欄の中では文字の全選択に任せる（isTextTarget で外している）
+    e.preventDefault();
+    e.stopPropagation();
+    // visible はいま見えている要素（ツリーの行・キャンバスに描かれた要素）。隠れた兄弟は選ばない（仕様書 §19.1）
+    app.store.selectAll(source, visible?.());
+    return true;
+  }
   if (ctrl && !e.shiftKey && !e.altKey) {
     if (k === 'x') command = 'cut';
     else if (k === 'c') command = 'copy';

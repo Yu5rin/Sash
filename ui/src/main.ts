@@ -29,7 +29,7 @@ import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
 import { flushPendingEdits, mountInspector } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
-import { focusTreeFilter, mountTree } from './views/tree';
+import { filteredTreePaths, focusTreeFilter, mountTree } from './views/tree';
 import { openIdReplaceDialog } from './idReplaceDialog';
 import { openSample } from './sample';
 import { mountXmlEditor, revealInXml } from './views/xmlEditor';
@@ -50,7 +50,7 @@ import { openDistributionCheck } from './dialogs/distributionDialog';
 import { openHistoryDialog } from './dialogs/historyDialog';
 import type { CheckItem } from './distributionCheck';
 import { controlRows, toCsv, toTsv } from './controlList';
-import { copyText } from './clipboard';
+import { clipCount, copyText, moveDisabledReason, moveSelected, moveToNewGroupSelected, newGroupDisabledReason, setSizeSelected, sizeTargets } from './clipboard';
 import { canRevealInVbe, revealInVbe, runMacroDisabledReason, runMacroFor, runSelectedMacro } from './vbaReveal';
 import { callbacksAt } from './vba';
 
@@ -201,6 +201,11 @@ const has = () => app.session !== null;
 const hasSel = () => app.store?.selectedElement !== null && app.store?.selectedElement !== undefined;
 const idle = () => busyState() === null;
 
+/** 複数選択のときは、操作の名前に数を付ける（「削除（3 個）」。仕様書 §19）。 */
+function countTitle(base: string, n = app.store?.selections.length ?? 0): string {
+  return n > 1 ? t('{action}（{n} 個）', { action: base, n }) : base;
+}
+
 /** 元に戻す・やり直しの名前に、何が取り消されるかを付ける。 */
 function historyTitle(base: string, label: string | null | undefined): string {
   return label ? t('{action}：{label}', { action: base, label }) : base;
@@ -224,11 +229,20 @@ function commands(): AppCommand[] {
     { id: 'edit.undo', group: G.edit, title: historyTitle(t('元に戻す'), app.store?.undoLabel), shortcut: 'Ctrl+Z', keywords: 'undo', enabled: () => app.store?.canUndo === true, run: undo },
     { id: 'edit.redo', group: G.edit, title: historyTitle(t('やり直し'), app.store?.redoLabel), shortcut: 'Ctrl+Y', altKeys: ['Ctrl+Shift+Z'], keywords: 'redo', enabled: () => app.store?.canRedo === true, run: redo },
     { id: 'edit.history', group: G.edit, title: t('操作の履歴…'), keywords: 'history undo redo 履歴 元に戻す', enabled: () => !!app.store && (app.store.canUndo || app.store.canRedo), run: () => void openOnce('history', openHistoryDialog) },
-    { id: 'edit.cut', group: G.edit, title: t('切り取り'), shortcut: 'Ctrl+X', keywords: 'cut', enabled: hasSel, run: () => runEditCommand('cut') },
-    { id: 'edit.copy', group: G.edit, title: t('コピー'), shortcut: 'Ctrl+C', keywords: 'copy', enabled: hasSel, run: () => runEditCommand('copy') },
-    { id: 'edit.paste', group: G.edit, title: t('貼り付け'), shortcut: 'Ctrl+V', keywords: 'paste', enabled: has, run: () => runEditCommand('paste') },
-    { id: 'edit.duplicate', group: G.edit, title: t('複製'), shortcut: 'Ctrl+D', keywords: 'duplicate 選択中の要素を複製', enabled: hasSel, run: () => runEditCommand('duplicate') },
-    { id: 'edit.delete', group: G.edit, title: t('削除'), shortcut: 'Del', keywords: 'delete remove 選択中の要素を削除', enabled: hasSel, run: () => runEditCommand('delete') },
+    { id: 'edit.cut', group: G.edit, title: countTitle(t('切り取り')), shortcut: 'Ctrl+X', keywords: 'cut', enabled: hasSel, run: () => runEditCommand('cut') },
+    { id: 'edit.copy', group: G.edit, title: countTitle(t('コピー')), shortcut: 'Ctrl+C', keywords: 'copy', enabled: hasSel, run: () => runEditCommand('copy') },
+    { id: 'edit.paste', group: G.edit, title: countTitle(t('貼り付け'), clipCount()), shortcut: 'Ctrl+V', keywords: 'paste', enabled: has, run: () => runEditCommand('paste') },
+    { id: 'edit.duplicate', group: G.edit, title: countTitle(t('複製')), shortcut: 'Ctrl+D', keywords: 'duplicate 選択中の要素を複製', enabled: hasSel, run: () => runEditCommand('duplicate') },
+    { id: 'edit.delete', group: G.edit, title: countTitle(t('削除')), shortcut: 'Del', keywords: 'delete remove 選択中の要素を削除', enabled: hasSel, run: () => runEditCommand('delete') },
+    // 複数選択とまとめての操作（仕様書 §19）。Ctrl+A は入力欄の外で受ける（入力欄の中は文字の全選択）
+    // ツリーを絞り込んでいるときは、見えている行の兄弟だけを選ぶ（隠れた要素を続けて消してしまわないように。仕様書 §19.1）
+    { id: 'edit.selectAll', group: G.edit, title: t('同じ階層をすべて選択'), shortcut: 'Ctrl+A', keywords: 'select all multi 複数選択 すべて選択', enabled: () => (app.store?.selection?.length ?? 0) > 0, run: () => app.store?.selectAll('other', filteredTreePaths() ?? undefined) },
+    { id: 'edit.clearMulti', group: G.edit, title: t('複数選択を解除'), keywords: 'deselect multi 複数選択 解除', enabled: () => app.store?.isMulti === true, run: () => app.store?.clearMulti('other') },
+    { id: 'edit.moveUp', group: G.edit, title: countTitle(t('上へ移動')), keywords: 'move up 並べ替え alt+up', enabled: () => has() && moveDisabledReason(-1) === null, run: () => moveSelected(-1, 'other') },
+    { id: 'edit.moveDown', group: G.edit, title: countTitle(t('下へ移動')), keywords: 'move down 並べ替え alt+down', enabled: () => has() && moveDisabledReason(1) === null, run: () => moveSelected(1, 'other') },
+    { id: 'edit.newGroup', group: G.edit, title: countTitle(t('新しいグループに移す')), keywords: 'new group split move グループを分ける 幅', enabled: () => has() && newGroupDisabledReason() === null, run: () => moveToNewGroupSelected('other') },
+    { id: 'edit.sizeLarge', group: G.edit, title: countTitle(t('大きく（size=large）'), sizeTargets().length), keywords: 'size large 大きさ 一括', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('large', 'other') },
+    { id: 'edit.sizeNormal', group: G.edit, title: countTitle(t('小さく（size=normal）'), sizeTargets().length), keywords: 'size normal small 大きさ 一括 幅', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('normal', 'other') },
     { id: 'edit.format', group: G.edit, title: t('XMLを整形'), shortcut: 'Shift+Alt+F', keywords: 'format', enabled: () => !!app.store && app.store.syncError === null, run: () => app.store?.format() },
     { id: 'edit.palette', group: G.edit, title: t('コマンドパレット'), shortcut: 'Ctrl+K', keywords: 'command', inText: true, run: () => openCommandPalette(paletteCommands) },
 
@@ -425,6 +439,20 @@ const MENUS: MenuDef[] = [
       cmd('edit.paste'),
       cmd('edit.duplicate'),
       cmd('edit.delete'),
+      SEP,
+      cmd('edit.selectAll'),
+      cmd('edit.clearMulti'),
+      {
+        // まとめての操作。使えないときは理由をツールチップに出す（隠さずに無効で見せる）
+        label: t('並べ替えと大きさ'), enabled: has(), items: () => [
+          cmd('edit.moveUp', undefined, { hint: moveDisabledReason(-1) ?? undefined }),
+          cmd('edit.moveDown', undefined, { hint: moveDisabledReason(1) ?? undefined }),
+          cmd('edit.newGroup', undefined, { hint: newGroupDisabledReason() ?? undefined }),
+          SEP,
+          cmd('edit.sizeLarge', undefined, { hint: sizeTargets().length ? undefined : t('大きさ（size）を持つ要素を選択してください') }),
+          cmd('edit.sizeNormal', undefined, { hint: sizeTargets().length ? undefined : t('大きさ（size）を持つ要素を選択してください') }),
+        ],
+      },
       SEP,
       cmd('edit.format'),
       SEP,

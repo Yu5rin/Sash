@@ -3,8 +3,10 @@
 
 import { app } from '../app';
 import {
-  canDuplicateEl, canMove, childTags, copyId, hasClip, insertNew, moveSelected, runCommand, siblingTags,
+  canDuplicateEl, childTags, clipCount, copyId, hasClip, insertNew, moveDisabledReason, moveSelected, moveToNewGroupSelected, newGroupDisabledReason,
+  runCommand, setSizeSelected, siblingTags, sizeTargets,
 } from '../clipboard';
+import { duplicateMany, dryRun } from '../multiEdit';
 import { h } from '../dom';
 import { childElements, elementAt, pathOf, type Path } from '../model';
 import { titleOf } from '../schema';
@@ -173,6 +175,10 @@ export function openElementMenu(x: number, y: number, path: Path, source: Source
   const store = app.store;
   const el = store ? elementAt(store.doc, path) : null;
   if (!store || !el) return;
+  if (store.isMulti && store.isSelected(path)) {
+    openMultiMenu(x, y, source, restoreFocus);
+    return;
+  }
   const isRoot = el === store.doc.documentElement;
   const tagItems = (tags: string[], make: (tag: string) => void): MenuItem[] => tags.map((tag) => ({ label: `${titleOf(tag)}  <${tag}>`, run: () => make(tag) }));
   const parent = el.parentElement;
@@ -190,13 +196,63 @@ export function openElementMenu(x: number, y: number, path: Path, source: Source
     },
     { label: t('子を追加'), disabled: childTags(el).length === 0, submenu: () => tagItems(childTags(el), (tag) => insertNew(path, tag, null, source)) },
     'sep',
-    { label: t('上へ移動'), shortcut: 'Alt+↑', disabled: !canMove(el, -1), run: () => moveSelected(-1, source) },
-    { label: t('下へ移動'), shortcut: 'Alt+↓', disabled: !canMove(el, 1), run: () => moveSelected(1, source) },
+    { label: t('上へ移動'), shortcut: 'Alt+↑', disabled: moveDisabledReason(-1) !== null, run: () => moveSelected(-1, source) },
+    { label: t('下へ移動'), shortcut: 'Alt+↓', disabled: moveDisabledReason(1) !== null, run: () => moveSelected(1, source) },
+    ...layoutItems(source),
     'sep',
     { label: t('XML で表示'), disabled: !hooks.revealInXml, run: () => hooks.revealInXml?.(path) },
     { label: t('ID をコピー'), disabled: !(el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.getAttribute('idQ')), run: () => copyId() },
   ];
   const extra = hooks.extraItems?.(path, el) ?? [];
   if (extra.length) entries.push('sep', ...extra);
+  openMenu(x, y, entries, { restoreFocus });
+}
+
+/**
+ * 幅を詰めるときに使う操作（仕様書 §19）：新しいグループに移す・大きさをまとめて変える。
+ * 新しいグループに移すは、リボンのグループの中のコントロールのときだけ出す（ほかの要素では意味がないため）。
+ */
+function layoutItems(source: Source): MenuItem[] {
+  const items: MenuItem[] = [];
+  const groupReason = newGroupDisabledReason();
+  const store = app.store;
+  const inGroups = store?.selectedElements.every((e) => e.parentElement?.localName === 'group' && e.parentElement.parentElement?.localName === 'tab') ?? false;
+  if (inGroups) items.push({ label: t('新しいグループに移す'), disabled: groupReason !== null, reason: groupReason ?? undefined, run: () => moveToNewGroupSelected(source) });
+  const sized = sizeTargets();
+  if (sized.length > 0) {
+    const n = store?.isMulti ? t('（{n} 個）', { n: sized.length }) : '';
+    items.push(
+      { label: t('大きく（size=large）') + n, run: () => setSizeSelected('large', source) },
+      { label: t('小さく（size=normal）') + n, run: () => setSizeSelected('normal', source) },
+    );
+  }
+  return items;
+}
+
+/**
+ * 複数選択のときの右クリックメニュー。数を名前に出し、使えない操作は理由を添えて無効にする。
+ * 前に挿入・子を追加・ID をコピーなど、1つの要素を前提にした操作は出さない。
+ */
+function openMultiMenu(x: number, y: number, source: Source, restoreFocus?: HTMLElement | null): void {
+  const store = app.store;
+  if (!store) return;
+  const n = store.selections.length;
+  const dupReason = dryRun(store.doc, (copy) => duplicateMany(copy, store.selections));
+  const up = moveDisabledReason(-1);
+  const down = moveDisabledReason(1);
+  const clips = clipCount();
+  const entries: Entry[] = [
+    { label: t('{n} 個を切り取り', { n }), shortcut: 'Ctrl+X', run: () => runCommand('cut', source) },
+    { label: t('{n} 個をコピー', { n }), shortcut: 'Ctrl+C', run: () => runCommand('copy', source) },
+    { label: clips > 1 ? t('{n} 個を貼り付け', { n: clips }) : t('貼り付け'), shortcut: 'Ctrl+V', disabled: !hasClip(), run: () => runCommand('paste', source) },
+    { label: t('{n} 個を複製', { n }), shortcut: 'Ctrl+D', disabled: dupReason !== null, reason: dupReason ?? undefined, run: () => runCommand('duplicate', source) },
+    { label: t('{n} 個を削除', { n }), shortcut: 'Delete', run: () => runCommand('delete', source) },
+    'sep',
+    { label: t('上へ移動'), shortcut: 'Alt+↑', disabled: up !== null, reason: up ?? undefined, run: () => moveSelected(-1, source) },
+    { label: t('下へ移動'), shortcut: 'Alt+↓', disabled: down !== null, reason: down ?? undefined, run: () => moveSelected(1, source) },
+    ...layoutItems(source),
+    'sep',
+    { label: t('選択を解除（主な選択だけ残す）'), shortcut: 'Esc', run: () => store.clearMulti(source) },
+  ];
   openMenu(x, y, entries, { restoreFocus });
 }

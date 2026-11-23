@@ -181,9 +181,22 @@ function revealSelection(moveCursor = false): void {
   const start = model.getPositionAt(span.start);
   const end = model.getPositionAt(span.startTagEnd);
   // 範囲は選択せず、開始タグに飾りを付けて示す。入力中の人のカーソルは動かさない
+  // 複数選択のほかの要素は、開始タグに薄い飾りだけを付ける（カーソルとスクロールは主な選択に合わせる。仕様書 §19）
+  const all = allElements(store.doc);
+  const index = new Map(all.map((el, i) => [pathOf(el).join('.'), i]));
+  const secondary = store.selections
+    .filter((p) => p.join('.') !== store.selection!.join('.'))
+    .map((p) => currentSpans()[index.get(p.join('.')) ?? -1])
+    .filter((x): x is ElementSpan => x !== undefined)
+    .map((sp) => {
+      const a = model.getPositionAt(sp.start);
+      const b = model.getPositionAt(sp.startTagEnd);
+      return { range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column), options: { className: 'sash-secondary-tag', isWholeLine: false, overviewRuler: { color: '#2b7de940', position: monaco.editor.OverviewRulerLane.Center } } };
+    });
   selectionDecorations?.set([
     { range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column), options: { className: 'sash-selected-tag', isWholeLine: false, overviewRuler: { color: '#2b7de980', position: monaco.editor.OverviewRulerLane.Center } } },
     { range: new monaco.Range(start.lineNumber, 1, start.lineNumber, 1), options: { isWholeLine: true, className: 'sash-selected-line' } },
+    ...secondary,
   ]);
   applying = true;
   if (moveCursor || !editor.hasTextFocus()) editor.setPosition(start);

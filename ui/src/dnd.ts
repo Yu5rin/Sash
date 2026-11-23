@@ -2,16 +2,29 @@
 // dragover の間は dataTransfer の中身を読めないため、運んでいるものをここに持つ。
 
 import { app } from './app';
-import { allowedInsertIndex, createElement, elementAt, ensureBackstage, ensureContextMenus, ensureTabs, insertAt, moveElement, pathOf, type Path } from './model';
+import { allowedInsertIndex, createElement, elementAt, ensureBackstage, ensureContextMenus, ensureTabs, insertAt, moveElement, pathOf, samePath, type Path } from './model';
 import { canContainEl, titleOf } from './schema';
-import { ABORT } from './store';
+import { ABORT, reportRefusal, selectMany } from './store';
+import { elementsAt, moveManyReason, moveManyTo } from './multiEdit';
 import { t } from './i18n';
 
-export type DragPayload = { kind: 'new'; tag: string } | { kind: 'move'; path: Path };
+/**
+ * 運んでいるもの。move の paths は、複数選択をまとめて運ぶときの全部（文書の順、path を含む。仕様書 §19）。
+ * paths がなければ path の1つだけを運ぶ。
+ */
+export type DragPayload = { kind: 'new'; tag: string } | { kind: 'move'; path: Path; paths?: Path[] };
 
 let current: DragPayload | null = null;
 
+/**
+ * ドラッグを始める。複数選択の中の要素をつかんだら、選んでいる要素をまとめて運ぶ。
+ * 選んでいない要素をつかんだら、その1つだけを運ぶ（エクスプローラーと同じ）。
+ */
 export function startDrag(e: DragEvent, payload: DragPayload): void {
+  const store = app.store;
+  if (payload.kind === 'move' && !payload.paths && store?.isMulti && store.isSelected(payload.path)) {
+    payload = { ...payload, paths: [...store.selections] };
+  }
   current = payload;
   e.dataTransfer?.setData('text/plain', payload.kind === 'new' ? payload.tag : 'sash-move');
   if (e.dataTransfer) e.dataTransfer.effectAllowed = payload.kind === 'new' ? 'copy' : 'move';
@@ -32,8 +45,32 @@ export function draggedTag(doc: Document): string | null {
   return elementAt(doc, current.path)?.localName ?? null;
 }
 
+/** まとめて運んでいる要素（1つだけなら null）。 */
+function movingMany(doc: Document): Element[] | null {
+  return current?.kind === 'move' && current.paths && current.paths.length > 1 ? elementsAt(doc, current.paths) : null;
+}
+
+/** 運んでいる数（ドロップ先の表示に使う）。 */
+export function draggedCount(): number {
+  return current?.kind === 'move' ? current.paths?.length ?? 1 : current ? 1 : 0;
+}
+
+/**
+ * parentPath の index 番目に、まとめて運んでいる要素を置けるか（並び順と個数まで確かめる）。
+ * 1つだけ運んでいるときは常に true（並び順は呼び出し側がこれまでどおり確かめる）。
+ */
+export function canDropManyAt(doc: Document, parentPath: Path, index: number): boolean {
+  if (current?.kind !== 'move' || !current.paths || current.paths.length < 2) return true;
+  return moveManyReason(doc, current.paths, parentPath, index) === null;
+}
+
 /** parent の index 番目に置けるか。 */
 export function canDropInto(doc: Document, parent: Element): boolean {
+  const many = movingMany(doc);
+  if (many) {
+    // まとめて運ぶときは、全部が入れられる親で、運ぶ要素の中（子孫）ではないときだけ
+    return many.every((m) => m !== parent && !m.contains(parent) && canContainEl(parent, m.localName));
+  }
   const tag = draggedTag(doc);
   if (!tag || !canContainEl(parent, tag)) return false;
   let moving: Element | null = null;
@@ -54,6 +91,10 @@ export function drop(parentPath: Path | null | 'contextMenus' | 'backstage', ind
   const payload = current;
   current = null;
   if (!store || !payload) return;
+  if (payload.kind === 'move' && payload.paths && payload.paths.length > 1) {
+    dropMany(payload.paths, payload.path, parentPath, index, source);
+    return;
+  }
   const tag = payload.kind === 'new' ? payload.tag : elementAt(store.doc, payload.path)?.localName ?? '';
   const label = payload.kind === 'new' ? t('{name}の追加', { name: titleOf(tag) }) : t('{name}の移動', { name: titleOf(tag) });
   store.edit(source, (doc) => {
@@ -77,4 +118,30 @@ export function drop(parentPath: Path | null | 'contextMenus' | 'backstage', ind
     if (!el || !moveElement(el, parent, index)) return ABORT;
     return pathOf(el);
   }, label);
+}
+
+/**
+ * まとめて運んだ要素を落とす。1つでも置けないものがあれば何も動かさず、理由を知らせる。
+ * 運んだ要素は選んだままにし、つかんでいた要素を主な選択にする。
+ */
+function dropMany(paths: Path[], grabbed: Path, parentPath: Path | null | 'contextMenus' | 'backstage', index: number, source: 'canvas' | 'tree'): void {
+  const store = app.store;
+  if (!store) return;
+  let failure: string | null = null;
+  const grabbedIndex = paths.findIndex((p) => samePath(p, grabbed));
+  store.edit(source, (doc) => {
+    const parent =
+      parentPath === null ? ensureTabs(doc)
+      : parentPath === 'contextMenus' ? ensureContextMenus(doc)
+      : parentPath === 'backstage' ? ensureBackstage(doc)
+      : elementAt(doc, parentPath);
+    if (!parent) return ABORT;
+    const r = moveManyTo(doc, paths, parent, index);
+    if ('error' in r) {
+      failure = r.error;
+      return ABORT;
+    }
+    return selectMany(r.paths, r.paths[grabbedIndex] ?? r.paths.at(-1));
+  }, t('{n} 個の要素を移動', { n: paths.length }));
+  if (failure) reportRefusal(failure);
 }

@@ -357,6 +357,9 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .cv-fit button { height: var(--ctl-h-sm); min-height: 0; padding: 0 var(--sp-2); font-size: var(--fs-xs); white-space: nowrap; }
 /* 状態の文字は残りの幅に入るだけ出し、あふれたら「…」で切る（全文は title） */
 .cv-header > .cv-status { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--fs-xs); color: var(--text-subtle); }
+/* 「ペインを畳む」も、狭いときは状態の文字と一緒に縮める（右の「表示」「?」を押し出さないため。全文は title） */
+.cv-header > .cv-lowzoom { display: block; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.cv-header > .cv-lowzoom[hidden] { display: none; }
 .cv-status.warning .cv-fitinfo { color: var(--warning-text); font-weight: 600; }
 .cv-link { min-height: 0; height: auto; padding: 0; border: none; background: transparent; color: var(--accent); font-size: var(--fs-xs); text-decoration: underline; cursor: pointer; white-space: nowrap; }
 .cv-link[hidden] { display: none; }
@@ -380,6 +383,24 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
   .cv-width { gap: 4px; }
   .cv-modes button { padding: 0 6px; }
   .cv-num { width: 4em; }
+}
+/* さらに狭いとき（1100px の画面で左右のペインを開いたまま、など）は、選択肢の幅を中身に合わせて詰め、
+ * 「表示」と「?」が右端からはみ出さないようにする。field-sizing に対応しないブラウザでは、ただ詰まらないだけ */
+@container cv-header (max-width: 640px) {
+  /* コンテナークエリでは見出し（コンテナー自身）の gap を変えられないので、子の左の余白で間を 4px に詰める */
+  .cv-header > * + * { margin-left: -4px; }
+  .cv-header > .cv-width { gap: 3px; }
+  .cv-select { field-sizing: content; }
+  .cv-modes button, .cv-fit button { padding: 0 4px; }
+  .cv-header button.small.cv-viewbtn { padding: 0 6px; }
+  /* 「ペインを畳む」は、ここまで狭いと文字の切れ端しか出せないので隠す（同じことはメニューの
+   * 表示 ＞ 左右のペインを一時的に畳む と、コマンドパレットでできる） */
+  .cv-header > .cv-lowzoom { display: none; }
+}
+/* それでも入りきらないときの最後の手段：幅の欄の右側を切る（「表示」「?」と選択の数は切らない）。
+ * 縮む度合いをごく小さくして、先に「ペインを畳む」が縮み切ってから切れるようにする */
+@container cv-header (max-width: 520px) {
+  .cv-header > .cv-width { flex-shrink: 0.01; min-width: 0; overflow: hidden; }
 }
 /* 幅の欄は 4 桁しか入れないので、上下の矢印は出さずに幅を詰める */
 .cv-num::-webkit-inner-spin-button, .cv-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -500,3 +521,28 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .cv-msg { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2); border-radius: var(--radius-sm); font-size: var(--fs-xs); border: 1px solid var(--border); background: var(--surface); }
 .cv-msg.warning { border-color: var(--warning-border, var(--warning)); background: var(--warning-bg, var(--surface)); }
 .cv-msg.info { border-color: var(--border-strong); }
+
+/* ---- 複数選択（仕様書 §19） ----
+ * 主な選択は .selected（実線の枠、フォーカスがあれば --focus の色）。そのほかの選択は破線の枠にして、
+ * どれがインスペクタ・XML の強調の対象（主な選択）かを見分けられるようにする。色は選択のトークンだけを使う */
+.multi-selected { outline: 2px dashed var(--sel-border); outline-offset: -2px; background: var(--sel-bg); }
+.rb-menu-item.multi-selected { outline-width: 1px; outline-offset: -1px; }
+.rb-sep.multi-selected { outline-offset: 2px; }
+.tree-row.multi-selected { background: var(--sel-bg); box-shadow: inset 2px 0 0 var(--sel-border); outline: none; }
+.tree-row.multi-selected .tree-label { font-style: normal; }
+/* 見出しのほかの欄と同じ高さにする（ボタンの既定の min-height のままだと、見出しが 2px 高くなるため）。縮めない */
+.cv-header > .cv-multi { flex-shrink: 0; }
+.cv-multi {
+  display: inline-flex; align-items: center; box-sizing: border-box; min-height: 0; height: var(--ctl-h-sm); line-height: 1;
+  padding: 0 var(--sp-2); font-size: var(--fs-xs); white-space: nowrap;
+  color: var(--text); background: var(--sel-bg); border: 1px solid var(--sel-border); border-radius: var(--radius-sm); cursor: pointer;
+}
+/* 読み上げだけに使う要素（選択の数の知らせなど）。画面には出さない */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.cv-multi:hover { background: var(--hover-bg); }
+.cv-multi:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.insp-multi-note { padding: var(--sp-2) var(--sp-3); font-size: var(--fs-xs); color: var(--text-subtle); }
+.insp-mixed::placeholder { font-style: italic; }
+.insp-mixed-tag { font-size: var(--fs-xs); color: var(--text-subtle); font-style: italic; }
+.insp-bulk-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); }
+.monaco-editor .sash-secondary-tag { background: var(--sel-bg); border-bottom: 1px dashed var(--sel-border); }
