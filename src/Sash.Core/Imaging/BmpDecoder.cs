@@ -22,7 +22,9 @@ public sealed record BmpImage(int Width, int Height, int BitCount, int Compressi
 /// BMP（BITMAPFILEHEADER + DIB）を BGRA にする最小限のデコーダー。
 /// Excel の GetImageMso が返す画像は、Excel が別のプロセスで動いていると HBITMAP を直接読めない（GDI のハンドルは
 /// プロセスごとのもの）。そのときは IPicture.SaveAsFile や IPersistStream.Save で BMP のバイト列として受け取るので、
-/// それを読むために使う。System.Drawing に頼らないのは、どの OS でもテストできるようにするため。
+/// それを読むために使っていた。System.Drawing に頼らないのは、どの OS でもテストできるようにするため。
+/// いまの取り込みは Excel の中（VBA）で画素を読ませる（仕様書 §17.7、<see cref="Excel.ImageMsoVbaExport"/>）ので、
+/// 取り込みからは使っていない。BMP を受け取る方法に戻すときのために、テストとともに残す。
 /// </summary>
 public static class BmpDecoder
 {

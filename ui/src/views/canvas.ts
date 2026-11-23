@@ -69,6 +69,12 @@ let popupObserver: ResizeObserver | null = null;
 let layoutObserver: MutationObserver | null = null;
 /** 直前の描画で選んでいた要素。選択が変わったときだけ、ポップアップの中の選択肢を見える位置まで送る。 */
 let lastPopupSelection: string | null = null;
+/**
+ * 外を押して閉じたメニューのポップアップ（メニュー要素のパスを . でつないだもの）。ポップアップは「メニューか
+ * その中身が選ばれている間は開く」作りなので、選んだままほかの場所を押しても開いたままだった。外を押したら
+ * 閉じたことを覚えておき、選択が変わるか、開き口をもう一度押したら忘れる。
+ */
+let dismissedPopup: string | null = null;
 
 // ---- 幅のプレビュー（仕様書 §5.2「幅のプレビュー」） ----
 
@@ -179,6 +185,27 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   host.setAttribute('role', 'region');
   host.setAttribute('aria-label', tr('キャンバス'));
   const render = () => renderCanvas(host);
+  // ポップアップの外（開き口も除く）を押したら閉じる。Excel のドロップダウンと同じく、ほかの場所を押せば消えるように
+  document.addEventListener('pointerdown', (e) => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    // 閉じたメニューの開き口をもう一度押したら、選択が変わらなくても開き直す
+    if (dismissedPopup !== null) {
+      const node = target.closest<HTMLElement>('[data-sel][data-path]');
+      if (node && host.contains(node) && node.dataset['path'] === dismissedPopup) {
+        dismissedPopup = null;
+        renderCanvas(host);
+      }
+      return;
+    }
+    const popups = Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'));
+    if (popups.length === 0) return;
+    if (popups.some((p) => p.contains(target) || (p.parentElement?.contains(target) ?? false))) return;
+    // いちばん外側のメニューを閉じれば、中の入れ子のポップアップも一緒に消える
+    const outer = popups.find((p) => !p.parentElement?.closest('.rb-menu-popup')) ?? popups[0]!;
+    dismissedPopup = outer.dataset['container'] ?? null;
+    if (dismissedPopup !== null) renderCanvas(host);
+  }, true);
   // スクロールや大きさの変更でメニューの開き口が動いたら、ポップアップも付いていかせる。
   // スクロールするのはキャンバスの枠（.canvas-pane）なので、host ではなくその枠で捕まえる。
   // ポップアップ自身のスクロールは無視する（置き直すと高さを測り直す間に scrollTop が 0 に戻り、長いメニューを下まで送れないため）
@@ -236,6 +263,7 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     const store = app.store;
     if (!c || !store) return;
     if (c.kinds.has('selection')) {
+      dismissedPopup = null;
       followSelection(c.source === 'canvas');
       if (c.source !== 'canvas') scrollToSelection = true;
     }
@@ -1769,6 +1797,7 @@ function menuPopup(el: Element): HTMLElement | null {
   const sel = app.store?.selection;
   const path = pathOf(el);
   if (!sel || !(samePath(sel, path) || isAncestorPath(path, sel))) return null;
+  if (dismissedPopup !== null && dismissedPopup === path.join('.')) return null;
   const items: HTMLElement[] = [];
   const walk = (parent: Element, depth: number) => {
     for (const c of childElements(parent)) {

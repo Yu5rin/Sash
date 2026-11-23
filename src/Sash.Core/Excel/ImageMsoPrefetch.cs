@@ -304,6 +304,7 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
 
             if (gaveUp)
             {
+                // 取り出し方そのものが動いていない。理由（VBA の Err.Number など）は取り出し口が最初の 1 回だけ app.log に書いている
                 failure = L("Excel のアイコンを画像に変換できませんでした。詳しい理由は %AppData%\\Sash\\logs\\app.log に記録しました。",
                     "Could not convert Excel's icons to images. The details were written to %AppData%\\Sash\\logs\\app.log.");
                 log?.Invoke($"imageMso の取り込みを打ち切り: {GiveUpAfter} 件以上続けて画像にできなかった");
@@ -319,10 +320,11 @@ public sealed class ImageMsoPrefetch(ImageMsoCache cache, Action<string>? log = 
             var primary = sizes.Contains(ImageMsoCache.PrimarySize) ? ImageMsoCache.PrimarySize : sizes[0];
             cache.WriteManifest(new ImageMsoManifest(version, sizes, cache.ImageCount(primary), cache.MissingCount(primary), names.Count, DateTimeOffset.Now));
             cache.ClearFailure();
+            // 実機で結果を確かめられるよう、失敗がなくても集計を残す
+            log?.Invoke($"imageMso の取り込みを完了（今回 {found} 件を画像にした、画像にできなかったもの {failedCount} 件、キャッシュの画像 {cache.ImageCount(primary)} 件・存在しない名前 {cache.MissingCount(primary)} 件）");
             if (failedCount > 0)
             {
                 message = L($"{failedCount} 件は画像にできませんでした。必要になったときに取り直します。", $"{failedCount} icons could not be converted. They will be retried when needed.");
-                log?.Invoke($"imageMso の取り込みを完了（画像にできなかったもの {failedCount} 件）");
             }
         }
         catch (OperationCanceledException)

@@ -36,8 +36,11 @@ public sealed record ImageMsoFailureRecord(string? ExcelVersion, DateTimeOffset 
     /// いまの取り出し方の版。取り出し方を直したら上げる。古い取り出し方で失敗した記録は当てはめず、もう一度自動で試す
     /// （直したのに「前に失敗したから」と自動で始めないままになるのを防ぐ）。
     /// 2：作業用のブックを開き、GetImageMso が使えるまで待ってから取り込む（ブックのない Excel が E_UNEXPECTED を返したため）。
+    /// 3：Sash から（別のプロセスから）GetImageMso を呼ぶのをやめ、作業用のブックに一時的な VBA モジュールを入れて
+    /// Excel の中で取り出す（ブックを開いても、利用者の Excel でも、別のプロセスからは E_UNEXPECTED が返ったため）。
+    /// 2 までの失敗は別のプロセスから呼んだためのものなので、当てはめずにもう一度自動で試す。
     /// </summary>
-    public const int CurrentMethod = 2;
+    public const int CurrentMethod = 3;
 }
 
 /// <summary>キャッシュを引いた結果。Found は見つかった画像（存在しない名前は null）、Misses はキャッシュにない名前。</summary>
