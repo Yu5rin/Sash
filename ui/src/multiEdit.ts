@@ -34,18 +34,20 @@ function nameOf(el: Element): string {
   return el.getAttribute('label') ?? el.getAttribute('id') ?? el.getAttribute('idMso') ?? titleOf(el.localName);
 }
 
+/** 親の子要素のうち、並び順と個数の決まりに合わない要素（並びの順）。 */
+export function orderViolations(parent: Element): Element[] {
+  const kids = Array.from(parent.children);
+  return kids.filter((c, i) => !canContainEl(parent, c.localName) || allowedInsertIndex(parent, c.localName, i, c) !== i);
+}
+
 /**
  * 親の子要素の並びが、並び順と個数の決まりに合っているか。合わなければ、合わない要素を返す。
  * 移動・複製のあとに確かめる（1つずつ置き場所を計算するより、置いてから確かめるほうが取りこぼしがないため）。
+ * existing には、操作の前からすでに合っていなかった要素（orderViolations）を渡す。それらは数えない
+ * （知らない要素や、位置のずれたダイアログ起動ツールがもともとある親で、関係のない操作まで断らないため）。
  */
-export function orderViolation(parent: Element): Element | null {
-  const kids = Array.from(parent.children);
-  for (let i = 0; i < kids.length; i++) {
-    const c = kids[i]!;
-    if (!canContainEl(parent, c.localName)) return c;
-    if (allowedInsertIndex(parent, c.localName, i, c) !== i) return c;
-  }
-  return null;
+export function orderViolation(parent: Element, existing?: ReadonlySet<Element>): Element | null {
+  return orderViolations(parent).find((c) => !existing?.has(c)) ?? null;
 }
 
 function violationMessage(parent: Element, el: Element): string {
@@ -92,7 +94,9 @@ export function deleteMany(doc: Document, paths: readonly Path[]): Path | null {
 /**
  * まとめて複製する。親ごとに、複製したものを**その親の中で選んだ要素の最後の後ろ**に、元の順で並べる
  * （A B C → A B C A' B' C'）。1つずつ自分の後ろに置く（A A' B B' C C'）と、複製した組がばらばらになり、
- * そのまま別の場所へ動かしにくいため。id は貼り付けと同じく番号を進めて振り直す。
+ * そのまま別の場所へ動かしにくいため。ただし並び順の決まりのある親（dropDown の item と button など）では、
+ * 1つずつ allowedInsertIndex で置ける位置に収める（item を button の後ろに置くと読み込めないため。
+ * まとめて置ける位置なら、収めても位置は変わらない）。id は貼り付けと同じく番号を進めて振り直す。
  */
 export function duplicateMany(doc: Document, paths: readonly Path[]): MultiResult {
   const els = elementsAt(doc, paths);
@@ -108,14 +112,19 @@ export function duplicateMany(doc: Document, paths: readonly Path[]): MultiResul
   }
   const copies: Element[] = [];
   for (const [parent, list] of byParent) {
-    let ref: Element | null = list.at(-1)!.nextElementSibling;
+    const existing = new Set(orderViolations(parent));
+    // 置きたい位置の目印は動かさない（収めた位置が目印より前になっても、続く複製は目印の前＝まとまりの後ろに置くため）
+    const ref: Element | null = list.at(-1)!.nextElementSibling;
     for (const e of list) {
       const c = e.cloneNode(true) as Element;
       renameDuplicateIds(c, used);
-      parent.insertBefore(c, ref);
+      const want = ref ? Array.prototype.indexOf.call(parent.children, ref) as number : parent.children.length;
+      const at = allowedInsertIndex(parent, c.localName, want);
+      if (at === null) return { error: t('<{parent}> の中に {name} はこれ以上置けません', { parent: parent.localName, name: titleOf(c.localName) }) };
+      insertAt(parent, c, at);
       copies.push(c);
     }
-    const bad = orderViolation(parent);
+    const bad = orderViolation(parent, existing);
     if (bad) return { error: violationMessage(parent, bad) };
   }
   return { paths: copies.map((c) => pathOf(c)) };
@@ -146,6 +155,7 @@ export function moveBlock(doc: Document, paths: readonly Path[], delta: -1 | 1):
   const els = elementsAt(doc, paths);
   const parent = commonParent(els);
   if (!parent || els.length === 0) return { error: t('親の違う要素はまとめて上下に動かせません') };
+  const existing = new Set(orderViolations(parent));
   const set = new Set(els);
   const order = delta < 0 ? els : [...els].reverse();
   for (const e of order) {
@@ -159,7 +169,7 @@ export function moveBlock(doc: Document, paths: readonly Path[], delta: -1 | 1):
       if (!set.has(next)) parent.insertBefore(e, next.nextElementSibling);
     }
   }
-  const bad = orderViolation(parent);
+  const bad = orderViolation(parent, existing);
   if (bad) return { error: violationMessage(parent, bad) };
   return { paths: els.map((e) => pathOf(e)) };
 }
@@ -179,6 +189,8 @@ export function moveManyTo(doc: Document, paths: readonly Path[], parent: Elemen
     if (e === parent || e.contains(parent)) return { error: t('動かす要素の中には動かせません') };
     if (!canContainEl(parent, e.localName)) return { error: t('<{parent}> の中に {name} は置けません', { parent: parent.localName, name: titleOf(e.localName) }) };
   }
+  // 動かす要素は、もとの位置で合っていなかったとしても、移した先で合っていなければ断る（existing から外す）
+  const existing = new Set(orderViolations(parent).filter((c) => !els.includes(c)));
   // まだ置いていない要素。置く位置の目印（ref）が、これから動かす要素にならないようにする
   const pending = new Set(els);
   let ref: Element | null = parent.children[index] ?? null;
@@ -193,7 +205,7 @@ export function moveManyTo(doc: Document, paths: readonly Path[], parent: Elemen
     ref = e.nextElementSibling;
     while (ref && pending.has(ref)) ref = ref.nextElementSibling;
   }
-  const bad = orderViolation(parent);
+  const bad = orderViolation(parent, existing);
   if (bad) return { error: violationMessage(parent, bad) };
   return { paths: els.map((e) => pathOf(e)) };
 }

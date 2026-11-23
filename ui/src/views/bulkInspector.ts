@@ -3,6 +3,7 @@
 // 値がそろっていればその値を、違えば「（複数の値）」を出す。id は要素ごとに違うべきなので出さない。
 
 import { app } from '../app';
+import { attrValueError } from '../attrValidate';
 import { applyBulkAttr, bulkLabel, bulkValue, commonAttrDefs, kindSummary, type BulkValue } from '../bulkEdit';
 import {
   moveToNewGroupSelected, newGroupDisabledReason, runEdit, setSizeSelected, sizeTargets,
@@ -52,23 +53,32 @@ function textEditor(d: AttrDef, v: BulkValue): HTMLElement {
     dataset: { attr: d.name, fkey: `bulk:${d.name}:text`, orig: value },
   });
   const error = h('div', { class: 'field-error', role: 'alert', hidden: true });
+  // 単独のインスペクタと同じ決まりで確かめる（コールバック名・整数・keytip の長さ。attrValidate.ts）。
+  // まとめて変更だけ確かめないと、「1 bad name!」のような値が選んだ要素すべてに入ってしまうため
+  const check = (): string | null => {
+    const err = attrValueError(d, input.value);
+    input.classList.toggle('invalid', err !== null);
+    input.setAttribute('aria-invalid', String(err !== null));
+    error.hidden = err === null;
+    error.textContent = err ?? '';
+    return err;
+  };
   const apply = () => {
     const next = input.value.trim();
+    if (check() !== null) return;
     if (next === (input.dataset['orig'] ?? '')) return;
     // 値が違う欄を空のまま離れたときは、何も変えない（「消す」は横のボタンで行う。うっかり全部を消さないように）
     if (v.mixed && next === '') return;
-    if (d.kind === 'int' && next && !/^\d+$/.test(next)) {
-      error.hidden = false;
-      error.textContent = t('0 以上の整数で入力してください');
-      return;
-    }
-    error.hidden = true;
     input.dataset['orig'] = next;
     if (!applyAll(d, next || null)) {
       input.dataset['orig'] = value;
       input.value = value;
     }
   };
+  input.addEventListener('input', () => {
+    // 入力中は確定せず、問題が直ったかだけを先に知らせる（単独のインスペクタと同じ）
+    if (input.classList.contains('invalid')) check();
+  });
   input.addEventListener('change', apply);
   input.addEventListener('keydown', (e) => {
     // 日本語入力の変換中の Enter・Esc は変換のためのもの
@@ -80,6 +90,7 @@ function textEditor(d: AttrDef, v: BulkValue): HTMLElement {
       e.preventDefault();
       e.stopPropagation();
       input.value = input.dataset['orig'] ?? '';
+      check();
     }
   });
   const anySet = v.mixed ? v.values.some((x) => x !== '') : v.value !== '';

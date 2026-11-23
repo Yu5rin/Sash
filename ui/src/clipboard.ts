@@ -484,7 +484,7 @@ export function isTextTarget(target: EventTarget | null): boolean {
  * キャンバス・ツリーで Ctrl+X / C / V / D と Delete を処理する。処理したら true（呼び出し側で既定の動作を止める）。
  * アプリ全体のショートカット（main.ts）と二重に動かないよう、処理したキーは伝播も止める。
  */
-export function handleEditKey(e: KeyboardEvent, source: Source): boolean {
+export function handleEditKey(e: KeyboardEvent, source: Source, visible?: () => readonly Path[]): boolean {
   if (e.isComposing || isTextTarget(e.target) || !app.store) return false;
   const ctrl = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
@@ -493,7 +493,8 @@ export function handleEditKey(e: KeyboardEvent, source: Source): boolean {
     // Ctrl+A：主な選択の兄弟をすべて選ぶ（仕様書 §19）。入力欄の中では文字の全選択に任せる（isTextTarget で外している）
     e.preventDefault();
     e.stopPropagation();
-    app.store.selectAll(source);
+    // visible はいま見えている要素（ツリーの行・キャンバスに描かれた要素）。隠れた兄弟は選ばない（仕様書 §19.1）
+    app.store.selectAll(source, visible?.());
     return true;
   }
   if (ctrl && !e.shiftKey && !e.altKey) {

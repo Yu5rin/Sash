@@ -13,7 +13,8 @@ import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, samePath, setAttr, suggestId, usedIds, type Path } from '../model';
 import type { ImageEntry } from '../store';
 import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, type AttrDef } from '../schema';
-import { bareCallbackName, generateStub, isCallbackName, type CallbackStatus } from '../vba';
+import { bareCallbackName, generateStub, type CallbackStatus } from '../vba';
+import { attrValueError } from '../attrValidate';
 import { lang, t } from '../i18n';
 import { imageMsoNames, labels as msoLabels } from '../catalog/catalog';
 import { buildSvg, DEFAULT_COLOR, displayName as fluentName, loadFluentIcons, type FluentIcon } from '../fluent/fluent';
@@ -475,7 +476,7 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
       );
     case 'int':
       // type="number" は「1e」や空のときに value が '' になり、属性が消えてしまう（不具合 28）。文字として受けて確かめる
-      return textInput(d.name, value, { inputMode: 'numeric', validate: (v) => (/^\d+$/.test(v) ? null : t('0 以上の整数で入力してください')) }).wrap;
+      return textInput(d.name, value, { inputMode: 'numeric', validate: (v) => attrValueError(d, v) }).wrap;
     case 'id': {
       const { input, wrap } = textInput(d.name, value, {
         validate: (v) => {
@@ -515,13 +516,14 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
     case 'callback':
       return callbackEditor(el, d.name);
     default:
-      return textInput(d.name, value).wrap;
+      // keytip の長さなど、値だけで決まる決まりは、まとめて変更と同じもので確かめる（attrValidate.ts）
+      return textInput(d.name, value, { validate: (v) => attrValueError(d, v) }).wrap;
   }
 }
 
-/** コールバック名として使えるか。「モジュール名.Sub名」「ブック!Sub名」の形も認める。 */
+/** コールバック名として使えるか（まとめて変更と同じ決まり。「モジュール名.Sub名」「ブック!Sub名」の形も認める）。 */
 function callbackError(v: string): string | null {
-  return isCallbackName(v) ? null : t('VBAのSub名として使えない文字があります');
+  return attrValueError({ name: '', kind: 'callback' }, v);
 }
 
 function callbackEditor(el: Element, attr: string): HTMLElement {

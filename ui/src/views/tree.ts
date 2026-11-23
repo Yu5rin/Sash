@@ -83,6 +83,14 @@ export function mountTree(host: HTMLElement): void {
   });
 }
 
+/**
+ * 絞り込み中なら、ツリーに見えている行のパス（上から順）。絞り込んでいなければ null。
+ * メニューやコマンドパレットの「同じ階層をすべて選択」が、絞り込みで隠れた要素まで選ばないようにするため。
+ */
+export function filteredTreePaths(): Path[] | null {
+  return hostEl && filterQuery.trim() ? visibleRowPaths(hostEl) : null;
+}
+
 /** いま見えている行のパス（上から順）。 */
 function visibleRowPaths(host: HTMLElement): Path[] {
   return Array.from(host.querySelectorAll<HTMLElement>('.tree-row'), (r) => parsePath(r.dataset['path'])!);
@@ -350,7 +358,8 @@ function onDrop(e: DragEvent, el: Element, row: HTMLElement): void {
 function onKey(e: KeyboardEvent, host: HTMLElement): void {
   const store = app.store;
   if (!store || e.isComposing) return;
-  if (handleEditKey(e, 'tree')) return;
+  // Ctrl+A は見えている行（絞り込み・畳んだ行で隠れていないもの）の兄弟だけを選ぶ（仕様書 §19.1）
+  if (handleEditKey(e, 'tree', () => visibleRowPaths(host))) return;
   const rows = Array.from(host.querySelectorAll<HTMLElement>('.tree-row'));
   const idx = rows.findIndex((r) => r.classList.contains('selected'));
   const pathAt = (i: number) => parsePath(rows[i]!.dataset['path'])!;

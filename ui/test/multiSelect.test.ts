@@ -7,7 +7,8 @@ import {
 } from '../src/clipboard';
 import { canDropInto, canDropManyAt, drop, draggedCount, endDrag, startDrag } from '../src/dnd';
 import { elementAt, parseXml, pathOf, type Path } from '../src/model';
-import { deleteMany, duplicateMany, moveBlock, moveManyTo, orderViolation, topLevelPaths } from '../src/multiEdit';
+import { attrValueError } from '../src/attrValidate';
+import { deleteMany, duplicateMany, moveBlock, moveManyTo, orderViolation, orderViolations, topLevelPaths } from '../src/multiEdit';
 import { attributes } from '../src/schema';
 import { PartStore, selectMany } from '../src/store';
 import { clearToasts } from '../src/shell/toast';
@@ -440,5 +441,123 @@ describe('まとめてのドラッグ＆ドロップ（dnd）', () => {
     pick('b1', 'b2');
     startDrag(fakeDrag, { kind: 'move', path: p('b1') });
     expect(canDropManyAt(store().doc, p('b1'), 0)).toBe(false);
+  });
+});
+
+describe('レビューの指摘の修正（仕様書 §19）', () => {
+  function docOf(xml: string): Document {
+    const r = parseXml(xml);
+    if (!r.ok) throw new Error(r.message);
+    return r.doc;
+  }
+  const q = (doc: Document, id: string) => pathOf(doc.querySelector(`[id="${id}"]`)!);
+  const ids = (el: Element) => Array.from(el.children, (e) => e.getAttribute('id') ?? e.localName);
+
+  it('selectRange：見えている行の順を渡すと、同じ親でも隠れている兄弟は選ばない', () => {
+    // ツリーを絞り込んで b1 と b3 だけが見えている状態（b2・tg は隠れている）
+    const rows = [p('t'), p('g1'), p('b1'), p('b3')];
+    store().select(p('b1'), 'tree');
+    store().selectRange(p('b3'), 'tree', rows);
+    expect(selIds()).toEqual(['b1', 'b3']);
+    expect(primaryId()).toBe('b3');
+    // 順を渡さなければ、これまでどおり間の兄弟をすべて選ぶ
+    store().select(p('b1'), 'canvas');
+    store().selectRange(p('b3'), 'canvas');
+    expect(selIds()).toEqual(['b1', 'b2', 'tg', 'b3']);
+  });
+
+  it('selectAll：見えている要素を渡すと、その中の兄弟だけを選ぶ（続く削除で隠れた要素を消さない）', () => {
+    store().select(p('b1'), 'tree');
+    store().selectAll('tree', [p('g1'), p('b1'), p('b3')]);
+    expect(selIds()).toEqual(['b1', 'b3']);
+    removeSelected('tree');
+    expect(kids('g1')).toEqual(['b2', 'tg', 'dialogBoxLauncher']);
+    // 主な選択が渡した中になくても、主な選択は残す
+    store().select(p('c1'), 'tree');
+    store().selectAll('tree', [p('c2')]);
+    expect(selIds()).toEqual(['c1', 'c2']);
+  });
+
+  it('編集のあとで指せなくなったパスは selections から外し、主な選択もそろえる', () => {
+    pick('c1', 'c2');
+    // 主な選択（c2、g2 の最後の子）を消す編集。選択は変えない（undefined を返す）
+    store().edit('canvas', (doc) => {
+      doc.querySelector('[id="c2"]')!.remove();
+    });
+    expect(selIds()).toEqual(['c1']);
+    expect(primaryId()).toBe('c1');
+    expect(store().selections.every((x) => elementAt(store().doc, x) !== null)).toBe(true);
+    // 編集が指せないパスを返しても、それは選ばない
+    store().edit('canvas', (doc) => {
+      doc.querySelector('[id="c1"]')!.setAttribute('label', 'X');
+      return selectMany([p('b1'), [0, 0, 0, 9, 9]], [0, 0, 0, 9, 9]);
+    });
+    expect(selIds()).toEqual(['b1']);
+    expect(primaryId()).toBe('b1');
+  });
+
+  it('orderViolation：操作の前から並び順の崩れた親でも、新しい崩れがなければ断らない', () => {
+    const doc = docOf(`<customUI xmlns="${NS}"><ribbon><tabs><tab id="t" label="T">
+      <group id="g" label="G"><button id="a" /><dialogBoxLauncher><button id="dl" /></dialogBoxLauncher><button id="z" /><foo id="u" /></group>
+      <group id="h" label="H"><button id="m" /></group>
+    </tab></tabs></ribbon></customUI>`);
+    const g = doc.querySelector('[id="g"]')!;
+    // 位置のずれたダイアログ起動ツール・後ろのボタン・知らない要素が、もとから決まりに合っていない
+    expect(orderViolation(g)).not.toBeNull();
+    const before = new Set(orderViolations(g));
+    expect(orderViolation(g, before)).toBeNull();
+    // そこへの複製・移動は、新しい崩れがなければ通す
+    const dup = duplicateMany(doc, [q(doc, 'a')]);
+    expect('paths' in dup).toBe(true);
+    expect(ids(g)).toHaveLength(5);
+    expect([ids(g)[0], ids(g)[2], ids(g)[3], ids(g)[4]]).toEqual(['a', 'dialogBoxLauncher', 'z', 'u']);
+    const mv = moveManyTo(doc, [q(doc, 'm')], g, 0);
+    expect('paths' in mv).toBe(true);
+    expect(ids(g)[0]).toBe('m');
+    // 動かした要素が決まりに合わない（新しい崩れになる）なら、これまでどおり断る（ダイアログ起動ツールを 2 つにする）
+    const doc2 = docOf(`<customUI xmlns="${NS}"><ribbon><tabs><tab id="t" label="T">
+      <group id="g" label="G"><dialogBoxLauncher><button id="d1" /></dialogBoxLauncher><foo id="u" /></group>
+      <group id="h" label="H"><dialogBoxLauncher><button id="d2" /></dialogBoxLauncher></group>
+    </tab></tabs></ribbon></customUI>`);
+    const bad = moveManyTo(doc2, [pathOf(doc2.querySelector('[id="h"] > dialogBoxLauncher')!)], doc2.querySelector('[id="g"]')!, 0);
+    expect('error' in bad).toBe(true);
+  });
+
+  it('duplicateMany：並び順の決まりのある親では、1つずつ置ける位置に収める（dropDown の item と button）', () => {
+    const doc = docOf(`<customUI xmlns="${NS}"><ribbon><tabs><tab id="t" label="T"><group id="g" label="G">
+      <dropDown id="dd" label="D"><item id="i1" /><item id="i2" /><button id="k1" /><button id="k2" /></dropDown>
+    </group></tab></tabs></ribbon></customUI>`);
+    const dd = doc.querySelector('[id="dd"]')!;
+    const r = duplicateMany(doc, [q(doc, 'i1'), q(doc, 'k1')]);
+    expect('paths' in r).toBe(true);
+    const tags = Array.from(dd.children, (e) => e.localName);
+    expect(tags).toEqual(['item', 'item', 'item', 'button', 'button', 'button']);
+    // item の複製は item の最後に、button の複製は選んだ button（k1）の後ろに入る
+    expect(ids(dd)[0]).toBe('i1');
+    expect(ids(dd)[1]).toBe('i2');
+    expect(ids(dd)[3]).toBe('k1');
+    expect(ids(dd)[5]).toBe('k2');
+    expect(orderViolation(dd)).toBeNull();
+    // 置ける位置なら、これまでどおり選んだ要素の最後の後ろにまとめて置く（A B → A B A' B'）
+    const doc2 = docOf(`<customUI xmlns="${NS}"><ribbon><tabs><tab id="t" label="T"><group id="g" label="G">
+      <dropDown id="dd" label="D"><item id="i1" /><item id="i2" /><item id="i3" /><button id="k1" /></dropDown>
+    </group></tab></tabs></ribbon></customUI>`);
+    const dd2 = doc2.querySelector('[id="dd"]')!;
+    const r2 = duplicateMany(doc2, [q(doc2, 'i1'), q(doc2, 'i2')]);
+    expect('paths' in r2).toBe(true);
+    const copies = (r2 as { paths: Path[] }).paths.map((x) => elementAt(doc2, x)!);
+    expect(Array.from(dd2.children).indexOf(copies[0]!)).toBe(2);
+    expect(Array.from(dd2.children).indexOf(copies[1]!)).toBe(3);
+    expect(ids(dd2).slice(4)).toEqual(['i3', 'k1']);
+  });
+
+  it('attrValueError：コールバック名・整数・keytip の長さを確かめる（単独とまとめてで共通）', () => {
+    expect(attrValueError(attributes.get('onAction')!, '1 bad name!')).toBe('VBAのSub名として使えない文字があります');
+    expect(attrValueError(attributes.get('onAction')!, 'Module1.OnRun')).toBeNull();
+    expect(attrValueError(attributes.get('onAction')!, '')).toBeNull();
+    expect(attrValueError({ name: 'columns', kind: 'int' }, '1e')).toBe('0 以上の整数で入力してください');
+    expect(attrValueError({ name: 'columns', kind: 'int' }, '3')).toBeNull();
+    expect(attrValueError(attributes.get('keytip')!, 'ABCD')).toBe('keytip は3文字以内で指定してください');
+    expect(attrValueError(attributes.get('keytip')!, 'ZY')).toBeNull();
   });
 });

@@ -134,3 +134,73 @@ describe('ツリーの複数選択', () => {
     expect(tree.querySelectorAll('.tree-row.multi-selected')).toHaveLength(3);
   });
 });
+
+describe('レビューの指摘の修正（仕様書 §19）', () => {
+  const enter = (input: HTMLInputElement, value: string) => {
+    input.value = value;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  };
+
+  it('まとめて変更でも、コールバック名を確かめて入れない（単独のインスペクタと同じ知らせ方）', () => {
+    pick('b1', 'b2');
+    const input = insp.querySelector<HTMLInputElement>('input[data-attr="onAction"]')!;
+    enter(input, '1 bad name!');
+    expect([attrOf('b1', 'onAction'), attrOf('b2', 'onAction')]).toEqual([null, null]);
+    const error = input.parentElement!.querySelector<HTMLElement>('.field-error')!;
+    expect(error.hidden).toBe(false);
+    expect(error.textContent).toBe('VBAのSub名として使えない文字があります');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    // 直せば入る
+    enter(input, 'Module1.OnRun');
+    expect([attrOf('b1', 'onAction'), attrOf('b2', 'onAction')]).toEqual(['Module1.OnRun', 'Module1.OnRun']);
+  });
+
+  it('まとめて変更でも keytip は 3 文字まで', () => {
+    pick('b1', 'b2');
+    const input = insp.querySelector<HTMLInputElement>('input[data-attr="keytip"]')!;
+    enter(input, 'ABCD');
+    expect(attrOf('b1', 'keytip')).toBeNull();
+    expect(input.parentElement!.querySelector('.field-error')!.textContent).toBe('keytip は3文字以内で指定してください');
+    enter(input, 'Q');
+    expect([attrOf('b1', 'keytip'), attrOf('b2', 'keytip')]).toEqual(['Q', 'Q']);
+  });
+
+  it('単独のインスペクタも同じ決まりで keytip の長さを確かめる', () => {
+    app.store!.select(p('b1'), 'canvas');
+    const input = insp.querySelector<HTMLInputElement>('input[data-attr="keytip"]')!;
+    enter(input, 'ABCD');
+    expect(attrOf('b1', 'keytip')).toBeNull();
+    expect(input.closest('.insp-field')!.querySelector('.field-error')!.textContent).toBe('keytip は3文字以内で指定してください');
+  });
+
+  it('ツリーを絞り込んでいるときの Ctrl+A は、見えている兄弟だけを選ぶ（続く Delete で隠れた要素を消さない）', () => {
+    const filter = document.querySelector<HTMLInputElement>('.tree-filter input')!;
+    filter.value = 'Same';
+    filter.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(tree.querySelectorAll('.tree-row')).not.toHaveLength(0);
+    row('b3').click();
+    tree.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
+    expect(app.store!.selections).toEqual([p('b3'), p('tg')]);
+    tree.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    expect(app.store!.doc.querySelector('[id="b1"]')).not.toBeNull();
+    expect(app.store!.doc.querySelector('[id="b2"]')).not.toBeNull();
+    expect(app.store!.doc.querySelector('[id="b3"]')).toBeNull();
+    expect(app.store!.doc.querySelector('[id="tg"]')).toBeNull();
+    filter.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+
+  it('ツリーの Shift+クリックは、絞り込みで隠れた兄弟を範囲に入れない', () => {
+    // b1 のラベルも「Same」にして、絞り込みで b1・b3・tg を出し、間の b2 だけを隠す
+    app.store!.edit('other', (doc) => {
+      doc.querySelector('[id="b1"]')!.setAttribute('label', 'Same');
+    });
+    const filter = document.querySelector<HTMLInputElement>('.tree-filter input')!;
+    filter.value = 'Same';
+    filter.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(tree.querySelector(`.tree-row[data-path="${p('b2').join('.')}"]`)).toBeNull();
+    row('b1').click();
+    row('b3').dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+    expect(app.store!.selections).toEqual([p('b1'), p('b3')]);
+    filter.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+});

@@ -55,4 +55,6 @@ export const en: Readonly<Record<string, string>> = {
   '変えた値は選んでいる要素すべてに入ります（元に戻すで一度に戻せます）': 'Changes apply to all selected elements (one undo reverts them)',
   '選んでいる要素に共通の属性はありません。1つずつ選んで編集してください': 'The selected elements have no attributes in common. Select them one at a time to edit.',
   'id・idMso・画像（image）は要素ごとに違うため、ここでは変えられません': 'id, idMso and image differ per element and cannot be changed here',
+  '{n} 個': '{n} sel.',
+  '全体': 'Whole',
 };

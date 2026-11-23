@@ -29,7 +29,7 @@ import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
 import { flushPendingEdits, mountInspector } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
-import { focusTreeFilter, mountTree } from './views/tree';
+import { filteredTreePaths, focusTreeFilter, mountTree } from './views/tree';
 import { openIdReplaceDialog } from './idReplaceDialog';
 import { openSample } from './sample';
 import { mountXmlEditor, revealInXml } from './views/xmlEditor';
@@ -235,7 +235,8 @@ function commands(): AppCommand[] {
     { id: 'edit.duplicate', group: G.edit, title: countTitle(t('複製')), shortcut: 'Ctrl+D', keywords: 'duplicate 選択中の要素を複製', enabled: hasSel, run: () => runEditCommand('duplicate') },
     { id: 'edit.delete', group: G.edit, title: countTitle(t('削除')), shortcut: 'Del', keywords: 'delete remove 選択中の要素を削除', enabled: hasSel, run: () => runEditCommand('delete') },
     // 複数選択とまとめての操作（仕様書 §19）。Ctrl+A は入力欄の外で受ける（入力欄の中は文字の全選択）
-    { id: 'edit.selectAll', group: G.edit, title: t('同じ階層をすべて選択'), shortcut: 'Ctrl+A', keywords: 'select all multi 複数選択 すべて選択', enabled: () => (app.store?.selection?.length ?? 0) > 0, run: () => app.store?.selectAll('other') },
+    // ツリーを絞り込んでいるときは、見えている行の兄弟だけを選ぶ（隠れた要素を続けて消してしまわないように。仕様書 §19.1）
+    { id: 'edit.selectAll', group: G.edit, title: t('同じ階層をすべて選択'), shortcut: 'Ctrl+A', keywords: 'select all multi 複数選択 すべて選択', enabled: () => (app.store?.selection?.length ?? 0) > 0, run: () => app.store?.selectAll('other', filteredTreePaths() ?? undefined) },
     { id: 'edit.clearMulti', group: G.edit, title: t('複数選択を解除'), keywords: 'deselect multi 複数選択 解除', enabled: () => app.store?.isMulti === true, run: () => app.store?.clearMulti('other') },
     { id: 'edit.moveUp', group: G.edit, title: countTitle(t('上へ移動')), keywords: 'move up 並べ替え alt+up', enabled: () => has() && moveDisabledReason(-1) === null, run: () => moveSelected(-1, 'other') },
     { id: 'edit.moveDown', group: G.edit, title: countTitle(t('下へ移動')), keywords: 'move down 並べ替え alt+down', enabled: () => has() && moveDisabledReason(1) === null, run: () => moveSelected(1, 'other') },

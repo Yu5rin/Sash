@@ -370,6 +370,10 @@ export class PartStore {
       selection = alive(trackedPrimary) ? pathOf(trackedPrimary) : this.selection;
       selections = tracked.filter(alive).map((e) => pathOf(e));
     }
+    // 編集のあとで指せなくなったパスは外す（selections に無効なパスを残すと、まとめての操作が空振りしたり、
+    // 数の表示がずれたりするため）。主な選択が指せなければ、残りの最後を主にする（dropInvalidSelections と同じ決まり）
+    selections = selections.filter((p) => elementAt(this.doc, p) !== null);
+    if (selection && !elementAt(this.doc, selection)) selection = selections.at(-1) ?? null;
     selections = selection ? normalizeSelections(selections, selection) : [];
     const xml = serialize(this.doc);
     const sameSelections = selections.length === before.selections.length && selections.every((p, i) => samePath(p, before.selections[i]!));
@@ -450,6 +454,8 @@ export class PartStore {
    * Shift+クリック：起点（anchor）から path までを選ぶ。起点は変えない。
    * 同じ親の兄弟なら、その間の兄弟を文書の順に選ぶ。親が違うときは order（ツリーに見えている行の順。
    * 省けば文書の順）での範囲から、範囲の中のほかの要素の祖先になっているもの（間にある親のグループなど）を外して選ぶ。
+   * order を渡したときは、同じ親でも order にある（見えている）要素だけを選ぶ。絞り込みや畳んだ行で隠れている兄弟まで
+   * 選ぶと、続けて Delete を押したときに見えていない要素まで消えてしまうため。
    */
   selectRange(path: Path, source: Source, order?: readonly Path[]): void {
     const anchor = this.anchor && elementAt(this.doc, this.anchor) ? this.anchor : this.selection;
@@ -464,6 +470,10 @@ export class PartStore {
       const hi = Math.max(anchor.at(-1)!, path.at(-1)!);
       range = [];
       for (let i = lo; i <= hi; i++) range.push([...parent, i]);
+      if (order) {
+        const shown = new Set(order.map((p) => p.join('.')));
+        range = range.filter((p) => samePath(p, path) || shown.has(p.join('.')));
+      }
     } else {
       const rows = order ?? allElements(this.doc).map((e) => pathOf(e));
       const a = rows.findIndex((p) => samePath(p, anchor));
@@ -479,13 +489,21 @@ export class PartStore {
     this.emit(['selection'], source);
   }
 
-  /** Ctrl+A：主な選択の兄弟（同じ親の子）をすべて選ぶ。主な選択は変えない。 */
-  selectAll(source: Source): void {
+  /**
+   * Ctrl+A：主な選択の兄弟（同じ親の子）をすべて選ぶ。主な選択は変えない。
+   * order（ツリーに見えている行・キャンバスに描かれている要素）を渡したときは、その中にある兄弟だけを選ぶ
+   * （絞り込みや畳んだ行で隠れている兄弟を選ぶと、続けて Delete を押したときに見えない要素まで消えるため）。
+   */
+  selectAll(source: Source, order?: readonly Path[]): void {
     const sel = this.selection;
     if (!sel || sel.length === 0) return;
     const parent = elementAt(this.doc, sel.slice(0, -1));
     if (!parent) return;
-    const all = Array.from(parent.children, (_, i) => [...sel.slice(0, -1), i]);
+    let all = Array.from(parent.children, (_, i) => [...sel.slice(0, -1), i]);
+    if (order) {
+      const shown = new Set(order.map((p) => p.join('.')));
+      all = all.filter((p) => samePath(p, sel) || shown.has(p.join('.')));
+    }
     this.setSelection(sel, all);
     this.emit(['selection'], source);
   }
