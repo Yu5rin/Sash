@@ -8,6 +8,7 @@ import { invoke, type PartToSave } from '../bridge';
 import { ask } from '../dialogs/modal';
 import { t } from '../i18n';
 import { exportSash, parseSash, partXml } from '../sashJson';
+import { isSampleSession } from '../sample';
 import type { PartStore, SaveSnapshot } from '../store';
 import { focus as focusCanvas, tabIdToActivate } from '../views/canvas';
 import { imagesToSend } from './compat';
@@ -60,10 +61,12 @@ export async function confirmDiscard(): Promise<boolean> {
   flushPendingEdits();
   if (!app.dirty || !app.session) return true;
   if (refuseWhileBusy()) return false;
-  const r = await ask(t('未保存の変更があります'), t('「{file}」への変更を保存しますか？保存しないと、変更は失われます。', { file: fileNameOf(app.session.path) }), [
+  // サンプルは保存できないので、「保存する」は出さずに捨ててよいかだけを聞く
+  const sample = isSampleSession();
+  const r = await ask(t('未保存の変更があります'), t('「{file}」への変更を保存しますか？保存しないと、変更は失われます。', { file: sample ? t('サンプル') : fileNameOf(app.session.path) }), [
     { value: 'discard', label: t('保存しない') },
-    { value: 'cancel', label: t('キャンセル') },
-    { value: 'save', label: t('保存する'), primary: true },
+    { value: 'cancel', label: t('キャンセル'), primary: sample },
+    ...(sample ? [] : [{ value: 'save' as const, label: t('保存する'), primary: true }]),
   ]);
   if (r === 'save') return save();
   return r === 'discard';
@@ -179,6 +182,8 @@ async function confirmErrors(action: 'save' | 'apply'): Promise<boolean> {
 export async function save(): Promise<boolean> {
   flushPendingEdits();
   const s = app.session;
+  // 同梱のサンプルはファイルがないので保存できない（パスが空のまま書き込もうとしない）
+  if (isSampleSession()) { toast({ kind: 'info', message: t('サンプルは保存できません。自分のブックで作るときは、Excel で保存した .xlsm / .xlam を開いてください') }); return false; }
   if (!s) return false;
   if (refuseWhileBusy()) return false;
   if (!(await confirmErrors('save'))) return false;
@@ -207,6 +212,8 @@ let hintShown = false;
 export async function applyToExcel(): Promise<void> {
   flushPendingEdits();
   const s = app.session;
+  // 同梱のサンプルは Excel で開かれたファイルがないので反映できない
+  if (isSampleSession()) { toast({ kind: 'info', message: t('サンプルは保存できません。自分のブックで作るときは、Excel で保存した .xlsm / .xlam を開いてください') }); return; }
   if (!s) return;
   if (refuseWhileBusy()) return;
   if (!(await confirmErrors('apply'))) return;

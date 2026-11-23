@@ -43,7 +43,8 @@ export function reloadForLanguage(): boolean {
     toast({ kind: 'warning', message: t('言語を切り替える前に、変更を保存してください') });
     return false;
   }
-  if (app.session) sessionSet(REOPEN_KEY, app.session.path);
+  // パスのないセッション（同梱のサンプル）は開き直せないので、覚えない
+  if (app.session?.path) sessionSet(REOPEN_KEY, app.session.path);
   location.reload();
   return true;
 }
