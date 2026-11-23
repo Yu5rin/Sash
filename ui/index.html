@@ -10,66 +10,68 @@
   <body>
     <div id="app">
       <header class="titlebar">
-        <span class="brand">Sash</span>
-        <span id="file-name" class="file-name"></span>
-        <select id="part-switch" hidden title="編集するパーツ（2010以降のExcelは customUI14 を優先します）" data-i18n-title="編集するパーツ（2010以降のExcelは customUI14 を優先します）"></select>
-        <span class="spacer"></span>
-        <button id="update-banner" type="button" class="update-banner" hidden></button>
-        <div class="toolbar" role="toolbar" aria-label="ツールバー">
-          <button id="btn-open" type="button" class="icon-text" title="開く (Ctrl+O)" data-i18n-title="開く (Ctrl+O)"></button>
-          <button id="btn-save" type="button" class="icon-text" title="保存 (Ctrl+S)" data-i18n-title="保存 (Ctrl+S)" disabled></button>
-          <span class="sep"></span>
-          <button id="btn-undo" type="button" class="icon-button" title="元に戻す (Ctrl+Z)" data-i18n-title="元に戻す (Ctrl+Z)" disabled></button>
-          <button id="btn-redo" type="button" class="icon-button" title="やり直し (Ctrl+Y)" data-i18n-title="やり直し (Ctrl+Y)" disabled></button>
-          <button id="btn-format" type="button" class="icon-button" title="XMLを整形 (Shift+Alt+F)" data-i18n-title="XMLを整形 (Shift+Alt+F)" disabled></button>
-          <button id="btn-catalog" type="button" class="icon-button" title="idMso / imageMso カタログ" data-i18n-title="idMso / imageMso カタログ" disabled></button>
- <button id="btn-diff" type="button" class="icon-button" title="保存済みとの差分" data-i18n-title="保存済みとの差分" disabled></button>
-          <button id="btn-recipes" type="button" class="icon-button" title="レシピを挿入" data-i18n-title="レシピを挿入" disabled></button>
-          <button id="btn-command" type="button" class="icon-button" title="コマンドパレット (Ctrl+K)" data-i18n-title="コマンドパレット (Ctrl+K)"></button>
-          <button id="btn-settings" type="button" class="icon-button" title="設定" data-i18n-title="設定"></button>
-          <span class="sep"></span>
-          <button id="btn-apply" type="button" class="primary icon-text" title="Excelへ反映 (F5)" data-i18n-title="Excelへ反映 (F5)" disabled></button>
+        <span class="brand" aria-hidden="true"><span class="brand-mark"></span>Sash</span>
+        <div id="menubar"></div>
+        <div class="title-center">
+          <span id="file-chip" class="file-chip" hidden>
+            <span class="file-chip-name" id="file-name"></span>
+            <span class="file-chip-dirty" id="file-dirty" hidden></span>
+          </span>
+          <select id="part-switch" class="compact" hidden title="編集するパーツ（2010以降のExcelは customUI14 を優先します）" data-i18n-title="編集するパーツ（2010以降のExcelは customUI14 を優先します）" aria-label="編集するパーツ（2010以降のExcelは customUI14 を優先します）"></select>
         </div>
+        <button id="update-banner" type="button" class="update-banner" hidden></button>
       </header>
 
+      <div id="toolbar" class="toolbar" role="toolbar" aria-label="ツールバー">
+        <button id="btn-open" type="button" class="tb-button"></button>
+        <button id="btn-save" type="button" class="tb-button" disabled></button>
+        <span class="tb-sep" role="separator"></span>
+        <button id="btn-undo" type="button" class="tb-button" disabled></button>
+        <button id="btn-redo" type="button" class="tb-button" disabled></button>
+        <span class="tb-sep" role="separator"></span>
+        <button id="btn-command" type="button" class="tb-button subtle"></button>
+        <span class="tb-spacer"></span>
+        <button id="btn-apply" type="button" class="tb-button excel" disabled></button>
+      </div>
+
       <aside class="pane left" aria-label="パレットとツリー">
-        <section class="palette">
-          <h2 data-i18n="パレット">パレット</h2>
-          <ul id="palette-list"></ul>
+        <section class="palette" data-pane="palette" aria-labelledby="palette-heading">
+          <h2 id="palette-heading" class="pane-title" data-i18n="パレット">パレット</h2>
+          <div id="palette" class="palette-body"></div>
         </section>
-        <section class="tree-pane">
-          <h2 data-i18n="ツリー">ツリー</h2>
-          <div id="tree" role="tree" aria-label="ツリー"></div>
+        <section class="tree-pane" aria-labelledby="tree-heading">
+          <h2 id="tree-heading" class="pane-title" data-i18n="ツリー">ツリー</h2>
+          <div id="tree" role="tree" aria-label="ツリー" data-pane="tree"></div>
         </section>
       </aside>
-      <div class="splitter v" data-splitter="left" style="grid-area: sl" title="ドラッグで幅を変更、ダブルクリックで畳む" data-i18n-title="ドラッグで幅を変更、ダブルクリックで畳む"></div>
+      <div class="splitter v" data-splitter="left" style="grid-area: sl" aria-label="パレットとツリーの幅" title="ドラッグで幅を変更、ダブルクリックで畳む" data-i18n-title="ドラッグで幅を変更、ダブルクリックで畳む"></div>
 
       <main class="pane center">
         <section class="canvas-pane" aria-label="キャンバス">
-          <div id="canvas"></div>
+          <div id="canvas" tabindex="0" data-pane="canvas" aria-label="キャンバス"></div>
         </section>
-        <div class="splitter h" data-splitter="top" title="ドラッグで高さを変更、ダブルクリックで畳む" data-i18n-title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
-        <section class="xml-pane" aria-label="XMLエディタ">
+        <div class="splitter h" data-splitter="top" aria-label="キャンバスの高さ" title="ドラッグで高さを変更、ダブルクリックで畳む" data-i18n-title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
+        <section class="xml-pane" aria-label="XMLエディタ" data-pane="xml">
           <div class="xml-status" id="xml-status" hidden></div>
           <div id="xml-editor"></div>
         </section>
       </main>
 
-      <div class="splitter v" data-splitter="right" style="grid-area: sr" title="ドラッグで幅を変更、ダブルクリックで畳む" data-i18n-title="ドラッグで幅を変更、ダブルクリックで畳む"></div>
-      <aside class="pane right" aria-label="インスペクタ">
-        <h2 data-i18n="インスペクタ">インスペクタ</h2>
-        <div id="inspector"></div>
+      <div class="splitter v" data-splitter="right" style="grid-area: sr" aria-label="インスペクタの幅" title="ドラッグで幅を変更、ダブルクリックで畳む" data-i18n-title="ドラッグで幅を変更、ダブルクリックで畳む"></div>
+      <aside class="pane right" aria-labelledby="inspector-heading">
+        <h2 id="inspector-heading" class="pane-title" data-i18n="インスペクタ">インスペクタ</h2>
+        <div id="inspector" tabindex="-1" data-pane="inspector"></div>
       </aside>
 
-      <div class="splitter h" data-splitter="bottom" style="grid-area: sb" title="ドラッグで高さを変更、ダブルクリックで畳む" data-i18n-title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
-      <footer class="bottom">
+      <div class="splitter h" data-splitter="bottom" style="grid-area: sb" aria-label="下部パネルの高さ" title="ドラッグで高さを変更、ダブルクリックで畳む" data-i18n-title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
+      <footer class="bottom" data-pane="bottom">
         <div id="bottom-tabs" class="bottom-tabs" role="tablist"></div>
-        <div id="bottom-body" class="bottom-body"></div>
+        <div id="bottom-body" class="bottom-body" tabindex="-1"></div>
       </footer>
 
       <div id="home" class="home"></div>
     </div>
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <div id="toasts" class="toasts"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

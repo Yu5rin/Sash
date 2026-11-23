@@ -109,4 +109,81 @@ public class RibbonPackageTests
     [InlineData("a.xltm", true)]
     public void 対応する拡張子を判定する(string path, bool expected) =>
         Assert.Equal(expected, RibbonPackage.IsSupported(path));
+
+    private static byte[] ReadCustomUIBytes(string path)
+    {
+        using var package = Package.Open(path, FileMode.Open, FileAccess.Read);
+        using var stream = package.GetPart(new Uri("/customUI/customUI14.xml", UriKind.Relative)).GetStream();
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
+    [Fact]
+    public void utf16と宣言したXMLはutf8の宣言に直して書く()
+    {
+        using var book = new TestWorkbook();
+
+        RibbonPackage.SaveCustomUI(book.Path, CustomUIVersion.Office2010, "\uFEFF<?xml version=\"1.0\" encoding=\"utf-16\" standalone=\"yes\"?><customUI/>");
+
+        var bytes = ReadCustomUIBytes(book.Path);
+        Assert.NotEqual(0xEF, bytes[0]);
+        var text = System.Text.Encoding.UTF8.GetString(bytes);
+        Assert.Equal("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><customUI/>", text);
+        Assert.Equal(text, RibbonPackage.Load(book.Path).Primary!.Xml);
+    }
+
+    [Theory]
+    [InlineData("<?xml version=\"1.0\" encoding=\"UTF-8\"?><customUI/>")]
+    [InlineData("<?xml version=\"1.0\"?><customUI/>")]
+    [InlineData("<customUI/>")]
+    public void utf8の宣言や宣言なしはそのまま書く(string xml) =>
+        Assert.Equal(xml, RibbonPackage.ToUtf8Declaration(xml));
+
+    [Fact]
+    public void 一重引用符の宣言も直す() =>
+        Assert.Equal("<?xml version='1.0' encoding='UTF-8'?><a/>", RibbonPackage.ToUtf8Declaration("<?xml version='1.0' encoding='Shift_JIS'?><a/>"));
+
+    [Fact]
+    public void 暗号化されたブックはわかる言葉で断る()
+    {
+        using var book = new TestWorkbook();
+        File.WriteAllBytes(book.Path, [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0]);
+
+        Assert.Throws<UserFacingException>(() => RibbonPackage.Load(book.Path));
+        Assert.Throws<UserFacingException>(() => RibbonPackage.SaveCustomUI(book.Path, CustomUIVersion.Office2010, "<customUI/>"));
+    }
+
+    [Fact]
+    public void 読み取り専用のファイルには書き込まず一時ファイルも残さない()
+    {
+        using var book = new TestWorkbook();
+        var before = File.ReadAllBytes(book.Path);
+        File.SetAttributes(book.Path, FileAttributes.ReadOnly);
+        try
+        {
+            Assert.Throws<UserFacingException>(() => RibbonPackage.SaveCustomUI(book.Path, CustomUIVersion.Office2010, "<customUI/>"));
+            Assert.Equal(before, File.ReadAllBytes(book.Path));
+        }
+        finally
+        {
+            File.SetAttributes(book.Path, FileAttributes.Normal);
+        }
+
+        Assert.Empty(Directory.GetFiles(book.BackupRoot, "*.sash-tmp"));
+    }
+
+    [Fact]
+    public void 保存した後に一時ファイルが残らない()
+    {
+        using var book = new TestWorkbook();
+
+        RibbonPackage.SaveCustomUI(book.Path, CustomUIVersion.Office2010, "<customUI/>");
+
+        Assert.Equal(["book.xlsm"], Directory.GetFiles(book.BackupRoot).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public void ないファイルには保存しない() =>
+        Assert.Throws<FileNotFoundException>(() => RibbonPackage.SaveCustomUI(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".xlsm"), CustomUIVersion.Office2010, "<customUI/>"));
 }

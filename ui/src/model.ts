@@ -2,7 +2,9 @@
 // DOM を直接持つので、キャンバスで編集してもコメントと属性の並び順は保たれる（仕様書 §5.5）。
 // 要素の位置は「ルートからの子要素の番号の並び」（パス）で表し、XML を読み直しても選択を保てるようにする。
 
-import { backstageElements, canContainEl, elements, ID_PATTERN, ID_PREFIX, inBackstage } from './schema';
+import {
+  backstageElements, canContain, canContainEl, defFor, elements, ID_PREFIX, inBackstage, isXmlId, NAMESPACES, slotIndex, titleOf,
+} from './schema';
 import { t as tr } from './i18n';
 
 export type Path = readonly number[];
@@ -114,8 +116,19 @@ function writeElement(el: Element, depth: number, lines: string[]): void {
   lines.push(`${pad}</${el.tagName}>`);
 }
 
-function escapeAttr(v: string): string {
-  return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/\n/g, '&#10;');
+/**
+ * 属性値のエスケープ。改行・復帰・タブは、そのまま書くと読み直したときに空白へ正規化されてしまうので文字参照にする。
+ * > は属性値の中ではエスケープしなくても正しいが、]]> などの誤読を避けるため常に &gt; にする。
+ */
+export function escapeAttr(v: string): string {
+  return v
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\r/g, '&#13;')
+    .replace(/\n/g, '&#10;')
+    .replace(/\t/g, '&#9;');
 }
 
 function escapeText(v: string): string {
@@ -124,7 +137,10 @@ function escapeText(v: string): string {
 
 // ---- id の提案 ----
 
-/** ファイル内の id / idQ をすべて集める。 */
+/**
+ * ファイル内の id をすべて集める。
+ * idQ は「接頭辞:名前」の形で別のアドインの id を指すもので、自分の id と同じ空間ではないので含めない。
+ */
 export function usedIds(doc: Document): Set<string> {
   const ids = new Set<string>();
   for (const el of allElements(doc)) {
@@ -143,13 +159,39 @@ export function suggestId(tag: string, label: string | null, used: ReadonlySet<s
   const words = label !== null && /^[\x20-\x7e]+$/.test(label) ? label.match(/[A-Za-z0-9]+/g) : null;
   if (words) {
     const base = prefix + words.map((w) => w[0]!.toUpperCase() + w.slice(1).toLowerCase()).join('');
-    if (ID_PATTERN.test(base) && !used.has(base)) return base;
+    if (isXmlId(base) && !used.has(base)) return base;
     for (let n = 2; ; n++) if (!used.has(base + n)) return base + n;
   }
   for (let n = 1; ; n++) if (!used.has(prefix + n)) return prefix + n;
 }
 
 // ---- 編集操作 ----
+
+// ---- 要素の作成（接頭辞つきの文書に対応） ----
+
+/**
+ * 文書と同じ名前空間・同じ接頭辞で要素を作る。
+ * <mso:customUI xmlns:mso="…"> のような文書に接頭辞なしの要素を足すと、書き出したときに名前空間が外れてしまうため。
+ */
+export function createIn(doc: Document, tag: string): Element {
+  const root = doc.documentElement;
+  return doc.createElementNS(root.namespaceURI, root.prefix ? `${root.prefix}:${tag}` : tag);
+}
+
+/** 別の文書の要素を、この文書の名前空間・接頭辞で作り直して取り込む（コメントと文字列も写す）。 */
+export function importElement(doc: Document, el: Element): Element {
+  const copy = createIn(doc, el.localName);
+  for (const at of Array.from(el.attributes)) {
+    if (at.name === 'xmlns' || at.name.startsWith('xmlns:')) continue;
+    if (at.namespaceURI) copy.setAttributeNS(at.namespaceURI, at.name, at.value);
+    else copy.setAttribute(at.name, at.value);
+  }
+  for (const n of Array.from(el.childNodes)) {
+    if (n.nodeType === Node.ELEMENT_NODE) copy.append(importElement(doc, n as Element));
+    else copy.append(doc.importNode(n, true));
+  }
+  return copy;
+}
 
 const DEFAULT_LABEL: Readonly<Record<string, string>> = {
   tab: '新しいタブ', group: '新しいグループ', button: 'ボタン', toggleButton: 'トグル', checkBox: 'チェック',
@@ -164,14 +206,14 @@ const DEFAULT_LABEL: Readonly<Record<string, string>> = {
  * parent を渡すと、その場所に合った定義（Backstage の中かどうか）で作る。
  */
 export function createElement(doc: Document, tag: string, parent: Element | null = null): Element {
-  const ns = doc.documentElement.namespaceURI;
   const used = usedIds(doc);
   const bs = tag === 'backstage' || inBackstage(parent);
   const make = (t: string): Element => {
-    const el = doc.createElementNS(ns, t);
+    const el = createIn(doc, t);
     const def = bs ? backstageElements.get(t) : elements.get(t);
     const label = DEFAULT_LABEL[t] !== undefined ? tr(DEFAULT_LABEL[t]) : null;
-    if (def?.idRequired || t === 'separator' || t === 'box' || t === 'buttonGroup') {
+    // item の id は省略できるが、getItemID などで区別しやすいように付けておく
+    if (def?.idRequired || t === 'separator' || t === 'box' || t === 'buttonGroup' || t === 'item' || t === 'menuGroup') {
       const id = suggestId(t, null, used);
       used.add(id);
       el.setAttribute('id', id);
@@ -205,22 +247,16 @@ export function createElement(doc: Document, tag: string, parent: Element | null
 
 /** customUI > ribbon > tabs を必要なら作って返す。 */
 export function ensureTabs(doc: Document): Element {
-  const ns = doc.documentElement.namespaceURI;
-  const root = doc.documentElement;
-  let ribbon = childElements(root).find((c) => c.localName === 'ribbon');
-  if (!ribbon) {
-    ribbon = doc.createElementNS(ns, 'ribbon');
-    // commands の後ろ、backstage の前に置く（スキーマの順序）
-    const after = childElements(root).find((c) => c.localName === 'backstage' || c.localName === 'contextMenus');
-    root.insertBefore(ribbon, after ?? null);
-  }
-  let tabs = childElements(ribbon).find((c) => c.localName === 'tabs');
-  if (!tabs) {
-    tabs = doc.createElementNS(ns, 'tabs');
-    const ctx = childElements(ribbon).find((c) => c.localName === 'contextualTabs');
-    ribbon.insertBefore(tabs, ctx ?? null);
-  }
-  return tabs;
+  return ensureChild(ensureChild(doc.documentElement, 'ribbon'), 'tabs');
+}
+
+/** 親の直下にある tag の要素を返す。なければスキーマの順序に合う位置に作る（ribbon は commands の後ろ、backstage の前など）。 */
+function ensureChild(parent: Element, tag: string): Element {
+  const found = childElements(parent).find((c) => c.localName === tag);
+  if (found) return found;
+  const el = createIn(parent.ownerDocument, tag);
+  insertAt(parent, el, allowedInsertIndex(parent, tag, parent.children.length) ?? parent.children.length);
+  return el;
 }
 
 /** Backstage の要素に、最低限の中身を足す。 */
@@ -228,13 +264,13 @@ function buildBackstage(el: Element, make: (t: string) => Element): void {
   const doc = el.ownerDocument;
   const group = (): Element => {
     const g = make('group');
-    const top = doc.createElementNS(doc.documentElement.namespaceURI, 'topItems');
+    const top = createIn(doc, 'topItems');
     top.append(make('button'));
     g.append(top);
     return g;
   };
   const column = (name: string, ...kids: Element[]) => {
-    const c = doc.createElementNS(doc.documentElement.namespaceURI, name);
+    const c = createIn(doc, name);
     c.append(...kids);
     return c;
   };
@@ -249,7 +285,7 @@ function buildBackstage(el: Element, make: (t: string) => Element): void {
       el.append(column('firstColumn', group()));
       break;
     case 'group': {
-      const top = doc.createElementNS(doc.documentElement.namespaceURI, 'topItems');
+      const top = createIn(doc, 'topItems');
       top.append(make('button'));
       el.append(top);
       break;
@@ -270,51 +306,92 @@ function buildBackstage(el: Element, make: (t: string) => Element): void {
     case 'comboBox':
       el.append(make('item'));
       break;
-    case 'menu':
-      el.append(make('button'));
+    case 'menu': {
+      // Backstage の menu の直下には menuGroup しか置けないので、menuGroup の中にボタンを入れる
+      const mg = make('menuGroup');
+      mg.append(make('button'));
+      el.append(mg);
       break;
+    }
   }
 }
 
 /** customUI > backstage を必要なら作って返す（ribbon の後ろ、contextMenus の前に置く）。 */
 export function ensureBackstage(doc: Document): Element {
-  const root = doc.documentElement;
-  let bs = childElements(root).find((c) => c.localName === 'backstage');
-  if (!bs) {
-    bs = doc.createElementNS(root.namespaceURI, 'backstage');
-    root.insertBefore(bs, childElements(root).find((c) => c.localName === 'contextMenus') ?? null);
-  }
-  return bs;
+  return ensureChild(doc.documentElement, 'backstage');
 }
 
 /** customUI > contextMenus を必要なら作って返す（backstage の後ろ、末尾に置く）。 */
 export function ensureContextMenus(doc: Document): Element {
-  const root = doc.documentElement;
-  let cm = childElements(root).find((c) => c.localName === 'contextMenus');
-  if (!cm) {
-    cm = doc.createElementNS(root.namespaceURI, 'contextMenus');
-    root.append(cm);
-  }
-  return cm;
+  return ensureChild(doc.documentElement, 'contextMenus');
 }
 
 export function insertAt(parent: Element, child: Element, index: number): void {
   const ref = parent.children[index] ?? null;
-  parent.insertBefore(child, ref);
+  if (ref !== child) parent.insertBefore(child, ref);
 }
 
-/** 要素を移動する。移動先が自分の子孫なら何もしない。 */
+// ---- 子要素の順序と個数 ----
+
+/**
+ * parent の desired 番目（今の子要素の並びでの位置）に tag を差し込むとき、スキーマの順序で許される位置に収めて返す。
+ * 個数の上限に達していて置けなければ null。順序の決まりがない親では、0〜子の数に収めるだけ。
+ * ignore には移動中の要素を渡す（同じ親の中での並べ替えで、自分を数えないため）。
+ */
+export function allowedInsertIndex(parent: Element, tag: string, desired: number, ignore?: Element): number | null {
+  const kids = Array.from(parent.children);
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  const def = defFor(parent);
+  const slot = slotIndex(def, tag);
+  if (!def?.childOrder || slot < 0) return clamp(desired, 0, kids.length);
+  const max = def.childOrder[slot]!.max;
+  if (max !== undefined) {
+    const count = kids.filter((c) => c !== ignore && slotIndex(def, c.localName) === slot).length;
+    if (count >= max) return null;
+  }
+  let lo = 0;
+  let hi = kids.length;
+  kids.forEach((c, i) => {
+    if (c === ignore) return;
+    const s = slotIndex(def, c.localName);
+    if (s < 0) return;
+    if (s < slot) lo = Math.max(lo, i + 1);
+    else if (s > slot && hi === kids.length) hi = Math.min(hi, i);
+  });
+  // 前の枠の要素が後ろの枠の要素より後ろにある（すでに順序が崩れている）ときは、後ろ寄りの方を優先する
+  if (hi < lo) hi = lo;
+  return clamp(desired, lo, hi);
+}
+
+/** ファイルに1つしか置けない、または親の中で個数の上限に達しているものは複製できない。 */
+const SINGLETONS = new Set([
+  'customUI', 'ribbon', 'tabs', 'qat', 'backstage', 'contextMenus', 'commands', 'officeMenu', 'contextualTabs',
+  'sharedControls', 'documentControls', 'firstColumn', 'secondColumn', 'primaryItem', 'topItems', 'bottomItems',
+]);
+
+export function canDuplicate(el: Element): boolean {
+  const parent = el.parentElement;
+  if (!parent || SINGLETONS.has(el.localName)) return false;
+  // 組み込みのタブ・グループ（idMso）を複製すると、同じ組み込みを2回指すことになる
+  if ((el.localName === 'tab' || el.localName === 'group' || el.localName === 'tabSet') && el.hasAttribute('idMso')) return false;
+  const index = Array.prototype.indexOf.call(parent.children, el) as number;
+  return allowedInsertIndex(parent, el.localName, index + 1) !== null;
+}
+
+/** 要素を移動する。移動先が自分の子孫か、置けない場所なら何もしない。位置はスキーマの順序に収める。 */
 export function moveElement(el: Element, newParent: Element, index: number): boolean {
   if (el === newParent || el.contains(newParent)) return false;
   if (!canContainEl(newParent, el.localName)) return false;
   // index は移動前の子要素の並びでの位置。その位置の要素の前に差し込む
-  const ref = newParent.children[index] ?? null;
-  if (ref !== el) newParent.insertBefore(el, ref);
+  const at = allowedInsertIndex(newParent, el.localName, index, el);
+  if (at === null) return false;
+  insertAt(newParent, el, at);
   return true;
 }
 
-/** 複製する。id は重ならないよう振り直す。 */
+/** 複製する。id は重ならないよう振り直す。複製できないもの（canDuplicate が false）は例外にする。 */
 export function duplicateElement(el: Element): Element {
+  if (!canDuplicate(el)) throw new Error(tr('<{tag}> はこれ以上複製できません', { tag: el.localName }));
   const doc = el.ownerDocument;
   const copy = el.cloneNode(true) as Element;
   const used = usedIds(doc);
@@ -328,8 +405,125 @@ export function duplicateElement(el: Element): Element {
     for (const c of Array.from(x.children)) reassign(c);
   };
   reassign(copy);
-  el.parentElement!.insertBefore(copy, el.nextElementSibling);
+  const parent = el.parentElement!;
+  const index = Array.prototype.indexOf.call(parent.children, el) as number;
+  insertAt(parent, copy, allowedInsertIndex(parent, el.localName, index + 1) ?? index + 1);
   return copy;
+}
+
+// ---- 選択に応じた挿入 ----
+
+/** リボンのグループに置けるコントロールか（グループがなければ作って入れる対象）。 */
+function isGroupControl(tag: string): boolean {
+  return canContain('group', tag);
+}
+
+function placeIn(parent: Element, el: Element, desired: number): Element | null {
+  const at = allowedInsertIndex(parent, el.localName, desired);
+  if (at === null) return null;
+  insertAt(parent, el, at);
+  return el;
+}
+
+/** 新しいタブ（ラベル付き）をタブ一覧の末尾に作る。 */
+function newTab(doc: Document): Element {
+  const tab = createElement(doc, 'tab');
+  ensureTabs(doc).append(tab);
+  return tab;
+}
+
+/** 自分で作ったタブ（id を持つもの）のうち最初のもの。 */
+function firstCustomTab(doc: Document): Element | null {
+  const ribbon = childElements(doc.documentElement).find((c) => c.localName === 'ribbon');
+  const tabs = ribbon && childElements(ribbon).find((c) => c.localName === 'tabs');
+  return (tabs && childElements(tabs).find((c) => c.localName === 'tab' && c.hasAttribute('id'))) ?? null;
+}
+
+/** 何も選んでいないか、customUI・ribbon・tabs のような「全体」を選んでいるか。 */
+function isRibbonTop(el: Element | null): boolean {
+  return el === null || el === el.ownerDocument.documentElement || el.localName === 'ribbon' || el.localName === 'tabs';
+}
+
+/** リボンのタブ（Backstage のタブではない）。 */
+function ribbonTabOf(el: Element | null): Element | null {
+  for (let cur = el; cur; cur = cur.parentElement) {
+    if (cur.localName === 'tab' && !inBackstage(cur)) return cur;
+  }
+  return null;
+}
+
+/**
+ * パレットなどから tag の要素を作り、選択中の要素の近くに置く。
+ * 選択中の要素かその祖先のうち、置けるところで最も近いものに入れる（選択中の要素の後ろ、またはその中の末尾）。
+ * 置ける場所がなければ、無理のない範囲で親を作る（コントロールならグループ、グループならタブなど）。
+ * store.edit の中で呼ぶこと。置けないときは理由を返す。
+ */
+export function insertSmart(doc: Document, selected: Element | null, tag: string): { el: Element } | { error: string } {
+  const root = doc.documentElement;
+  const is2007 = root.namespaceURI === NAMESPACES.office2007;
+  const ribbonDef = elements.get(tag);
+  if (ribbonDef?.since2010 && is2007 && !inBackstage(selected)) {
+    return { error: tr('{name} は2010以降の形式（customUI14）でのみ使えます', { name: titleOf(tag) }) };
+  }
+
+  if (tag === 'backstage') {
+    if (childElements(root).some((c) => c.localName === 'backstage')) return { error: tr('Backstage はすでにあります（1つのファイルに1つだけです）') };
+    const bs = createElement(doc, 'backstage');
+    return placeIn(root, bs, root.children.length) ? { el: bs } : { error: tr('Backstage はすでにあります（1つのファイルに1つだけです）') };
+  }
+
+  // 1. 選択中の要素から上にたどり、置ける場所を探す
+  let full: Element | null = null;
+  let after: Element | null = null;
+  for (let cur = selected; cur; after = cur, cur = cur.parentElement) {
+    if (!canContainEl(cur, tag)) continue;
+    const desired = after ? Array.prototype.indexOf.call(cur.children, after) + 1 : cur.children.length;
+    // 置く場所に合った定義で作る（Backstage の中かどうかで中身が変わるため）
+    const el = placeIn(cur, createElement(doc, tag, cur), desired);
+    if (el) return { el };
+    full ??= cur;
+  }
+  if (full) return { error: tr('<{parent}> の中に {name} はこれ以上置けません', { parent: full.localName, name: titleOf(tag) }) };
+  if (inBackstage(selected)) return { error: tr('選んでいる場所には {name} を置けません。置ける場所を選んでください', { name: titleOf(tag) }) };
+
+  // 2. 置ける場所がないので、必要な親を作る
+  if (tag === 'tab') {
+    const el = createElement(doc, 'tab');
+    ensureTabs(doc).append(el);
+    return { el };
+  }
+  if (tag === 'contextMenu') {
+    const el = createElement(doc, 'contextMenu');
+    ensureContextMenus(doc).append(el);
+    return { el };
+  }
+  if (tag === 'group') {
+    // 何も選んでいない（またはタブの外を選んでいる）ときは、最初の自作タブ、なければ新しいタブに入れる
+    if (!isRibbonTop(selected)) return { error: tr('グループはタブの中に置きます。タブを選んでください') };
+    const tab = firstCustomTab(doc) ?? newTab(doc);
+    const el = createElement(doc, 'group', tab);
+    tab.append(el);
+    return { el };
+  }
+  if (isGroupControl(tag)) {
+    // タブを選んでいれば、そのタブに新しいグループを作って入れる。何も選んでいなければ最初の自作タブ（なければ新しいタブ）に作る
+    const selectedTab = ribbonTabOf(selected);
+    if (!selectedTab && !isRibbonTop(selected)) {
+      return { error: tr('{name}はグループの中に置きます。グループかタブを選んでください', { name: titleOf(tag) }) };
+    }
+    const tab = selectedTab ?? firstCustomTab(doc) ?? newTab(doc);
+    const group = createElement(doc, 'group', tab);
+    tab.append(group);
+    const el = placeIn(group, createElement(doc, tag, group), group.children.length);
+    return el ? { el } : { error: tr('{name}はグループの中に置きます。グループかタブを選んでください', { name: titleOf(tag) }) };
+  }
+  // customUI や ribbon の直下に置くもの（qat、commands、contextMenus など）
+  for (const parent of [root, ...(canContain('ribbon', tag) ? [ensureChild(root, 'ribbon')] : [])]) {
+    if (!canContainEl(parent, tag)) continue;
+    const el = placeIn(parent, createElement(doc, tag, parent), parent.children.length);
+    return el ? { el } : { error: tr('<{parent}> の中に {name} はこれ以上置けません', { parent: parent.localName, name: titleOf(tag) }) };
+  }
+  return { error: tr('選んでいる場所には {name} を置けません。置ける場所を選んでください', { name: titleOf(tag) }) };
 }
 
 /** 属性を設定する。null または空文字なら削除する。 */

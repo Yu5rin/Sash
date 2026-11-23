@@ -64,4 +64,88 @@ public class IconLibraryTests
 
         Assert.Equal(["ok"], lib.List().Select(i => i.Id));
     }
+
+    [Fact]
+    public void 長い名前を2回保存しても読み書きと削除ができる()
+    {
+        using var book = new TestWorkbook();
+        var lib = new IconLibrary(Path.Combine(book.BackupRoot, "icons"));
+        var name = new string('あ', 70);
+
+        var a = lib.Add(name, [], Png, [9], "a.png", "image/png", null);
+        var b = lib.Add(name, [], Png, null, null, null, null);
+        var c = lib.Add(name, [], Png, null, null, null, null);
+
+        Assert.Equal(IconLibrary.MaxSlugLength, a.Id.Length);
+        Assert.EndsWith("-2", b.Id, StringComparison.Ordinal);
+        Assert.EndsWith("-3", c.Id, StringComparison.Ordinal);
+        Assert.True(b.Id.Length <= IconLibrary.MaxSlugLength);
+        Assert.Equal(3, lib.List().Count);
+        Assert.Equal(Png, lib.ReadPng(b.Id));
+        Assert.Equal(new byte[] { 9 }, lib.ReadSource(a.Id));
+        lib.Delete(b.Id);
+        Assert.Equal(2, lib.List().Count);
+    }
+
+    [Fact]
+    public void 切り詰めた末尾の空白や点は落とす()
+    {
+        using var book = new TestWorkbook();
+        var lib = new IconLibrary(Path.Combine(book.BackupRoot, "icons"));
+        // 60 文字目のあたりに空白と点が来る名前
+        var name = new string('a', 58) + " .b" + new string('c', 10);
+
+        var a = lib.Add(name, [], Png, null, null, null, null);
+        var b = lib.Add(name, [], Png, null, null, null, null);
+
+        Assert.Equal(new string('a', 58), a.Id);
+        Assert.Equal(new string('a', 58) + "-2", b.Id);
+        Assert.Equal(Png, lib.ReadPng(a.Id));
+        Assert.Equal(Png, lib.ReadPng(b.Id));
+
+        // 連番で切り詰めた位置に空白が来る場合
+        var spaced = new string('d', 57) + " " + new string('e', 10);
+        lib.Add(spaced, [], Png, null, null, null, null);
+        var d2 = lib.Add(spaced, [], Png, null, null, null, null);
+        Assert.Equal(new string('d', 57) + "-2", d2.Id);
+        Assert.Equal(Png, lib.ReadPng(d2.Id));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("a..b")]
+    [InlineData("../x")]
+    [InlineData(@"a\b")]
+    [InlineData("a/b")]
+    [InlineData(" a")]
+    [InlineData("a ")]
+    [InlineData(".a")]
+    [InlineData("a.")]
+    [InlineData("a:b")]
+    public void 危ないidは受け付けない(string id) => Assert.False(IconLibrary.IsValidId(id));
+
+    [Fact]
+    public void idの長さには上限がある()
+    {
+        Assert.True(IconLibrary.IsValidId(new string('a', IconLibrary.MaxIdLength)));
+        Assert.False(IconLibrary.IsValidId(new string('a', IconLibrary.MaxIdLength + 1)));
+        Assert.True(IconLibrary.IsValidId("集計_ボタン-2"));
+    }
+
+    [Fact]
+    public void Windowsの予約名はidにしない() => Assert.Equal("con_", IconLibrary.Slug("CON").ToLowerInvariant());
+
+    [Fact]
+    public void 目録のidがパスとして危なければ一覧に出さない()
+    {
+        using var book = new TestWorkbook();
+        var root = Path.Combine(book.BackupRoot, "icons");
+        var lib = new IconLibrary(root);
+        lib.Add("ok", [], Png, null, null, null, null);
+        File.WriteAllText(Path.Combine(root, "evil.json"), "{\"id\":\"../ok\",\"name\":\"n\"}");
+
+        Assert.Equal(["ok"], lib.List().Select(i => i.Id));
+    }
 }

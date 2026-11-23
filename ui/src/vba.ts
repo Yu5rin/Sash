@@ -2,7 +2,7 @@
 // VBA のコードはホスト経由で VBE から受け取り、ここで Sub の宣言を解析して XML 側と突き合わせる。
 
 import { allElements, pathOf, type Path } from './model';
-import { attributes, callbackSignature } from './schema';
+import { attributes, callbackSignature, isVbaIdentifier, NAMESPACES } from './schema';
 import { t } from './i18n';
 
 export interface VbaModule {
@@ -42,6 +42,25 @@ export interface CallbackStatus {
   procedure?: VbaProcedure;
   /** 不一致の理由。 */
   reason?: string;
+  /** 文書の名前空間（getContent の雛形で、パーツの形式に合う名前空間を書くため）。 */
+  namespace?: string;
+}
+
+/** VBA の識別子に使える1文字（日本語などの文字も含む）。 */
+const ID_CHAR = String.raw`[\p{L}\p{N}_]`;
+const ID_WORD = String.raw`[\p{L}_][\p{L}\p{N}_]*`;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** コールバック属性の値（"Module1.Name" や "Book.xlsm!Name" を含む）から、VBA の Sub 名の部分だけを取り出す。 */
+export function bareCallbackName(name: string): string {
+  return name.replace(/^.*[.!]/, '');
+}
+
+/** コールバック属性の値として使えるか（最後の名前が VBA の識別子であること）。インスペクタの入力チェックにも使う。 */
+export function isCallbackName(name: string): boolean {
+  const bare = bareCallbackName(name);
+  const qualifier = name.slice(0, name.length - bare.length);
+  return isVbaIdentifier(bare) && (qualifier === '' || (qualifier.length > 1 && !/["\r\n]/.test(qualifier)));
 }
 
 // ---- 解析 ----
@@ -56,7 +75,7 @@ export function parseProcedures(module: VbaModule): VbaProcedure[] {
     while (/\s_\s*$/.test(text) && i + 1 < lines.length) {
       text = text.replace(/\s_\s*$/, ' ') + lines[++i]!.trim();
     }
-    const m = /^\s*(?:(Public|Private|Friend)\s+)?(?:Static\s+)?(?:Sub|Function)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)/i.exec(stripComment(text));
+    const m = new RegExp(String.raw`^\s*(?:(Public|Private|Friend)\s+)?(?:Static\s+)?(?:Sub|Function)\s+(${ID_WORD})\s*\((.*)\)`, 'iu').exec(stripComment(text));
     if (m) {
       out.push({ module: module.name, name: m[2]!, params: m[3]!.trim(), line: start + 1, declaration: lines[start]!, isPrivate: (m[1] ?? '').toLowerCase() === 'private' });
     }
@@ -90,10 +109,22 @@ export function parseParams(params: string): Param[] {
     const rest = p.replace(/^Optional\s+/i, '');
     const byVal = /^ByVal\s+/i.test(rest);
     const body = rest.replace(/^(ByVal|ByRef)\s+/i, '');
-    const m = /^([A-Za-z_][A-Za-z0-9_]*)(\(\))?(?:\s+As\s+([A-Za-z_][\w.]*))?/i.exec(body);
+    const m = new RegExp(String.raw`^(${ID_WORD})(\(\))?(?:\s+As\s+([\p{L}_][\p{L}\p{N}_.]*))?`, 'iu').exec(body);
     const type = (m?.[3] ?? 'Variant').replace(/^Office\./i, '');
     return { name: m?.[1] ?? body, type: type.toLowerCase(), byVal, optional };
   });
+}
+
+/**
+ * 型が実用上かみ合うか。番号の引数（index As Integer）は Long / LongPtr でも受け取れ、
+ * IRibbonControl / IRibbonUI は Object でも受け取れるので、どちらも一致とみなす。
+ */
+const NUMERIC = new Set(['integer', 'long', 'longptr', 'longlong', 'byte', 'single', 'double', 'currency']);
+function compatibleType(expected: string, actual: string): boolean {
+  if (expected === 'variant' || actual === 'variant' || expected === actual) return true;
+  if (NUMERIC.has(expected) && NUMERIC.has(actual)) return true;
+  if ((expected === 'iribboncontrol' || expected === 'iribbonui') && actual === 'object') return true;
+  return false;
 }
 
 /** 引数が XML 側の期待と合っているか。合わなければ理由を返す。 */
@@ -105,7 +136,7 @@ export function compareSignature(expected: string, actual: string): string | nul
     const ep = e[i]!;
     const ap = a[i]!;
     // 型を書いていない（Variant）引数は、どの型でも受け取れるので一致とみなす
-    if (ep.type !== 'variant' && ap.type !== 'variant' && ep.type !== ap.type) {
+    if (!compatibleType(ep.type, ap.type)) {
       return t('{n}番目の引数の型が違います（必要：{expected}、実際：{actual}）', { n: i + 1, expected: ep.type, actual: ap.type });
     }
     // 値を返す引数（ByRef returnedVal など）を ByVal にすると、値が Excel に戻らない
@@ -151,25 +182,31 @@ export function matchCallbacks(doc: Document, modules: VbaModule[] | null): Call
     if (!byName.has(key) || mod?.type === 1) byName.set(key, p);
   }
 
+  const namespace = doc.documentElement.namespaceURI ?? undefined;
   const result: CallbackStatus[] = [];
   for (const [name, list] of uses) {
     // "Module1.Name" や "Book.xlsm!Name" のような指定は、最後の名前で照合する
-    const bare = name.replace(/^.*[.!]/, '');
+    const bare = bareCallbackName(name);
     const expected = callbackSignature(list[0]!.attr, list[0]!.tag);
-    const proc = byName.get(bare.toLowerCase());
-    if (!modules) {
-      result.push({ name, state: 'missing', uses: list, expected });
+    // 1つの Sub を、引数の違うコントロールで共有している（button の onAction と toggleButton の onAction など）。
+    // どちらかは必ず実行時エラーになるので、VBA を読めなくても不一致として知らせる
+    const conflict = list.find((u) => compareSignature(expected, callbackSignature(u.attr, u.tag)) !== null);
+    if (conflict) {
+      const kinds = [...new Set(list.map((u) => `${u.tag}.${u.attr}`))].join(t('、'));
+      const reason = t('引数の違うコントロール（{kinds}）で同じSubを共有しています。Subを分けてください', { kinds });
+      result.push({ name, state: 'mismatch', uses: list, expected, procedure: byName.get(bare.toLowerCase()), reason, namespace });
       continue;
     }
-    if (!proc) {
-      result.push({ name, state: 'missing', uses: list, expected });
+    const proc = byName.get(bare.toLowerCase());
+    if (!modules || !proc) {
+      result.push({ name, state: 'missing', uses: list, expected, namespace });
       continue;
     }
     const reason = compareSignature(expected, proc.params) ?? (proc.isPrivate ? t('Private の Sub はリボンから呼べません') : null);
-    result.push({ name, state: reason ? 'mismatch' : 'implemented', uses: list, expected, procedure: proc, reason: reason ?? undefined });
+    result.push({ name, state: reason ? 'mismatch' : 'implemented', uses: list, expected, procedure: proc, reason: reason ?? undefined, namespace });
   }
 
-  const usedNames = new Set([...uses.keys()].map((n) => n.replace(/^.*[.!]/, '').toLowerCase()));
+  const usedNames = new Set([...uses.keys()].map((n) => bareCallbackName(n).toLowerCase()));
   for (const p of procs) {
     if (looksLikeCallback(p) && !usedNames.has(p.name.toLowerCase())) {
       result.push({ name: p.name, state: 'unused', uses: [], expected: '', procedure: p });
@@ -193,29 +230,57 @@ export interface NamingRule {
 
 export const DEFAULT_NAMING: NamingRule = { pattern: 'Ribbon_{id}_{attr}', shared: false, sharedPattern: 'Ribbon_{attr}' };
 
-export function callbackName(rule: NamingRule, id: string, attr: string, tag: string): string {
-  if (tag === 'customUI') return `Ribbon_${attr}`;
-  const raw = (rule.shared ? rule.sharedPattern : rule.pattern).replace(/\{id\}/g, id).replace(/\{attr\}/g, attr);
-  return raw.replace(/[^A-Za-z0-9_]/g, '_');
+/**
+ * 共有 Sub の名前に付ける、引数の種類の印。同じ属性でも要素によって引数が違う（button と toggleButton の onAction など）ので、
+ * 標準（button のとき）と違う引数なら、追加の引数名から印を作る（例：pressed → Pressed、id と index → IdIndex）。
+ */
+export function signatureSuffix(attr: string, tag: string): string {
+  const sig = callbackSignature(attr, tag);
+  if (sig === callbackSignature(attr, 'button')) return '';
+  return parseParams(sig)
+    .filter((p) => p.type !== 'iribboncontrol')
+    .map((p) => p.name[0]!.toUpperCase() + p.name.slice(1))
+    .join('');
 }
 
-/** 戻り値を返すコールバックの、型に合った既定値。 */
-function defaultReturn(attr: string): string | null {
+/**
+ * 命名規則からコールバック名を作る。VBA の識別子に使えない文字（- や . など）だけを _ にし、日本語などの文字は残す。
+ * taken を渡すと、その名前（大文字小文字は区別しない）と重ならないよう末尾に番号を付ける
+ * （btn-a と btn.a のように、置き換えると同じ名前になる id を区別するため）。共有 Sub のときは重ねるのが目的なので番号を付けない。
+ */
+export function callbackName(rule: NamingRule, id: string, attr: string, tag: string, taken?: ReadonlySet<string>): string {
+  if (tag === 'customUI') return `Ribbon_${attr}`;
+  let raw = (rule.shared ? rule.sharedPattern : rule.pattern).replace(/\{id\}/g, id).replace(/\{attr\}/g, attr);
+  if (rule.shared) {
+    const suffix = signatureSuffix(attr, tag);
+    if (suffix) raw += `_${suffix}`;
+  }
+  let name = raw.replace(/[^\p{L}\p{N}_]/gu, '_');
+  // VBA の名前は文字で始める必要がある
+  if (!/^\p{L}/u.test(name)) name = `Ribbon_${name}`;
+  if (rule.shared || !taken) return name;
+  const lower = new Set([...taken].map((n) => n.toLowerCase()));
+  if (!lower.has(name.toLowerCase())) return name;
+  for (let n = 2; ; n++) if (!lower.has(`${name}${n}`.toLowerCase())) return `${name}${n}`;
+}
+
+/** 戻り値を返すコールバックの、型に合った既定値。namespace は getContent で返す XML の名前空間（パーツの形式に合わせる）。 */
+function defaultReturn(attr: string, namespace: string = NAMESPACES.office2010): string | null {
   if (/^get(Enabled|Visible|Pressed|ShowLabel|ShowImage)$/.test(attr)) return 'True';
   if (attr === 'getItemCount' || attr === 'getSelectedItemIndex' || attr === 'getItemWidth' || attr === 'getItemHeight') return '0';
   if (attr === 'getSize') return 'RibbonControlSize.RibbonControlSizeRegular';
   if (attr === 'getImage' || attr === 'getItemImage') return null;
-  if (attr === 'getContent') return '"<menu xmlns=""http://schemas.microsoft.com/office/2009/07/customui""></menu>"';
+  if (attr === 'getContent') return `"<menu xmlns=""${namespace}""></menu>"`;
   if (attr.startsWith('get')) return '""';
   return null;
 }
 
 /** VBA の雛形。共有 Sub のときは control.Id で振り分ける Select Case を入れる。 */
-export function generateStub(status: Pick<CallbackStatus, 'name' | 'uses' | 'expected'>): string {
+export function generateStub(status: Pick<CallbackStatus, 'name' | 'uses' | 'expected' | 'namespace'>): string {
   const first = status.uses[0]!;
   const sig = status.expected || callbackSignature(first.attr, first.tag);
   const outParam = parseParams(sig).find((_p, i) => i > 0 && sig.split(',')[i]!.includes('ByRef'));
-  const ret = defaultReturn(first.attr);
+  const ret = defaultReturn(first.attr, status.namespace);
   const body: string[] = [];
   const ids = [...new Set(status.uses.map((u) => u.id))];
   if (first.attr === 'onLoad') {
@@ -238,8 +303,9 @@ export function generateStub(status: Pick<CallbackStatus, 'name' | 'uses' | 'exp
 
 /** 宣言行の Sub 名だけを置き換える（仕様書 §8.2：宣言行だけを書き換える）。 */
 export function renameDeclaration(declaration: string, oldName: string, newName: string): string {
-  const re = new RegExp(`^(\\s*(?:(?:Public|Private|Friend)\\s+)?(?:Static\\s+)?(?:Sub|Function)\\s+)${oldName}(\\s*\\()`, 'i');
-  return declaration.replace(re, `$1${newName}$2`);
+  // 名前は正規表現の特殊文字を含みうるのでエスケープし、日本語の名前も扱えるよう u フラグで照合する
+  const re = new RegExp(String.raw`^(\s*(?:(?:Public|Private|Friend)\s+)?(?:Static\s+)?(?:Sub|Function)\s+)${escapeRe(oldName)}(?!${ID_CHAR})(\s*\()`, 'iu');
+  return declaration.replace(re, (_m, head: string, tail: string) => `${head}${newName}${tail}`);
 }
 
 // ---- onLoad と Invalidate の雛形（仕様書 §8.3） ----
@@ -251,6 +317,7 @@ export function renameDeclaration(declaration: string, oldName: string, newName:
 export const RIBBON_HOLDER_MODULE = [
   "' Sash が生成したリボン用の共通コード。",
   "' onLoad で受け取った IRibbonUI を保持し、エラーで変数が消えても復元できるようにする。",
+  "' ※ポインタからの復元は定番の手法だが、Sash としては実機の Excel（32bit / 64bit）での動作をまだ確かめていない。",
   'Option Explicit',
   '',
   '#If VBA7 Then',
@@ -267,10 +334,11 @@ export const RIBBON_HOLDER_MODULE = [
   '    On Error Resume Next',
   '    ThisWorkbook.Names(POINTER_NAME).Delete',
   '    On Error GoTo 0',
+  "    ' 先頭に = を付けて数式（数値）として登録する。= がないと文字列の定数になり、読み戻すときに引用符が混じる",
   '#If VBA7 Then',
-  '    ThisWorkbook.Names.Add Name:=POINTER_NAME, RefersTo:=CStr(CLngPtr(ObjPtr(ribbon))), Visible:=False',
+  '    ThisWorkbook.Names.Add Name:=POINTER_NAME, RefersTo:="=" & CStr(CLngPtr(ObjPtr(ribbon))), Visible:=False',
   '#Else',
-  '    ThisWorkbook.Names.Add Name:=POINTER_NAME, RefersTo:=CStr(CLng(ObjPtr(ribbon))), Visible:=False',
+  '    ThisWorkbook.Names.Add Name:=POINTER_NAME, RefersTo:="=" & CStr(CLng(ObjPtr(ribbon))), Visible:=False',
   '#End If',
   'End Sub',
   '',
@@ -286,16 +354,18 @@ export const RIBBON_HOLDER_MODULE = [
   '    On Error GoTo 0',
   '    If Len(text) = 0 Then Exit Function',
   '#If VBA7 Then',
-  '    Dim ptr As LongPtr',
+  '    Dim ptr As LongPtr, zero As LongPtr',
   '    ptr = CLngPtr(text)',
   '#Else',
-  '    Dim ptr As Long',
+  '    Dim ptr As Long, zero As Long',
   '    ptr = CLng(text)',
   '#End If',
   '    Dim obj As Object',
   '    CopyMemory obj, ptr, LenB(ptr)',
   '    Set gRibbon = obj',
-  '    CopyMemory obj, 0&, LenB(ptr)',
+  "    ' 参照カウントを増やさずに作った参照なので、解放される前にゼロで消す。",
+  "    ' 64bit では 0& だと 4 バイトしかなく、残りの 4 バイトに余計な値を読むので、ポインタと同じ型の変数を使う",
+  '    CopyMemory obj, zero, LenB(ptr)',
   '    Set GetRibbon = gRibbon',
   'End Function',
   '',

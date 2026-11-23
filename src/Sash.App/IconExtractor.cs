@@ -28,26 +28,33 @@ internal static partial class IconExtractor
 
         try
         {
-            var names = new List<IntPtr>();
+            // 文字列の名前を指すポインターは、コールバックの中でしか有効でない（EnumResourceNames が使い終わると解放する）。
+            // そのため、コールバックの中で文字列を写し取っておき、後で FindResource には文字列として渡す
+            var names = new List<(IntPtr Id, string? Name)>();
             EnumResourceNames(module, RtGroupIcon, (_, _, name, _) =>
             {
-                names.Add(name);
+                names.Add(IsIntResource(name) ? (name, null) : (IntPtr.Zero, Marshal.PtrToStringUni(name)));
                 return names.Count < MaxIcons;
             }, IntPtr.Zero);
 
             var result = new List<(string, byte[])>();
-            foreach (var name in names)
+            foreach (var (id, name) in names)
             {
-                var group = ReadResource(module, name, RtGroupIcon);
+                if (id == IntPtr.Zero && name is null)
+                {
+                    continue;
+                }
+
+                var group = name is null ? ReadResource(module, id, RtGroupIcon) : ReadResource(module, name, RtGroupIcon);
                 if (group is null)
                 {
                     continue;
                 }
 
-                var ico = IcoBuilder.FromGroup(group, id => ReadResource(module, id, RtIcon));
+                var ico = IcoBuilder.FromGroup(group, iconId => ReadResource(module, iconId, RtIcon));
                 if (ico is not null)
                 {
-                    result.Add((IsIntResource(name) ? $"#{name.ToInt64()}" : Marshal.PtrToStringUni(name) ?? "icon", ico));
+                    result.Add((name ?? $"#{id.ToInt64()}", ico));
                 }
             }
 
@@ -61,9 +68,14 @@ internal static partial class IconExtractor
 
     private static bool IsIntResource(IntPtr p) => (p.ToInt64() >> 16) == 0;
 
-    private static byte[]? ReadResource(IntPtr module, IntPtr name, IntPtr type)
+    private static byte[]? ReadResource(IntPtr module, IntPtr name, IntPtr type) =>
+        ReadFound(module, FindResource(module, name, type));
+
+    private static byte[]? ReadResource(IntPtr module, string name, IntPtr type) =>
+        ReadFound(module, FindResource(module, name, type));
+
+    private static byte[]? ReadFound(IntPtr module, IntPtr res)
     {
-        var res = FindResource(module, name, type);
         if (res == IntPtr.Zero)
         {
             return null;
@@ -93,8 +105,11 @@ internal static partial class IconExtractor
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern bool EnumResourceNames(IntPtr module, IntPtr type, EnumResNameProc callback, IntPtr param);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindResourceW")]
     private static extern IntPtr FindResource(IntPtr module, IntPtr name, IntPtr type);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "FindResourceW")]
+    private static extern IntPtr FindResource(IntPtr module, string name, IntPtr type);
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr LoadResource(IntPtr module, IntPtr resInfo);

@@ -1,7 +1,7 @@
 // 検証（Lint）。スキーマ定義に基づく構造チェックと、仕様書 §5.6 の独自ルールを行う。
 
 import { allElements, pathOf, type Path } from './model';
-import { attributes, defFor, ID_PATTERN } from './schema';
+import { attributes, defFor, isVbaIdentifier, isXmlId, NAMESPACES, slotIndex, type ElementDef } from './schema';
 import { t } from './i18n';
 
 export type Severity = 'error' | 'warning' | 'info';
@@ -24,10 +24,8 @@ export interface LintContext {
   missingImageMso: ReadonlySet<string>;
 }
 
-export const NAMESPACES = {
-  office2007: 'http://schemas.microsoft.com/office/2006/01/customui',
-  office2010: 'http://schemas.microsoft.com/office/2009/07/customui',
-} as const;
+// 名前空間の定義は model.ts からも使うので schema.ts に置き、ここからも従来どおり取り出せるようにする
+export { NAMESPACES };
 
 /** グループ内のコントロールがこれを超えると、狭い画面で畳まれやすい。 */
 const MANY_CONTROLS = 12;
@@ -50,15 +48,24 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
   const ids = new Map<string, Element[]>();
   const idQs = new Map<string, Element[]>();
   const builtInContainers = new Map<string, Element[]>();
+  // loadImage があると、image の値は VBA に渡す任意の文字列になる（ファイル内の画像とは限らない）
+  const imageIsFreeText = root.hasAttribute('loadImage');
 
   const visit = (el: Element, opaque: boolean) => {
     const def = defFor(el);
     if (opaque) return;
+    // 接頭辞つき（<mso:tab>）でも名前空間が同じなら正しい。違う名前空間の要素は Office が無視するか、読み込みに失敗する
+    if (el !== root && el.namespaceURI !== root.namespaceURI) {
+      add('error', el, t('<{tag}> の名前空間が customUI と違います（xmlns="{ns}"）', { tag: el.localName, ns: el.namespaceURI ?? '' }));
+      return;
+    }
     if (!def) {
       add('error', el, t('不明な要素 <{tag}> です', { tag: el.localName }));
       return;
     }
     if (def.since2010 && ctx.version === 'office2007') add('error', el, t('<{tag}> は2010以降の形式でのみ使えます', { tag: el.localName }));
+    if (def.only2007 && ctx.version === 'office2010') add('error', el, t('<{tag}> は2007形式（customUI）でのみ使えます', { tag: el.localName }));
+    lintChildOrder(el, def, add);
 
     const parent = el.parentElement;
     if (parent) {
@@ -88,12 +95,14 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
           break;
         case 'int':
           if (!/^\d+$/.test(v)) add('error', el, t('{attr} は整数で指定してください', { attr: name }), name);
+          // maxLength は 1〜1024（XSD の ST_StringLength）
+          else if (name === 'maxLength' && (Number(v) < 1 || Number(v) > 1024)) add('error', el, t('{attr} は {min}〜{max} の整数で指定してください', { attr: name, min: 1, max: 1024 }), name);
           break;
         case 'id':
-          if (!ID_PATTERN.test(v)) add('error', el, t('id「{value}」は英字かアンダースコアで始め、英数字と _ . - だけを使ってください', { value: v }), name);
+          if (!isXmlId(v)) add('error', el, t('id「{value}」は文字かアンダースコアで始め、文字・数字と _ . - だけを使ってください', { value: v }), name);
           break;
         case 'callback':
-          if (!/^[A-Za-z_][A-Za-z0-9_.!]*$/.test(v)) add('error', el, t('コールバック名「{value}」はVBAのSub名として使えません', { value: v }), name);
+          if (!isCallbackValue(v)) add('error', el, t('コールバック名「{value}」はVBAのSub名として使えません', { value: v }), name);
           break;
         case 'idMso':
           if (ctx.knownIdMso.size > 0 && v && !ctx.knownIdMso.has(v)) add('warning', el, t('idMso「{value}」はExcelのコマンド一覧にありません', { value: v }), name);
@@ -102,9 +111,11 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
           if (ctx.missingImageMso.has(v)) add('warning', el, t('imageMso「{value}」はExcelに存在しません', { value: v }), name);
           break;
         case 'image':
-          if (!ctx.imageIds.has(v)) add('error', el, t('画像「{value}」がファイル内にありません', { value: v }), name);
+          if (!imageIsFreeText && !ctx.imageIds.has(v)) add('error', el, t('画像「{value}」がファイル内にありません', { value: v }), name);
           break;
         case 'string':
+          // keytip は 1〜3 文字（XSD の ST_Keytip）。4文字以上だと読み込みに失敗する
+          if (name === 'keytip' && [...v].length > 3) add('error', el, t('keytip は3文字以内で指定してください'), name);
           break;
       }
     }
@@ -160,22 +171,70 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
   return problems.sort((x, y) => order[x.severity] - order[y.severity]);
 }
 
-/** keytip の重複。タブ同士と、同じタブの中のコントロール同士で調べる。 */
-function lintKeytips(doc: Document, add: (s: Severity, el: Element, m: string, attr?: string) => void): void {
-  const check = (els: Element[]) => {
-    const seen = new Map<string, Element[]>();
-    for (const el of els) {
-      const k = el.getAttribute('keytip')?.toUpperCase();
-      if (k) seen.set(k, [...(seen.get(k) ?? []), el]);
+/** 子要素の並び順と個数（XSD の sequence と maxOccurs / minOccurs）。 */
+function lintChildOrder(el: Element, def: ElementDef, add: (s: Severity, el: Element, m: string, attr?: string) => void): void {
+  const slots = def.childOrder;
+  if (!slots) return;
+  const counts = slots.map(() => 0);
+  let maxSlot = -1;
+  let maxSlotEl: Element | null = null;
+  for (const c of Array.from(el.children)) {
+    const i = slotIndex(def, c.localName);
+    if (i < 0) continue;
+    counts[i]!++;
+    const max = slots[i]!.max;
+    if (max !== undefined && counts[i] === max + 1) {
+      add('error', c, t('<{parent}> の中に置ける <{child}> は {n} 個までです', { parent: el.localName, child: slots[i]!.tags.join(' / '), n: max }));
     }
+    if (i < maxSlot && maxSlotEl) {
+      add('error', c, t('<{child}> は <{other}> より前に置いてください', { child: c.localName, other: maxSlotEl.localName }));
+    } else if (i > maxSlot) {
+      maxSlot = i;
+      maxSlotEl = c;
+    }
+  }
+  slots.forEach((slot, i) => {
+    if ((slot.min ?? 0) > counts[i]!) add('error', el, t('<{parent}> には <{child}> が必要です', { parent: el.localName, child: slot.tags.join(' / ') }));
+  });
+}
+
+/** コールバック名として使えるか。"Module1.Name" や "Book.xlsm!Name" は、最後の名前が VBA の識別子ならよい。 */
+function isCallbackValue(v: string): boolean {
+  const m = /^(.*[.!])?([^.!]*)$/.exec(v);
+  if (!m || !isVbaIdentifier(m[2]!)) return false;
+  // 修飾部分（モジュール名・ブック名）は空白を含むブック名もあるので、空でないことと引用符がないことだけを見る
+  return m[1] === undefined || (m[1].length > 1 && !/["\r\n]/.test(m[1]));
+}
+
+/**
+ * keytip の重複。Alt キーを押したときに同時に出るもの同士だけで調べる。
+ * リボンのタブ同士、タブごとの中身、メニューごとの中身、Backstage のタブ同士と、Backstage のタブごとの中身を、それぞれ別に扱う。
+ */
+const KEYTIP_SCOPES = new Set(['tab', 'menu', 'contextMenu', 'qat', 'backstage', 'officeMenu', 'dynamicMenu']);
+
+function keytipScope(el: Element): Element | null {
+  // タブ自身は、タブの一覧（リボンなら ribbon、Backstage なら backstage）の中で重ならなければよい
+  if (el.localName === 'tab') {
+    for (let cur = el.parentElement; cur; cur = cur.parentElement) if (cur.localName === 'ribbon' || cur.localName === 'backstage') return cur;
+    return null;
+  }
+  for (let cur = el.parentElement; cur; cur = cur.parentElement) if (KEYTIP_SCOPES.has(cur.localName)) return cur;
+  return null;
+}
+
+function lintKeytips(doc: Document, add: (s: Severity, el: Element, m: string, attr?: string) => void): void {
+  const scopes = new Map<Element | null, Map<string, Element[]>>();
+  for (const el of allElements(doc)) {
+    const k = el.getAttribute('keytip')?.toUpperCase();
+    if (!k) continue;
+    const scope = keytipScope(el);
+    let seen = scopes.get(scope);
+    if (!seen) scopes.set(scope, (seen = new Map()));
+    seen.set(k, [...(seen.get(k) ?? []), el]);
+  }
+  for (const seen of scopes.values()) {
     for (const [k, list] of seen) {
       if (list.length > 1) for (const el of list) add('warning', el, t('keytip「{value}」が重複しています', { value: k }), 'keytip');
     }
-  };
-  const tabs = allElements(doc).filter((el) => el.localName === 'tab');
-  check(tabs);
-  for (const tab of tabs) {
-    const inner = allElements(doc).filter((el) => el !== tab && tab.contains(el));
-    check(inner);
   }
 }

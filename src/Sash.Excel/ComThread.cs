@@ -99,67 +99,70 @@ public sealed class ComThread : IDisposable
             _queue.Dispose();
         }
     }
+}
 
-    /// <summary>
-    /// OLE のメッセージ フィルター。Excel が忙しいとき（セルの編集中、ダイアログの表示中など）の呼び出しは
-    /// 既定では即座に RPC_E_CALL_REJECTED（0x80010001）で失敗する。ここで「少し待ってやり直す」と答え、
-    /// 約 10 秒まで待つ。STA スレッドごとに登録が必要なので、COM 専用スレッドの開始時に登録する。
-    /// </summary>
-    private sealed class MessageFilter : IOleMessageFilter
+/// <summary>
+/// OLE のメッセージ フィルター。Excel が忙しいとき（セルの編集中、ダイアログの表示中など）の呼び出しは
+/// 既定では即座に RPC_E_CALL_REJECTED（0x80010001）で失敗する。ここで「少し待ってやり直す」と答え、
+/// 約 10 秒まで待つ。STA スレッドごとに登録が必要なので、COM 専用スレッドの開始時に登録する。
+/// </summary>
+[SupportedOSPlatform("windows")]
+[ComVisible(true)]
+internal sealed class MessageFilter : IOleMessageFilter
+{
+    private const int ServerCallIsHandled = 0;
+    private const int PendingMsgWaitDefProcess = 2;
+    private const int RetryIntervalMs = 100;
+    private const int GiveUpAfterMs = 10_000;
+
+    public static bool Register()
     {
-        private const int ServerCallIsHandled = 0;
-        private const int PendingMsgWaitDefProcess = 2;
-        private const int RetryIntervalMs = 100;
-        private const int GiveUpAfterMs = 10_000;
-
-        public static bool Register()
+        try
         {
-            try
-            {
-                return CoRegisterMessageFilter(new MessageFilter(), out _) == 0;
-            }
-            catch (Exception ex) when (ex is COMException or EntryPointNotFoundException or DllNotFoundException)
-            {
-                // 登録できなくても、忙しいときにすぐ失敗するだけで動作はする
-                return false;
-            }
+            return CoRegisterMessageFilter(new MessageFilter(), out _) == 0;
         }
-
-        public static void Revoke()
+        catch (Exception ex) when (ex is COMException or EntryPointNotFoundException or DllNotFoundException)
         {
-            try
-            {
-                CoRegisterMessageFilter(null, out _);
-            }
-            catch (Exception ex) when (ex is COMException or EntryPointNotFoundException or DllNotFoundException)
-            {
-            }
+            // 登録できなくても、忙しいときにすぐ失敗するだけで動作はする
+            return false;
         }
-
-        public int HandleInComingCall(int dwCallType, IntPtr hTaskCaller, int dwTickCount, IntPtr lpInterfaceInfo) => ServerCallIsHandled;
-
-        // 断られた呼び出し（RETRYLATER も REJECTED も）を、100ms 後にやり直す。10 秒を超えたら -1 を返してあきらめる
-        public int RetryRejectedCall(IntPtr hTaskCallee, int dwTickCount, int dwRejectType) =>
-            dwTickCount < GiveUpAfterMs ? RetryIntervalMs : -1;
-
-        public int MessagePending(IntPtr hTaskCallee, int dwTickCount, int dwPendingType) => PendingMsgWaitDefProcess;
-
-        [DllImport("ole32.dll")]
-        private static extern int CoRegisterMessageFilter(IOleMessageFilter? newFilter, out IOleMessageFilter? oldFilter);
     }
 
-    [ComImport]
-    [Guid("00000016-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IOleMessageFilter
+    public static void Revoke()
     {
-        [PreserveSig]
-        int HandleInComingCall(int dwCallType, IntPtr hTaskCaller, int dwTickCount, IntPtr lpInterfaceInfo);
-
-        [PreserveSig]
-        int RetryRejectedCall(IntPtr hTaskCallee, int dwTickCount, int dwRejectType);
-
-        [PreserveSig]
-        int MessagePending(IntPtr hTaskCallee, int dwTickCount, int dwPendingType);
+        try
+        {
+            CoRegisterMessageFilter(null, out _);
+        }
+        catch (Exception ex) when (ex is COMException or EntryPointNotFoundException or DllNotFoundException)
+        {
+        }
     }
+
+    public int HandleInComingCall(int dwCallType, IntPtr hTaskCaller, int dwTickCount, IntPtr lpInterfaceInfo) => ServerCallIsHandled;
+
+    // 断られた呼び出し（RETRYLATER も REJECTED も）を、100ms 後にやり直す。10 秒を超えたら -1 を返してあきらめる
+    public int RetryRejectedCall(IntPtr hTaskCallee, int dwTickCount, int dwRejectType) =>
+        dwTickCount < GiveUpAfterMs ? RetryIntervalMs : -1;
+
+    public int MessagePending(IntPtr hTaskCallee, int dwTickCount, int dwPendingType) => PendingMsgWaitDefProcess;
+
+    [DllImport("ole32.dll")]
+    private static extern int CoRegisterMessageFilter(IOleMessageFilter? newFilter, out IOleMessageFilter? oldFilter);
+}
+
+[ComVisible(true)]
+[ComImport]
+[Guid("00000016-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IOleMessageFilter
+{
+    [PreserveSig]
+    int HandleInComingCall(int dwCallType, IntPtr hTaskCaller, int dwTickCount, IntPtr lpInterfaceInfo);
+
+    [PreserveSig]
+    int RetryRejectedCall(IntPtr hTaskCallee, int dwTickCount, int dwRejectType);
+
+    [PreserveSig]
+    int MessagePending(IntPtr hTaskCallee, int dwTickCount, int dwPendingType);
 }

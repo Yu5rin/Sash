@@ -2,16 +2,25 @@
 // 左に組み込みのメニュー（グレー）と自分で足したタブ・ボタン、右に選んだタブの列とグループを並べる。
 
 import { app } from '../app';
+import { runEdit } from '../clipboard';
 import { endDrag, startDrag } from '../dnd';
 import { h } from '../dom';
-import { childElements, elementAt, pathOf, samePath, type Path } from '../model';
+import { childElements, createElement, elementAt, pathOf, samePath, type Path } from '../model';
 import { msoIcon } from '../msoIcons';
 import { t as tr } from '../i18n';
 
 /** 組み込みの Backstage のメニュー（表示だけ）。 */
 const BUILTIN_NAV = ['ホーム', '新規', '開く', '情報', '上書き保存', '名前を付けて保存', '印刷', '共有', 'エクスポート', '閉じる'];
 
-let selectedTab: Path | null = null;
+/**
+ * 表示中の Backstage のタブ。id（なければパス）で覚える。
+ * パスだけだと、前にタブを足しただけで別のタブに切り替わってしまうため（不具合 32）。
+ */
+let selectedTab: { id: string | null; path: Path } | null = null;
+
+function remember(tab: Element): void {
+  selectedTab = { id: tab.getAttribute('id'), path: pathOf(tab) };
+}
 
 export function resetBackstage(): void {
   selectedTab = null;
@@ -24,7 +33,7 @@ export function followBackstageSelection(doc: Document, sel: Path | null): boole
   for (let cur = el; cur; cur = cur.parentElement) if (cur.localName === 'backstage') inBs = true;
   if (!inBs) return false;
   while (el && !(el.localName === 'tab' && el.parentElement?.localName === 'backstage')) el = el.parentElement;
-  if (el) selectedTab = pathOf(el);
+  if (el) remember(el);
   return true;
 }
 
@@ -37,7 +46,7 @@ function common(el: Element, cls: string, ctx: Ctx): Record<string, unknown> {
   const path = pathOf(el);
   return {
     class: [cls, samePath(ctx.sel, path) ? 'selected' : '', ctx.errors.has(path.join('.')) ? 'has-error' : '', el.getAttribute('visible') === 'false' ? 'hidden-ctl' : ''].join(' '),
-    dataset: { path: path.join('.') },
+    dataset: { path: path.join('.'), sel: '1' },
     draggable: true,
     title: el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName,
     onclick: (e: MouseEvent) => {
@@ -139,11 +148,18 @@ export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement
   }
   const bs = childElements(doc.documentElement).find((c) => c.localName === 'backstage');
   if (!bs) {
-    return h('div', { class: 'bs-view empty', dataset: { bsNew: '1' } }, h('p', null, tr('［ファイル］タブ（Backstage）に、自分のタブやボタンを足せます。')), h('p', { class: 'muted' }, tr('パレットの「Backstage」をここにドラッグするか、ダブルクリックしてください。')));
+    return h(
+      'div',
+      { class: 'bs-view empty', dataset: { bsNew: '1' } },
+      h('p', null, tr('［ファイル］タブ（Backstage）に、自分のタブやボタンを足せます。')),
+      h('p', { class: 'muted' }, tr('パレットの「Backstage」をここにドラッグするか、ダブルクリックしてください。')),
+      h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addBackstage(); } }, tr('Backstage を追加')),
+    );
   }
   const ctx: Ctx = { sel: store.selection, errors };
   const tabs = childElements(bs).filter((c) => c.localName === 'tab');
-  let tab = selectedTab ? elementAt(doc, selectedTab) : null;
+  const remembered = selectedTab;
+  let tab = remembered ? (remembered.id !== null ? tabs.find((x) => x.getAttribute('id') === remembered.id) : undefined) ?? elementAt(doc, remembered.path) : null;
   if (!tab || tab.parentElement !== bs || tab.localName !== 'tab') tab = tabs[0] ?? null;
 
   const nav = h(
@@ -154,7 +170,7 @@ export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement
     h('div', { class: 'bs-nav-sep' }),
     childElements(bs).map((c) =>
       c.localName === 'tab'
-        ? h('div', { ...common(c, `bs-nav-item bs-item${c === tab ? ' active' : ''}`, ctx), onclick: (e: MouseEvent) => { e.stopPropagation(); selectedTab = pathOf(c); app.store?.select(pathOf(c), 'canvas'); } }, labelOf(c))
+        ? h('div', { ...common(c, `bs-nav-item bs-item${c === tab ? ' active' : ''}`, ctx), onclick: (e: MouseEvent) => { e.stopPropagation(); remember(c); app.store?.select(pathOf(c), 'canvas'); } }, labelOf(c))
         : h('div', common(c, 'bs-nav-item bs-item command', ctx), c.hasAttribute('image') || c.hasAttribute('imageMso') ? icon(c, 16) : null, labelOf(c)),
     ),
   );
@@ -165,8 +181,19 @@ export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement
   } else {
     const col = (name: string) => childElements(tab!).find((c) => c.localName === name);
     const column = (el: Element | undefined) =>
-      el ? h('div', { ...common(el, 'bs-column', ctx), draggable: false, dataset: { path: pathOf(el).join('.'), container: pathOf(el).join('.') } }, el.children.length ? childElements(el).map((g) => group(g, ctx)) : h('div', { class: 'bs-empty' }, tr('グループをドラッグ'))) : null;
+      el ? h('div', { ...common(el, 'bs-column', ctx), draggable: false, dataset: { path: pathOf(el).join('.'), container: pathOf(el).join('.'), sel: '1' } }, el.children.length ? childElements(el).map((g) => group(g, ctx)) : h('div', { class: 'bs-empty' }, tr('グループをドラッグ'))) : null;
     content = h('div', { class: 'bs-content' }, h('h2', { class: 'bs-title' }, tab.getAttribute('title') ?? labelOf(tab)), h('div', { class: 'bs-columns', dataset: { container: pathOf(tab).join('.') } }, column(col('firstColumn')), column(col('secondColumn'))));
   }
   return h('div', { class: 'bs-view' }, nav, content);
+}
+
+/** customUI の中に、最低限の中身を持つ backstage を作る（ribbon の後ろ、contextMenus の前）。 */
+function addBackstage(): void {
+  runEdit('canvas', (doc) => {
+    const root = doc.documentElement;
+    if (childElements(root).some((c) => c.localName === 'backstage')) return undefined;
+    const bs = createElement(doc, 'backstage', root);
+    root.insertBefore(bs, childElements(root).find((c) => c.localName === 'contextMenus') ?? null);
+    return pathOf(bs);
+  }, tr('Backstage を追加'));
 }

@@ -5,8 +5,10 @@ import { invoke, type VbaReadStatus } from './bridge';
 import { ask } from './dialogs/modal';
 import { t } from './i18n';
 import { allElements, elementAt, type Path } from './model';
+import { attributes, isVbaIdentifier } from './schema';
+import { reportRefusal } from './store';
 import {
-  callbackName, generateStub, matchCallbacks, parseProcedures, renameDeclaration,
+  bareCallbackName, callbackName, generateStub, matchCallbacks, parseProcedures, renameDeclaration,
   RIBBON_HOLDER_MODULE, RIBBON_HOLDER_MODULE_NAME, type CallbackStatus, type NamingRule, type VbaModule,
 } from './vba';
 
@@ -55,9 +57,21 @@ class VbaState {
     }
   }
 
+  private memo: { doc: Document; text: string; modules: VbaModule[] | null; result: CallbackStatus[] } | null = null;
+
+  /**
+   * XML と VBA の照合結果。描画のたび・行ごとに呼ばれるので、文書（と XML の文字列）と VBA のモジュールが
+   * 変わらない間は前の結果を返す。返した配列は書き換えないこと。
+   */
   statuses(): CallbackStatus[] {
     const store = app.store;
-    return store ? matchCallbacks(store.doc, this.status === 'ok' ? this.modules : null) : [];
+    if (!store) return [];
+    const modules = this.status === 'ok' ? this.modules : null;
+    const m = this.memo;
+    if (m && m.doc === store.doc && m.text === store.text && m.modules === modules) return m.result;
+    const result = matchCallbacks(store.doc, modules);
+    this.memo = { doc: store.doc, text: store.text, modules, result };
+    return result;
   }
 }
 
@@ -74,63 +88,112 @@ export function namingRule(): NamingRule {
   return { pattern: s.callbackPattern, shared: s.callbackShared, sharedPattern: s.callbackSharedPattern };
 }
 
-/** 要素と属性から、命名規則に沿ったコールバック名を作る。 */
+/**
+ * 要素と属性から、命名規則に沿ったコールバック名を作る。
+ * ほかの要素が使っているコールバック名と重なるとき（id の記号を _ にした結果が同じになったときなど）は番号を付けて避ける。
+ */
 export function defaultCallbackName(el: Element, attr: string): string {
   const id = el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName;
-  return callbackName(namingRule(), id, attr, el.localName);
+  const taken = new Set<string>();
+  for (const other of allElements(el.ownerDocument)) {
+    if (other === el) continue;
+    for (const a of Array.from(other.attributes)) if (attributes.get(a.name)?.kind === 'callback' && a.value) taken.add(bareCallbackName(a.value));
+  }
+  return callbackName(namingRule(), id, attr, el.localName, taken);
+}
+
+/** 共通コード（modRibbonCore）がまだ VBA になければ入れる。入れたら true。 */
+async function ensureCoreModule(path: string): Promise<boolean> {
+  if (vba.modules!.some((m) => m.name === RIBBON_HOLDER_MODULE_NAME)) return false;
+  await invoke('vba.insert', { path, module: RIBBON_HOLDER_MODULE_NAME, code: RIBBON_HOLDER_MODULE, documentModule: false });
+  return true;
 }
 
 /** 未実装のコールバックの雛形を、まとめてモジュールに挿入する。onLoad があれば共通コードも入れる。 */
-export async function insertStubs(statuses: CallbackStatus[]): Promise<string> {
+export async function insertStubs(statuses: CallbackStatus[], options: { core?: boolean } = {}): Promise<string> {
   const s = app.session;
   if (!s || !vba.canWrite) throw new Error(vba.statusMessage() || t('VBAに書き込めません'));
   const missing = statuses.filter((x) => x.state === 'missing' && x.uses.length > 0);
-  if (missing.length === 0) return t('挿入するものはありません');
-  const needsCore = missing.some((x) => x.uses.some((u) => u.attr === 'onLoad')) && !vba.modules!.some((m) => m.name === RIBBON_HOLDER_MODULE_NAME);
-  if (needsCore) await invoke('vba.insert', { path: s.path, module: RIBBON_HOLDER_MODULE_NAME, code: RIBBON_HOLDER_MODULE, documentModule: false });
-  const code = missing.map((x) => generateStub({ ...x, name: x.name.replace(/^.*[.!]/, '') })).join('\r\n');
+  const wantsCore = options.core === true || missing.some((x) => x.uses.some((u) => u.attr === 'onLoad'));
+  const addedCore = wantsCore ? await ensureCoreModule(s.path) : false;
+  if (missing.length === 0) {
+    if (addedCore) await vba.refresh();
+    return addedCore ? t('共通コード {core} を追加しました。Excelでブックを保存してください', { core: RIBBON_HOLDER_MODULE_NAME }) : t('挿入するものはありません');
+  }
+  const code = missing.map((x) => generateStub({ ...x, name: bareCallbackName(x.name) })).join('\r\n');
   await invoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
   await vba.refresh();
-  return needsCore
+  return addedCore
     ? t('{n} 件の雛形を {module} に追加しました（共通コード {core} も追加）。Excelでブックを保存してください', { n: missing.length, module: app.settings.callbackModule, core: RIBBON_HOLDER_MODULE_NAME })
     : t('{n} 件の雛形を {module} に追加しました。Excelでブックを保存してください', { n: missing.length, module: app.settings.callbackModule });
 }
 
 /**
  * インスペクタでコールバック名を変えたとき、VBA 側の Sub 名も変えるかを確認する（仕様書 §8.2）。
- * 変える場合は宣言行だけを書き換え、同じ名前を使っている他のコントロールの属性もそろえる。
+ * 変える場合は宣言行だけを書き換え、同じ名前を使っている他のコントロールのコールバック属性もそろえる
+ * （label や tag に同じ文字列があっても書き換えない）。
+ * 呼び出し側は await してもしなくてもよい。失敗は例外にせず、トーストで知らせる。
+ * 戻り値は、XML を書き換えたかどうか。
  */
-export async function renameCallback(path: Path, attr: string, oldName: string, newName: string): Promise<void> {
+export async function renameCallback(path: Path, attr: string, oldName: string, newName: string): Promise<boolean> {
+  try {
+    return await renameCallbackUnsafe(path, attr, oldName, newName);
+  } catch (e) {
+    reportRefusal(t('コールバック名を変えられませんでした：{message}', { message: (e as Error).message }));
+    return false;
+  }
+}
+
+async function renameCallbackUnsafe(path: Path, attr: string, oldName: string, newName: string): Promise<boolean> {
   const store = app.store;
   const s = app.session;
-  if (!store || !s) return;
+  if (!store || !s) return false;
+  const newBare = bareCallbackName(newName);
+  if (!isVbaIdentifier(newBare)) {
+    reportRefusal(t('「{name}」はVBAのSub名として使えません', { name: newBare }));
+    return false;
+  }
+  const label = t('コールバック名の変更（{old} → {name}）', { old: oldName, name: newName });
   const apply = (all: boolean) =>
     store.edit('inspector', (doc) => {
-      const targets = all ? allElements(doc).flatMap((el) => Array.from(el.attributes).filter((a) => a.value === oldName).map((a) => ({ el, name: a.name }))) : [];
+      const targets = all
+        ? allElements(doc).flatMap((el) =>
+            Array.from(el.attributes)
+              .filter((a) => a.value === oldName && attributes.get(a.name)?.kind === 'callback')
+              .map((a) => ({ el, name: a.name })),
+          )
+        : [];
       const self = elementAt(doc, path);
       if (self) self.setAttribute(attr, newName);
-      for (const t of targets) t.el.setAttribute(t.name, newName);
+      for (const x of targets) x.el.setAttribute(x.name, newName);
       return undefined;
-    });
+    }, label);
 
-  const proc = vba.canWrite ? vba.modules!.flatMap(parseProcedures).find((p) => p.name.toLowerCase() === oldName.replace(/^.*[.!]/, '').toLowerCase()) : undefined;
-  if (!proc) {
-    apply(false);
-    return;
-  }
-  const r = await ask(t('VBAのSub名も変えますか？'), t('VBAの {module} に {name} があります。宣言行の名前も {newName} に変えますか？（Subの中身や、ほかの場所からの呼び出しは書き換えません）', { module: proc.module, name: proc.name, newName }), [
+  const oldBare = bareCallbackName(oldName).toLowerCase();
+  const proc = vba.canWrite ? vba.modules!.flatMap(parseProcedures).find((p) => p.name.toLowerCase() === oldBare) : undefined;
+  if (!proc) return apply(false);
+  const r = await ask(t('VBAのSub名も変えますか？'), t('VBAの {module} に {name} があります。宣言行の名前も {newName} に変えますか？（Subの中身や、ほかの場所からの呼び出しは書き換えません）', { module: proc.module, name: proc.name, newName: newBare }), [
     { value: 'both', label: t('VBAも変える'), primary: true },
     { value: 'xml', label: t('XMLだけ変える') },
     { value: 'cancel', label: t('キャンセル') },
   ]);
-  if (r === 'cancel' || r === null) return;
-  if (r === 'both') {
-    await invoke('vba.replaceLine', { path: s.path, module: proc.module, line: proc.line, expected: proc.declaration, replacement: renameDeclaration(proc.declaration, proc.name, newName) });
-    apply(true);
-    await vba.refresh();
-  } else {
-    apply(false);
+  if (r === 'cancel' || r === null) return false;
+  if (r === 'xml') return apply(false);
+  // VBA を先に書き換えるので、XML を書き換えられない状態（構文エラー中）なら VBA にも触らない
+  if (store.syncError) {
+    reportRefusal(t('XMLに構文エラーがあるため、この操作はできません。先にXMLエディタでエラーを直してください'));
+    return false;
   }
+  const replaced = await invoke('vba.replaceLine', { path: s.path, module: proc.module, line: proc.line, expected: proc.declaration, replacement: renameDeclaration(proc.declaration, proc.name, newBare) });
+  if (!replaced) {
+    // 読み込んだあとに VBA が変わっていて、宣言行が見つからなかった。XML も変えずに、読み直してもらう
+    reportRefusal(t('VBAの {module} が読み込んだときから変わっているため、Sub名を変えられませんでした。VBAを再読み込みしてからやり直してください', { module: proc.module }));
+    await vba.refresh();
+    return false;
+  }
+  const ok = apply(true);
+  await vba.refresh();
+  return ok;
 }
 
 /** §8.3：onLoad で IRibbonUI を保持し、Invalidate できるようにする雛形を入れる。 */
@@ -141,13 +204,20 @@ export async function setupRibbonHolder(): Promise<string> {
     store.edit('inspector', (doc) => {
       doc.documentElement.setAttribute('onLoad', defaultCallbackName(doc.documentElement, 'onLoad'));
       return [];
-    });
+    }, t('onLoad の設定'));
   }
+  const onLoad = store.doc.documentElement.getAttribute('onLoad');
   if (!vba.canWrite) {
-    await navigator.clipboard.writeText(RIBBON_HOLDER_MODULE);
-    return t('customUI に onLoad を設定し、共通コードをクリップボードにコピーしました（Excelで開いていればモジュールに直接挿入できます）');
+    // Excel で開いていないときは、共通コードと onLoad の雛形の両方をコピーする（片方だけだと onLoad が動かない）
+    const stub = onLoad
+      ? generateStub({ name: bareCallbackName(onLoad), expected: '', uses: [{ attr: 'onLoad', tag: 'customUI', id: 'customUI', path: [] }] })
+      : '';
+    const text = [`' ===== ${RIBBON_HOLDER_MODULE_NAME} =====`, RIBBON_HOLDER_MODULE, stub ? `' ===== ${app.settings.callbackModule} =====\r\n${stub}` : ''].filter(Boolean).join('\r\n');
+    await navigator.clipboard.writeText(text);
+    return t('customUI に onLoad を設定し、共通コードと onLoad の雛形をクリップボードにコピーしました（Excelで開いていればモジュールに直接挿入できます）');
   }
-  return insertStubs(vba.statuses());
+  // onLoad の Sub がすでにあっても、共通コードがなければ入れる
+  return insertStubs(vba.statuses(), { core: true });
 }
 
 // VBA に存在しないコールバックを Lint の警告として出す（仕様書 §5.6、Excel 連携時のみ）

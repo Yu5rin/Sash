@@ -56,15 +56,14 @@ class App {
     if (parts.size === 0) {
       created = true;
       const xml = `<customUI xmlns="${NAMESPACES.office2010}">\n  <ribbon>\n    <tabs>\n    </tabs>\n  </ribbon>\n</customUI>\n`;
-      const store = new PartStore('office2010', xml, []);
+      // 新規に作ったパーツは、保存するまで未保存として扱う（空の編集で履歴を作らずに済むよう、ストアに伝える）
+      const store = new PartStore('office2010', xml, [], { unsaved: true });
       parts.set('office2010', store);
     }
     const active = parts.get('office2010') ?? parts.get('office2007')!;
     this.session = { path: doc.path, parts, active, created };
     this.attach(active);
     this.emit('session');
-    // 新規に作ったパーツは、保存するまで未保存として扱う
-    if (created) active.edit('other', () => undefined);
   }
 
   close(): void {
