@@ -25,7 +25,7 @@ import {
   availableForGroups, effectiveWidth, getCheckWidths, RIBBON_RESERVED_PX, RULER_MARKS, SCALE_CHOICES, setCheckWidths, setFitReport, simulateFit, WIDTH_CHOICES,
   type FitGroupInput, type FitGroupResult, type FitReportEntry, type GroupFitState,
 } from './ribbonFit';
-import { clearOverrides, getOverride, overrideCount, overrideKey, overridesSignature, preview, setOverride, setPreview } from './ribbonPreview';
+import { clearOverrides, getOverride, overrideCount, overrideKey, overridesSignature, preview, setOverride, setPreview, type FitMode, type PreviewSettings } from './ribbonPreview';
 import { attachScreentips, BUILTIN_TAB_KEYTIPS, duplicateKeytips, screentipContent, type ScreentipContent } from './ribbonTips';
 
 /** 表示する組み込みタブ（Excel の既定の並び）。 */
@@ -118,6 +118,43 @@ export function setCanvasMode(next: CanvasMode): void {
   mode = next;
   if (hostEl) renderCanvas(hostEl);
   if (changed) window.dispatchEvent(new CustomEvent('sash:canvasmode', { detail: { mode } }));
+}
+
+// ---- 幅のプレビューの切り替え（表示 メニュー・コマンドパレットから使う） ----
+
+/** 設定を変えて描き直す。幅や拡大率が変わったら、一時的に広げたグループは畳み直す（位置の前提が変わるため）。 */
+function applyPreview(patch: Partial<PreviewSettings>): void {
+  const p = preview();
+  if (('width' in patch && patch.width !== p.width) || (patch.scale !== undefined && patch.scale !== p.scale)) tempExpanded.clear();
+  if (patch.width !== undefined && patch.width !== null && !WIDTH_CHOICES.includes(patch.width)) patch.customWidth = patch.width;
+  setPreview(patch);
+  if (hostEl) renderCanvas(hostEl);
+}
+
+/** 画面の幅（px）。null は「自由」。 */
+export function setPreviewWidth(width: number | null): void {
+  applyPreview({ width });
+}
+
+/** Windows の拡大率（%。100 / 125 / 150）。 */
+export function setPreviewScale(scale: number): void {
+  if (SCALE_CHOICES.includes(scale)) applyPreview({ scale });
+}
+
+/** 収める（fit）／等倍（actual）。 */
+export function setFitMode(fit: FitMode): void {
+  applyPreview({ fit });
+}
+
+/** キーヒントの表示を切り替える。切り替えた後の状態を返す。 */
+export function toggleKeytips(): boolean {
+  applyPreview({ keytips: !preview().keytips });
+  return preview().keytips;
+}
+
+/** いまのプレビューの設定（読み取り専用）。 */
+export function getPreviewState(): Readonly<PreviewSettings> {
+  return preview();
 }
 
 /** キャンバスにフォーカスを移す（Ctrl+1 / F6）。 */
@@ -213,6 +250,16 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   onMsoIconsLoaded(render);
   // 確かめる幅を変えたら測り直す
   window.addEventListener('sash:fitsettings', render);
+  // 表示 メニュー（shell/previewCommands.ts）からの切り替え。detail は { width?, scale?, mode?, keytips? }
+  window.addEventListener('sash:preview', (e) => {
+    const d = (e as CustomEvent<{ width?: number | null; scale?: number; mode?: FitMode; keytips?: boolean } | undefined>).detail ?? {};
+    const patch: Partial<PreviewSettings> = {};
+    if ('width' in d && (d.width === null || (typeof d.width === 'number' && d.width >= 320))) patch.width = d.width ?? null;
+    if (typeof d.scale === 'number' && SCALE_CHOICES.includes(d.scale)) patch.scale = d.scale;
+    if (d.mode === 'fit' || d.mode === 'actual') patch.fit = d.mode;
+    if (typeof d.keytips === 'boolean') patch.keytips = d.keytips;
+    applyPreview(patch);
+  });
   // 文字の読み込みが終わると幅が変わるので、測った幅を捨てる
   document.fonts?.addEventListener?.('loadingdone', () => {
     widthCache.clear();
@@ -238,8 +285,14 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     if (!headerMenu) return;
     const target = e.target as HTMLElement;
     if (target.closest?.('.cv-pop, [data-menu-button]')) return;
+    // ここで描き直すと、押した要素（タブなど）が作り直されてクリックが届かなくなるので、メニューだけを外す
     headerMenu = null;
-    render();
+    dynamicFocus = null;
+    for (const pop of Array.from(host.querySelectorAll('.cv-pop'))) pop.remove();
+    for (const b of Array.from(host.querySelectorAll<HTMLElement>('[data-menu-button]'))) {
+      b.classList.remove('active');
+      b.setAttribute('aria-expanded', 'false');
+    }
   }, true);
 
   host.addEventListener('dragover', (e) => onDragOver(e, host));
@@ -574,13 +627,12 @@ function excelButton(): HTMLElement {
 }
 
 /**
- * Excel のウィンドウの幅を変える（ホストの excel.setWindowWidth）。
- * width は画面の幅（px）、scale は Windows の拡大率（%）、effective は width / 拡大率。
- * bridge.ts の HostApi にまだ型がないため、ここで型を付けて呼ぶ（型が入ったら invoke を直接使う）。
+ * Excel のウィンドウの幅を変える（ホストの excel.setWindowWidth、仕様書 §18.1）。
+ * width は画面の幅（px）、scale は Windows の拡大率（%）。path を渡さないと起動中の最初の Excel が対象になるので、
+ * 開いているファイルのパスを必ず渡す。
  */
 function setExcelWindowWidth(width: number, scale: number): Promise<unknown> {
-  const call = invoke as unknown as (type: string, payload: unknown) => Promise<unknown>;
-  return call('excel.setWindowWidth', { width, scale, effective: effectiveWidth(width, scale) });
+  return invoke('excel.setWindowWidth', { width, scale, path: app.session?.path || undefined });
 }
 
 function inRibbon(el: Element): boolean {
@@ -922,13 +974,11 @@ function updateZoom(host: HTMLElement): void {
   const p = preview();
   const cs = getComputedStyle(host);
   const avail = host.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) - 1;
-  let primary: number | null = null;
-  for (const z of Array.from(host.querySelectorAll<HTMLElement>('.cv-zoom'))) {
-    const eff = Number(z.dataset['eff']);
-    const scale = p.fit === 'fit' && avail > 0 && eff > 0 ? Math.min(1, avail / eff) : 1;
-    z.style.zoom = scale === 1 ? '' : String(scale);
-    primary ??= scale;
-  }
+  const zooms = Array.from(host.querySelectorAll<HTMLElement>('.cv-zoom'));
+  // 2つの幅を比べるときは、幅の違いがそのまま見えるよう、広いほうに合わせた同じ縮小率で描く
+  const widest = Math.max(0, ...zooms.map((z) => Number(z.dataset['eff']) || 0));
+  const primary: number | null = zooms.length === 0 ? null : p.fit === 'fit' && avail > 0 && widest > 0 ? Math.min(1, avail / widest) : 1;
+  for (const z of zooms) z.style.zoom = primary === null || primary === 1 ? '' : String(primary);
   const status = host.querySelector<HTMLElement>('.cv-status');
   if (status) status.textContent = p.width === null || primary === null ? '' : tr('実効 {w}px・{pct}% で表示中', { w: effectiveWidth(p.width, p.scale), pct: Math.round(primary * 100) });
   const low = host.querySelector<HTMLElement>('.cv-lowzoom');

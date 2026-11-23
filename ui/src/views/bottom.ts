@@ -14,6 +14,7 @@ import type { ImageEntry, PartStore } from '../store';
 import { t } from '../i18n';
 import { generateStub, type CallbackState, type CallbackStatus } from '../vba';
 import { fitProblems, type FitProblem } from './ribbonFit';
+import { revealInVbe, canRevealInVbe } from '../vbaReveal';
 
 type Tab = 'problems' | 'callbacks' | 'images';
 
@@ -116,6 +117,7 @@ function renderCallbacks(store: PartStore, toast: (msg: string, kind?: ToastKind
                   },
                 }, t('挿入'))
               : null,
+            x.procedure && canRevealInVbe(x.name) ? h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); void revealInVbe(x.name); } }, t('VBE で開く')) : null,
           ),
         ),
   );
