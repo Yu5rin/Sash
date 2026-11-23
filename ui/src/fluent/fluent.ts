@@ -1,6 +1,8 @@
-// アイコン集（Fluent UI System Icons、MIT License）のデータの扱い。検索と SVG の組み立てだけを持つ純粋な処理にして、テストできるようにする。
-// データ（fluentIcons.json）は 2.6MB あるので、最初の画面の読み込みに含めないよう、使うときに動的 import で読む。
-// データの作り方は scripts/build-fluent-icons.mjs、ライセンス文は LICENSE-fluentui-system-icons.txt。
+// アイコン集（Fluent UI System Icons と Tabler Icons、どちらも MIT License）のデータの扱い。SVG の組み立てとデータの読み込みだけを持つ純粋な処理にして、テストできるようにする。
+// 名前は Fluent 時代のまま（FluentIcon など）だが、Tabler も同じ型で持つ（set で出どころを区別する）。これまでの import を壊さないため。
+// データ（fluentIcons.json 2.6MB、tablerIcons.json 1.7MB）は大きいので、最初の画面の読み込みに含めないよう、使うときに動的 import で読む。
+// データの作り方は scripts/build-fluent-icons.mjs・scripts/build-tabler-icons.mjs、ライセンス文は LICENSE-*.txt。
+// 検索は iconSearch.ts（概念の辞書は iconConcepts.ts、カテゴリは iconCategories.ts）。
 
 export type FluentVariant = 'regular' | 'filled';
 
