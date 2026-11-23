@@ -120,7 +120,7 @@ export function openCommandPalette(commands: () => Command[]): void {
     input,
     list,
     h('div', { class: 'command-palette-foot', 'aria-hidden': 'true' },
-      h('span', null, h('kbd', null, '↑↓'), ' ', t('選ぶ')),
+      h('span', null, h('kbd', null, '↑↓'), ' ', t('項目を選ぶ')),
       h('span', null, h('kbd', null, 'Enter'), ' ', t('実行')),
       h('span', null, h('kbd', null, 'Esc'), ' ', t('閉じる'))));
   const backdrop = h('div', { class: 'palette-backdrop', onmousedown: (e: MouseEvent) => e.target === backdrop && layer.close() }, dialog);

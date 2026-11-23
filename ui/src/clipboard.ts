@@ -3,9 +3,7 @@
 // 古い文書の要素を指したままになるため。OS のクリップボードにも、他のツールに貼れるよう XML を書く（失敗しても無視）。
 
 import { app } from './app';
-import * as model from './model';
-import { childElements, createElement, elementAt, parseXml, pathOf, serialize, usedIds, type Path } from './model';
-import * as schema from './schema';
+import { allowedInsertIndex, canDuplicate, childElements, createElement, elementAt, importElement, parseXml, pathOf, serialize, usedIds, type Path } from './model';
 import { canContainEl, defFor, titleOf } from './schema';
 import type { Source } from './store';
 import { t } from './i18n';
@@ -36,66 +34,25 @@ export function copyText(text: string, message: string): void {
 
 // ---- ストアへの編集 ----
 
-/**
- * store.edit を呼ぶ。edit は（並行して変更中の）新しい版では boolean を返し、label を受け取る。
- * 古い版では void を返すので、false 以外は「変更した」とみなす。
- */
+/** store.edit を呼ぶ（履歴の名前を必ず付けるため、ビューからはこれを通す）。変更しなかった・断られたら false。 */
 export function runEdit(source: Source, fn: (doc: Document) => Path | null | void, label: string): boolean {
-  const store = app.store;
-  if (!store) return false;
-  const edit = store.edit as unknown as (s: Source, f: (doc: Document) => Path | null | void, l?: string) => unknown;
-  return edit.call(store, source, fn, label) !== false;
+  return app.store?.edit(source, fn, label) ?? false;
 }
 
 // ---- 置ける位置 ----
 
-type AllowedInsertIndex = (parent: Element, tag: string, desired: number) => number | null;
-type CanDuplicate = (el: Element) => boolean;
-
-// model.ts の allowedInsertIndex / canDuplicate は並行して作られている。あればそちらを使い、なければここで判定する。
-const modelApi = model as unknown as Partial<Record<'allowedInsertIndex', AllowedInsertIndex> & Record<'canDuplicate', CanDuplicate>>;
-
-/** 子要素の並び順の枠（schema の childOrder）。古い schema にはないので、なければ空とする。 */
-function slotsOf(parent: Element): readonly { tags: readonly string[]; max?: number }[] {
-  const def = defFor(parent) as (schema.ElementDef & { childOrder?: readonly { tags: readonly string[]; max?: number }[] }) | undefined;
-  return def?.childOrder ?? [];
-}
-
 /**
- * parent の desired 番目に tag を置けるなら、実際に置く位置を返す（並び順の決まりに合わせて前後にずらす）。
- * 置けなければ null。
+ * parent の desired 番目（今の子要素の並びでの位置）に tag を置けるなら、実際に置く位置を返す。置けなければ null。
+ * 並び順と個数は model の allowedInsertIndex に任せ、置ける親かどうかと、グループのダイアログ起動ツール
+ * （最後に1つだけ）をここで足して確かめる。moving には移動中の要素を渡す（自分を数えないため）。
  */
 export function allowedIndex(parent: Element, tag: string, desired: number, moving: Element | null = null): number | null {
-  if (modelApi.allowedInsertIndex && !moving) return modelApi.allowedInsertIndex(parent, tag, desired);
   if (!canContainEl(parent, tag)) return null;
-  const kids = childElements(parent).filter((c) => c !== moving);
-  // moving を除いた並びでの位置に直す
-  let idx = desired;
-  if (moving) {
-    const old = childElements(parent).indexOf(moving);
-    if (old >= 0 && old < desired) idx--;
-  }
-  idx = Math.max(0, Math.min(idx, kids.length));
-  const slots = slotsOf(parent);
-  const slotOf = (tg: string) => slots.findIndex((s) => s.tags.includes(tg));
-  const mine = slotOf(tag);
-  if (mine >= 0) {
-    const slot = slots[mine]!;
-    const count = kids.filter((c) => slot.tags.includes(c.localName)).length;
-    if (slot.max !== undefined && count >= slot.max) return null;
-    // 自分より前の枠の要素の後ろ、後ろの枠の要素の前に収める
-    let lo = 0;
-    let hi = kids.length;
-    kids.forEach((c, i) => {
-      const s = slotOf(c.localName);
-      if (s >= 0 && s < mine) lo = Math.max(lo, i + 1);
-      if (s >= 0 && s > mine) hi = Math.min(hi, i);
-    });
-    if (lo > hi) return null;
-    idx = Math.max(lo, Math.min(idx, hi));
-  } else if (parent.localName === 'group') {
-    // ダイアログ起動ツールはグループの最後に1つだけ
-    const launcher = kids.findIndex((c) => c.localName === 'dialogBoxLauncher');
+  let idx = allowedInsertIndex(parent, tag, desired, moving ?? undefined);
+  if (idx === null) return null;
+  if (parent.localName === 'group') {
+    const kids = childElements(parent);
+    const launcher = kids.findIndex((c) => c.localName === 'dialogBoxLauncher' && c !== moving);
     if (tag === 'dialogBoxLauncher') {
       if (launcher >= 0) return null;
       idx = kids.length;
@@ -108,10 +65,7 @@ export function allowedIndex(parent: Element, tag: string, desired: number, movi
 
 /** 同じ親の中に、もう1つ置けるか（複製できるか）。 */
 export function canDuplicateEl(el: Element): boolean {
-  if (modelApi.canDuplicate) return modelApi.canDuplicate(el);
-  const parent = el.parentElement;
-  if (!parent) return false;
-  return allowedIndex(parent, el.localName, childElements(parent).indexOf(el) + 1) !== null;
+  return canDuplicate(el);
 }
 
 // ---- 内部クリップボード ----
@@ -236,7 +190,7 @@ function insertClip(c: Clip, source: Source): boolean {
   return runEdit(source, (doc) => {
     const parent = elementAt(doc, parentPath);
     if (!parent) return undefined;
-    const el = doc.importNode(parsed.doc.documentElement.firstElementChild!, true);
+    const el = importElement(doc, parsed.doc.documentElement.firstElementChild!);
     renameDuplicateIds(el, usedIds(doc));
     parent.insertBefore(el, parent.children[spot.index] ?? null);
     return pathOf(el);
@@ -303,8 +257,7 @@ export function moveSelected(delta: -1 | 1, source: Source = 'other'): boolean {
   // moveElement の index は「移動前の並びで、その要素の前に差し込む位置」
   const insertBefore = delta < 0 ? to : to + 1;
   const allowed = allowedIndex(parent, el.localName, insertBefore, el);
-  const expected = delta < 0 ? to : idx + 1;
-  if (allowed !== expected) return refuse(t('<{tag}> はこれ以上動かせません（並び順の決まりがあります）', { tag: el.localName }));
+  if (allowed !== insertBefore) return refuse(t('<{tag}> はこれ以上動かせません（並び順の決まりがあります）', { tag: el.localName }));
   const path = pathOf(el);
   return runEdit(source, (doc) => {
     const target = elementAt(doc, path);
@@ -323,7 +276,8 @@ export function canMove(el: Element, delta: -1 | 1): boolean {
   const idx = childElements(parent).indexOf(el);
   const to = idx + delta;
   if (to < 0 || to >= parent.children.length) return false;
-  return allowedIndex(parent, el.localName, delta < 0 ? to : to + 1, el) === (delta < 0 ? to : idx + 1);
+  const insertBefore = delta < 0 ? to : to + 1;
+  return allowedIndex(parent, el.localName, insertBefore, el) === insertBefore;
 }
 
 /** 新しい要素を parent の index 番目（並び順に合わせて調整）に作って選択する。 */
@@ -347,7 +301,8 @@ export function siblingTags(el: Element): string[] {
   const parent = el.parentElement;
   if (!parent) return [];
   const idx = childElements(parent).indexOf(el);
-  return (defFor(parent)?.children ?? []).filter((tg) => allowedIndex(parent, tg, idx) !== null);
+  // 並び順の決まりで別の位置にずれるもの（グループのダイアログ起動ツールなど）は「前に挿入」には出さない
+  return (defFor(parent)?.children ?? []).filter((tg) => allowedIndex(parent, tg, idx) === idx);
 }
 
 /** 要素の中に追加できる新しい要素の種類。 */

@@ -87,15 +87,13 @@ function resume(entry: Entry): void {
 function render(entry: Entry): void {
   const { kind, message, action } = entry.opts;
   entry.el.className = `toast ${kind}`;
-  // エラーと警告はすぐに読み上げる。それ以外は控えめに
+  // エラーはすぐに読み上げる。それ以外は控えめに
   entry.el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   entry.el.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
   entry.el.replaceChildren(
     h('span', { class: 'toast-icon' }, svg(ICONS[kind])),
     h('span', { class: 'toast-message' }, message),
-    action
-      ? h('button', { type: 'button', class: 'toast-action', onclick: () => { entry.close(); action.run(); } }, action.label)
-      : null,
+    ...(action ? [h('button', { type: 'button', class: 'toast-action', onclick: () => { entry.close(); action.run(); } }, action.label)] : []),
     h('button', { type: 'button', class: 'icon-button toast-close', title: t('通知を閉じる'), 'aria-label': t('通知を閉じる'), onclick: () => entry.close() }, svg(uiIcons.close)),
   );
 }

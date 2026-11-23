@@ -169,8 +169,8 @@ export interface HostApi {
   'recipes.save': { req: Record<string, unknown>; res: null };
   'recipes.delete': { req: { id: string }; res: null };
   'backup.list': { req: { path: string }; res: BackupEntry[] };
-  /** バックアップの中身でファイルを置き換える。終わったら UI は開き直す。 */
-  'backup.restore': { req: { path: string; backupPath: string }; res: null };
+  /** バックアップの中身でファイルを置き換える。backup は戻す直前の今のファイルのバックアップ。終わったら UI は開き直す。 */
+  'backup.restore': { req: { path: string; backupPath: string }; res: { backup: string | null } };
   'vba.read': { req: { path: string }; res: { status: VbaReadStatus; modules: VbaModuleDto[] } };
   'vba.insert': { req: { path: string; module: string; code: string; documentModule: boolean }; res: boolean };
   'vba.replaceLine': { req: { path: string; module: string; line: number; expected: string; replacement: string }; res: boolean };
@@ -323,13 +323,15 @@ const mock = {
         return r({ root: t('(ブラウザ実行中)'), icons: [] });
       case 'vba.read':
         return r({ status: 'noExcel', modules: [] });
+      case 'backup.restore':
+        return r({ backup: null });
       case 'backup.list': {
-        // ブラウザ実行中の見た目の確認用。新しいものが先とは限らないので、並べ替えは UI 側で行う
+        // ブラウザ実行中の見た目の確認用。ホストは新しい順に返す
         const day = 24 * 60 * 60 * 1000;
         const now = Date.now();
         return r([
-          { path: 'C:\\Users\\you\\AppData\\Roaming\\Sash\\backups\\集計ツール_20261120.xlam', createdAt: new Date(now - 3 * day).toISOString(), size: 48213 },
           { path: 'C:\\Users\\you\\AppData\\Roaming\\Sash\\backups\\集計ツール_20261123.xlam', createdAt: new Date(now - 60 * 60 * 1000).toISOString(), size: 49102 },
+          { path: 'C:\\Users\\you\\AppData\\Roaming\\Sash\\backups\\集計ツール_20261120.xlam', createdAt: new Date(now - 3 * day).toISOString(), size: 48213 },
         ]);
       }
       default:

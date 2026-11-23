@@ -12,6 +12,8 @@ import { allElements, pathOf } from '../model';
 import { attributes, backstageElements, callbackSignature, elements } from '../schema';
 import { attrRange, elementIndexAt, scanElements, type ElementSpan } from '../xmlpos';
 import { lang, t } from '../i18n';
+import { minimalEdit } from './textDiff';
+import { setElementMenuHooks } from './contextMenu';
 
 /** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
 function categoryName(cat: string): string {
@@ -30,24 +32,6 @@ let selectionDecorations: monaco.editor.IEditorDecorationsCollection | null = nu
 /** XML エディタにフォーカスを移す（Ctrl+3 / F6）。 */
 export function focus(): void {
   editor?.focus();
-}
-
-/**
- * 外から来た文字列の変更を、差分の部分だけ置き換えて反映する（不具合 3）。
- * 全体を置き換えると、カーソル・選択・スクロール位置が失われ、Monaco の Undo で全体が選択されてしまう。
- */
-export function minimalEdit(before: string, after: string): { start: number; end: number; text: string } | null {
-  if (before === after) return null;
-  let start = 0;
-  const max = Math.min(before.length, after.length);
-  while (start < max && before.charCodeAt(start) === after.charCodeAt(start)) start++;
-  let endB = before.length;
-  let endA = after.length;
-  while (endB > start && endA > start && before.charCodeAt(endB - 1) === after.charCodeAt(endA - 1)) {
-    endB--;
-    endA--;
-  }
-  return { start, end: endB, text: after.slice(start, endA) };
 }
 
 /** XML エディタでその要素を表示し、フォーカスを移す（右クリックメニューの「XML で表示」）。 */
@@ -154,6 +138,8 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
   app.on('problems', updateMarkers);
 
   registerLanguageFeatures();
+  // 右クリックメニューの「XML で表示」をこのエディタにつなぐ（メニュー側から Monaco を読み込まないため、ここで登録する）
+  setElementMenuHooks({ revealInXml });
 
   return {
     focus: () => editor.focus(),

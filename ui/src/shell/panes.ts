@@ -1,25 +1,20 @@
 // ペインの間のフォーカス移動（Ctrl+1〜4、Ctrl+J、F6 / Shift+F6）。
 // ビューが focus() を出していればそれを使い（キャンバスなら選択中の要素へ、など）、なければペインの要素にフォーカスする。
 
-import * as canvasView from '../views/canvas';
-import * as treeView from '../views/tree';
-import * as inspectorView from '../views/inspector';
-import * as bottomView from '../views/bottom';
+import { focus as focusCanvas } from '../views/canvas';
+import { focus as focusTree } from '../views/tree';
+import { focus as focusInspector } from '../views/inspector';
+import { focus as focusXml } from '../views/xmlEditor';
 import type { LayoutHandle, PaneKey } from '../layout';
 
 export type PaneId = 'canvas' | 'tree' | 'xml' | 'inspector' | 'bottom';
 
 export const PANE_ORDER: readonly PaneId[] = ['canvas', 'tree', 'xml', 'inspector', 'bottom'];
 
-type Focusable = { focus?: () => void };
-
-let xmlFocus: (() => void) | null = null;
 let layout: LayoutHandle | null = null;
 
-/** XML エディタは mountXmlEditor の戻り値でしかフォーカスできないので、main.ts から渡してもらう。 */
-export function initPanes(opts: { layout: LayoutHandle; focusXml: () => void }): void {
+export function initPanes(opts: { layout: LayoutHandle }): void {
   layout = opts.layout;
-  xmlFocus = opts.focusXml;
 }
 
 /** ペインがどの仕切りで畳まれるか。 */
@@ -29,10 +24,8 @@ function paneElement(id: PaneId): HTMLElement | null {
   return document.querySelector<HTMLElement>(`[data-pane="${id}"]`);
 }
 
-function viewFocus(id: PaneId): (() => void) | undefined {
-  const mod: Focusable | undefined = { canvas: canvasView, tree: treeView, inspector: inspectorView, bottom: bottomView, xml: undefined }[id] as Focusable | undefined;
-  return typeof mod?.focus === 'function' ? mod.focus.bind(mod) : undefined;
-}
+/** ビューが出している focus()。下部パネルにはないので、パネルの本体にフォーカスする。 */
+const VIEW_FOCUS: Readonly<Record<PaneId, (() => void) | null>> = { canvas: focusCanvas, tree: focusTree, xml: focusXml, inspector: focusInspector, bottom: null };
 
 /** 指定したペインにフォーカスする。畳んでいれば戻してから移る。 */
 export function focusPane(id: PaneId): void {
@@ -40,15 +33,9 @@ export function focusPane(id: PaneId): void {
   const key = COLLAPSE_KEY[id];
   if (layout?.isCollapsed(key) && id !== 'xml') layout.expand(key);
   const el = paneElement(id);
-  if (id === 'xml') xmlFocus?.();
-  else {
-    const fn = viewFocus(id);
-    if (fn) fn();
-    else {
-      const target = id === 'bottom' ? document.getElementById('bottom-body') : el;
-      target?.focus();
-    }
-  }
+  const fn = VIEW_FOCUS[id];
+  if (fn) fn();
+  else (id === 'bottom' ? document.getElementById('bottom-body') : el)?.focus();
   // マウスで選んだ場合でもどこへ移ったかが分かるよう、ペインを一瞬だけ縁取る
   const flash = id === 'xml' ? el : el?.closest<HTMLElement>('section, aside, footer') ?? el;
   if (flash) {

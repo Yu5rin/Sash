@@ -66,7 +66,7 @@ function ariaShortcut(s: string): string {
   return s.replace(/Ctrl/g, 'Control').replace(/Del$/, 'Delete');
 }
 
-export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[]): MenubarHandle {
+export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts: { fallbackFocus?: () => HTMLElement | null } = {}): MenubarHandle {
   host.setAttribute('role', 'menubar');
   host.setAttribute('aria-label', t('メニュー'));
   host.classList.add('menubar');
@@ -92,7 +92,7 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[]): Menu
 
   const rememberReturn = () => {
     const a = document.activeElement as HTMLElement | null;
-    if (a && !host.contains(a) && !a.closest('.menu-popup')) returnFocus = a;
+    if (a && a !== document.body && !host.contains(a) && !a.closest('.menu-popup')) returnFocus = a;
   };
 
   const setRoving = (index: number) => buttons.forEach((b, i) => (b.tabIndex = i === index ? 0 : -1));
@@ -101,7 +101,9 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[]): Menu
     host.classList.remove('show-mnemonics');
     const target = returnFocus;
     returnFocus = null;
-    if (target && target.isConnected) target.focus();
+    // 入る前のフォーカスがなければ（ホームや起動直後）、作業の中心（キャンバスなど）へ戻す
+    const fallback = target && target.isConnected && !target.closest('[inert]') ? target : opts.fallbackFocus?.() ?? null;
+    if (fallback) fallback.focus();
     else (document.activeElement as HTMLElement | null)?.blur();
   };
 

@@ -12,8 +12,8 @@ import { applyLibraryIcon, openIconDialog } from '../icon/iconDialog';
 import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, samePath, setAttr, suggestId, usedIds, type Path } from '../model';
 import type { ImageEntry } from '../store';
-import { attributes, attrsOfEl, callbackSignature, defFor, isVbaIdentifier, isXmlId, type AttrDef } from '../schema';
-import { generateStub, type CallbackStatus } from '../vba';
+import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, type AttrDef } from '../schema';
+import { bareCallbackName, generateStub, isCallbackName, type CallbackStatus } from '../vba';
 import { lang, t } from '../i18n';
 
 export interface InspectorHooks {
@@ -178,7 +178,7 @@ function commit(name: string, value: string | null, also: Record<string, string 
 function offerStub(name: string): void {
   const status = vba.statuses().find((x) => x.name === name);
   if (!status || status.state === 'implemented') return;
-  const stub = (x: CallbackStatus) => generateStub({ ...x, name: x.name.replace(/^.*[.!]/, '') });
+  const stub = (x: CallbackStatus) => generateStub({ ...x, name: bareCallbackName(x.name) });
   if (vba.canWrite && status.state === 'missing') {
     notify({
       kind: 'info',
@@ -217,7 +217,8 @@ function captureFocus(host: HTMLElement): FocusMemo | null {
 
 function restoreFocus(host: HTMLElement, memo: FocusMemo | null): void {
   if (!memo) return;
-  const next = host.querySelector<HTMLElement>(`[data-fkey="${CSS.escape(memo.key)}"]`);
+  // CSS.escape を使わずに探す（キーに引用符などが入っても壊れないように）
+  const next = Array.from(host.querySelectorAll<HTMLElement>('[data-fkey]')).find((n) => n.dataset['fkey'] === memo.key);
   if (!next) return;
   if (memo.node instanceof HTMLInputElement && next instanceof HTMLInputElement) {
     const dirty = memo.value !== memo.orig;
@@ -470,7 +471,7 @@ function valueEditor(el: Element, d: AttrDef): HTMLElement {
 
 /** コールバック名として使えるか。「モジュール名.Sub名」「ブック!Sub名」の形も認める。 */
 function callbackError(v: string): string | null {
-  return v.split(/[.!]/).every((part) => isVbaIdentifier(part)) ? null : t('VBAのSub名として使えない文字があります');
+  return isCallbackName(v) ? null : t('VBAのSub名として使えない文字があります');
 }
 
 function callbackEditor(el: Element, attr: string): HTMLElement {
@@ -539,7 +540,9 @@ function row(el: Element, d: AttrDef, key: string): HTMLElement {
       h('button', { type: 'button', role: 'radio', class: useDynamic ? 'active' : '', 'aria-checked': String(useDynamic), title: t('VBAで動的に返す（{name}）', { name: dyn.name }), dataset: { fkey: `${d.name}:mode:vba` }, onclick: () => !useDynamic && toDynamic() }, 'VBA'),
     );
   }
-  return h('div', { class: `insp-row${modeSwitch ? ' has-mode' : ''}` }, labelCell(shown, el.localName, fieldId), h('div', { class: 'insp-value' }, editor), modeSwitch);
+  // 「固定 | VBA」はラベルの下に置く（インスペクタは幅が狭く、入力欄の横に置くと値の欄が潰れるため）
+  const label = labelCell(shown, el.localName, fieldId);
+  return h('div', { class: `insp-row${modeSwitch ? ' has-mode' : ''}` }, modeSwitch ? h('div', { class: 'insp-label-cell' }, label, modeSwitch) : label, h('div', { class: 'insp-value' }, editor));
 }
 
 /** アイコンの行。組み込み（imageMso）、埋め込み画像（image）、VBA（getImage）を切り替える。 */
