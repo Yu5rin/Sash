@@ -1,6 +1,8 @@
 using System.IO.Packaging;
 using System.Text;
+using System.Text.RegularExpressions;
 using Sash.Core.CustomUI;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.Core.Packaging;
 
@@ -8,7 +10,7 @@ namespace Sash.Core.Packaging;
 /// .xlsm / .xlam / .xltm / .xlsb の customUI パーツを読み書きする（どれも OPC 形式で、customUI は同じ場所に入る）。
 /// customUI と、それが参照する画像以外のパーツ（シート、VBA プロジェクトなど）には触れない。
 /// </summary>
-public static class RibbonPackage
+public static partial class RibbonPackage
 {
     private static readonly string[] SupportedExtensions = [".xlsm", ".xlam", ".xltm", ".xlsb"];
 
@@ -19,8 +21,33 @@ public static class RibbonPackage
     public static RibbonDocument Load(string path)
     {
         var fullPath = System.IO.Path.GetFullPath(path);
+        ThrowIfCompoundFile(fullPath);
         using var package = Package.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         return new RibbonDocument(fullPath, ReadParts(package));
+    }
+
+    /// <summary>OLE 複合ファイル（D0 CF 11 E0 A1 B1 1A E1）の先頭 8 バイト。</summary>
+    private static readonly byte[] CompoundFileSignature = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+    /// <summary>
+    /// パスワードで暗号化したブックは、拡張子が .xlsm でも中身は zip ではなく OLE 複合ファイルになる。
+    /// そのまま Package.Open に渡すと「ファイルが壊れている」としか出ないので、先に見分けて理由を伝える。
+    /// </summary>
+    internal static void ThrowIfCompoundFile(string fullPath)
+    {
+        var head = new byte[CompoundFileSignature.Length];
+        int read;
+        using (var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            read = fs.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
+        }
+
+        if (read == head.Length && head.AsSpan().SequenceEqual(CompoundFileSignature))
+        {
+            throw new UserFacingException(L(
+                "このブックはパスワードで保護（暗号化）されているか、古い形式のファイルのため開けません。Excelで「ファイルを開くためのパスワード」を外してから開いてください。",
+                "This workbook is password-protected (encrypted) or in an old file format, so it cannot be opened. Remove the password to open the file in Excel, then try again."));
+        }
     }
 
     /// <summary>開いているパッケージから customUI パーツを読み取る。</summary>
@@ -61,12 +88,28 @@ public static class RibbonPackage
     {
         ArgumentNullException.ThrowIfNull(changes);
         var fullPath = System.IO.Path.GetFullPath(path);
+        var info = new FileInfo(fullPath);
+        if (!info.Exists)
+        {
+            throw new FileNotFoundException(L($"ファイルが見つかりません：{fullPath}", $"File not found: {fullPath}"), fullPath);
+        }
 
-        // System.IO.Packaging は書き込み途中の失敗でファイルを壊しうるので、一時ファイルで作ってから置き換える
-        var temp = fullPath + ".sash-tmp";
+        // 読み取り専用のファイルは、一時ファイルの作成までは進めても最後の置き換えで失敗するので、先にわかる言葉で断る
+        if (info.IsReadOnly)
+        {
+            throw new UserFacingException(L($"読み取り専用のファイルのため保存できません。ファイルのプロパティで「読み取り専用」を外してください：{fullPath}", $"The file is read-only and cannot be saved. Clear the Read-only attribute in the file properties: {fullPath}"));
+        }
+
+        ThrowIfCompoundFile(fullPath);
+
+        // System.IO.Packaging は書き込み途中の失敗でファイルを壊しうるので、同じフォルダの一時ファイルで作ってから置き換える。
+        // 名前に Guid を入れるのは、同時に 2 つ保存したときや、前回の残りがあるときに取り合わないようにするため
+        var temp = fullPath + "." + Guid.NewGuid().ToString("N") + ".sash-tmp";
         File.Copy(fullPath, temp, overwrite: true);
         try
         {
+            // 元の属性（隠しファイルなど）は写るが、読み取り専用が付いていると開けないので外す
+            File.SetAttributes(temp, File.GetAttributes(temp) & ~FileAttributes.ReadOnly);
             using (var package = Package.Open(temp, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
             {
                 foreach (var change in changes)
@@ -84,11 +127,38 @@ public static class RibbonPackage
                 }
             }
 
-            File.Copy(temp, fullPath, overwrite: true);
+            ReplaceFile(temp, fullPath);
         }
         finally
         {
-            File.Delete(temp);
+            // 片付けの失敗で、本当の失敗の理由（例外）が隠れないようにする
+            try
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// 一時ファイルで本体を置き換える。File.Replace（ReplaceFile）は名前の付け替えで行うので、途中で止まっても
+    /// 「半分だけ書かれたブック」が残らず、元のファイルの属性やアクセス権も引き継がれる。
+    /// File.Copy での上書きは、置き換えに対応していないファイルシステムのときだけの代わりの手段。
+    /// </summary>
+    private static void ReplaceFile(string temp, string fullPath)
+    {
+        try
+        {
+            File.Replace(temp, fullPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            File.Copy(temp, fullPath, overwrite: true);
         }
     }
 
@@ -116,10 +186,36 @@ public static class RibbonPackage
 
         using var stream = part.GetStream(FileMode.Create, FileAccess.Write);
         // Office が書き出す customUI と同じく BOM なしの UTF-8 にする
-        var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(xml);
+        var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(ToUtf8Declaration(xml));
         stream.Write(bytes);
         return part;
     }
+
+    /// <summary>
+    /// 中身は BOM なしの UTF-8 で書くので、XML 宣言が別の文字コード（encoding="utf-16" など）を名乗っていたら
+    /// UTF-8 に書き換える。そのままだと Excel が UTF-16 として読もうとしてリボンが出なくなる。
+    /// 先頭の BOM 文字（U+FEFF）も、書き出すと BOM になってしまうので落とす。
+    /// </summary>
+    internal static string ToUtf8Declaration(string xml)
+    {
+        var s = xml.TrimStart('\uFEFF');
+        var m = XmlDeclaration().Match(s);
+        if (!m.Success)
+        {
+            return s;
+        }
+
+        var enc = m.Groups["enc"];
+        if (!enc.Success || string.Equals(enc.Value, "utf-8", StringComparison.OrdinalIgnoreCase))
+        {
+            return s;
+        }
+
+        return s[..enc.Index] + "UTF-8" + s[(enc.Index + enc.Length)..];
+    }
+
+    [GeneratedRegex(@"^\s*<\?xml\b[^>]*?\bencoding\s*=\s*(?<q>[""'])(?<enc>[^""']*)\k<q>[^>]*\?>")]
+    private static partial Regex XmlDeclaration();
 
     /// <summary>画像を書き込む。同じ Id のリレーションがあれば中身を差し替え、なければ customUI/images に作る。</summary>
     private static void WriteImage(Package package, PackagePart customUIPart, NewImage image)

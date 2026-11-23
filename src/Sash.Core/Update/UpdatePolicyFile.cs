@@ -23,6 +23,12 @@ public sealed record UpdatePolicy(string? Source, bool? CheckOnStartup, bool Dis
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
             var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object)
+            {
+                // { … } でないもの（配列や文字列だけ）は書き間違い。壊れているときと同じく安全側に倒して止める
+                return new UpdatePolicy(null, false, true);
+            }
+
             string? source = r.TryGetProperty("source", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
             bool? check = r.TryGetProperty("checkOnStartup", out var c) && c.ValueKind is JsonValueKind.True or JsonValueKind.False ? c.GetBoolean() : null;
             var disabled = r.TryGetProperty("disabled", out var d) && d.ValueKind == JsonValueKind.True;
