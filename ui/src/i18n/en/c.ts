@@ -465,6 +465,7 @@ export const en: Readonly<Record<string, string>> = {
   'すべての語に合うものがないので、いずれかに合うものを出しています': 'Nothing matches every word, so icons matching any of them are shown',
   'アイコン：Microsoft Fluent UI System Icons と Tabler Icons（MIT License）': 'Icons: Microsoft Fluent UI System Icons and Tabler Icons (MIT License)',
   // バージョン情報（shell/dialogs.ts）に足す一文。先に訳だけ用意しておく
+  'アイコン集は、Microsoft の Fluent UI System Icons と Tabler Icons（MIT License）を元にしています。': 'The icon sets are based on Microsoft\'s Fluent UI System Icons and Tabler Icons (MIT License).',
   'アイコン集は、Microsoft の Fluent UI System Icons（MIT License）を元にしています。': 'The icon set is based on Microsoft\'s Fluent UI System Icons (MIT License).',
   // キャンバス：幅のプレビュー（views/canvas.ts・ribbonFit.ts・ribbonTips.ts）
   'キー操作': 'Keys',
