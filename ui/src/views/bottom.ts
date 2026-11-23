@@ -5,6 +5,7 @@ import { app } from '../app';
 import { copyText } from '../clipboard';
 import type { Severity } from '../lint';
 import { revealLine } from './xmlEditor';
+import type { ToastKind } from '../shell/toast';
 import { h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { allElements, displayName, elementAt, pathOf } from '../model';
@@ -29,7 +30,7 @@ export function focus(): void {
 
 let openIcon: (existing?: ImageEntry) => void = () => undefined;
 
-export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: 'info' | 'error') => void, iconEditor: (existing?: ImageEntry) => void): void {
+export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: ToastKind) => void, iconEditor: (existing?: ImageEntry) => void): void {
   openIcon = iconEditor;
   bodyEl = body;
   const render = () => renderBottom(tabsHost, body, toast);
@@ -58,7 +59,7 @@ function imageUses(doc: Document): Map<string, Element[]> {
 
 const STATE_LABEL: Record<CallbackState, string> = { implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: 'VBA側にしかない' };
 
-function renderCallbacks(store: PartStore, toast: (msg: string, kind?: 'info' | 'error') => void): HTMLElement {
+function renderCallbacks(store: PartStore, toast: (msg: string, kind?: ToastKind) => void): HTMLElement {
   const statuses = vba.statuses();
   const missing = statuses.filter((x) => x.state === 'missing' && x.uses.length > 0);
   const run = (p: Promise<string>) => void p.then((m) => toast(m)).catch((e: Error) => toast(e.message, 'error'));
@@ -117,7 +118,7 @@ function renderCallbacks(store: PartStore, toast: (msg: string, kind?: 'info' | 
   );
 }
 
-function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: 'info' | 'error') => void): void {
+function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: string, kind?: ToastKind) => void): void {
   const store = app.store;
   const callbacks = store ? vba.statuses() : [];
   const cbIssues = callbacks.filter((x) => x.state === 'missing' || x.state === 'mismatch').length;

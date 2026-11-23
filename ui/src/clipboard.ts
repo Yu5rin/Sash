@@ -373,6 +373,10 @@ export function handleEditKey(e: KeyboardEvent, source: Source): boolean {
 if (typeof window !== 'undefined') {
   window.addEventListener('sash:command', (e) => {
     const command = (e as CustomEvent<{ command?: string }>).detail?.command;
-    if (command === 'cut' || command === 'copy' || command === 'paste' || command === 'duplicate' || command === 'delete') runCommand(command);
+    if (command === 'cut' || command === 'copy' || command === 'paste' || command === 'duplicate' || command === 'delete') {
+      // 処理したことを送り手に知らせる（送り手は defaultPrevented で、ほかの処理に回すかを決める）
+      e.preventDefault();
+      runCommand(command);
+    }
   });
 }

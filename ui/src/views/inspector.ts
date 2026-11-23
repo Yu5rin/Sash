@@ -653,7 +653,7 @@ function iconRow(el: Element, key: string): HTMLElement {
             void openLibrary((d) => {
               pendingIcon = null;
               applyLibraryIcon(path, d);
-            }, (m, k) => notify({ kind: k === 'error' ? 'error' : 'info', message: m }), { onClose: (picked) => !picked && cancelPending() }),
+            }, (m, k) => notify({ kind: k ?? 'info', message: m }), { onClose: (picked) => !picked && cancelPending() }),
         }, t('ライブラリ')),
       ),
     );

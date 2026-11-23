@@ -17,7 +17,7 @@ export interface LibraryOptions {
 let opening = false;
 
 /** 開く。onPick を渡すと、クリックでそのアイコンを選んで閉じる（渡さなければ管理だけ）。 */
-export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 'info' | 'error') => void, opts: LibraryOptions = {}): Promise<void> {
+export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: ToastKind) => void, opts: LibraryOptions = {}): Promise<void> {
   // 読み込み中にもう一度押されても、2つ開かないようにする
   if (opening || document.querySelector('.modal .library-grid')) return;
   opening = true;

@@ -341,7 +341,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       const { png, source } = detailToBlobs(d);
       const edit = source ? { source, sourceName: d.sourceName ?? `${d.id}.png`, options: d.options ?? {} } : { source: dataUrlToBlob(png), sourceName: `${d.id}.png`, options: {} };
       openIconDialog(target, undefined, { id: name, dataUrl: png, isNew: true, edit }, dialogOpts);
-    }, (m, k) => notify({ kind: k === 'error' ? 'error' : 'info', message: m }));
+    }, (m, k) => notify({ kind: k ?? 'info', message: m }));
   }
 
   /** フォルダの画像を、今の設定でまとめて取り込む（仕様書 §6.3）。 */

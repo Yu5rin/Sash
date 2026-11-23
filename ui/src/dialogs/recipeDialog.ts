@@ -7,12 +7,13 @@ import { allElements, pathOf, serialize } from '../model';
 import { builtinRecipes, insertInstance, instantiate, recipeFromElement, type Recipe } from '../recipes';
 import { generateStub, parseProcedures, procedureCode, RIBBON_HOLDER_MODULE, RIBBON_HOLDER_MODULE_NAME } from '../vba';
 import { copyText } from '../clipboard';
+import type { ToastKind } from '../shell/toast';
 import { h } from '../dom';
 import { ask, openModal } from './modal';
 import type { Instance } from '../recipes';
 import { t } from '../i18n';
 
-type Toast = (msg: string, kind?: 'info' | 'error') => void;
+type Toast = (msg: string, kind?: ToastKind) => void;
 
 async function loadCustom(): Promise<Recipe[]> {
   try {
