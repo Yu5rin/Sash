@@ -7,7 +7,7 @@ import { openModal, openOnce } from '../dialogs/modal';
 import { h, svg } from '../dom';
 import { lang, t, type Lang } from '../i18n';
 import { renderUpdateSettings } from '../updates';
-import { checkbox, select, settingRow } from './form';
+import { select, settingRow } from './form';
 import { shellIcons } from './icons';
 import { reloadForLanguage, reloadNeeded, saveLanguage } from './language';
 import { updateSettings } from './theme';
@@ -86,7 +86,7 @@ async function build(start: CategoryId): Promise<void> {
     callbacks: () => {
       const s = app.settings;
       const text = (value: string, key: 'callbackPattern' | 'callbackSharedPattern' | 'callbackModule') =>
-        h('input', { type: 'text', value, spellcheck: false, onchange: (e: Event) => void update({ [key]: (e.target as HTMLInputElement).value.trim() }) });
+        h('input', { type: 'text', value, spellcheck: false, onchange: (e: Event) => void update({ [key]: (e.target as HTMLInputElement).value.trim() } as Partial<Settings>) });
       return h('div', null,
         settingRow(t('名前の規則'), text(s.callbackPattern, 'callbackPattern'), t('新しく作るコールバックの名前です。{id} はコントロールの id、{attr} は属性名（onAction など）に置き換わります。')),
         settingRow(t('Subの共有'), select<'each' | 'shared'>(s.callbackShared ? 'shared' : 'each', [
@@ -115,9 +115,7 @@ async function build(start: CategoryId): Promise<void> {
             } catch (e) {
               toast({ kind: 'error', message: (e as Error).message });
             }
-          } }, t('変更'))), t('共有フォルダを選ぶと、チームで同じアイコンを使えます。')),
-        settingRow(t('組み込みアイコン'), checkbox(t('Excel から imageMso の絵を読み込む'), app.info.excelInstalled, () => undefined, { disabled: true }),
-          app.info.excelInstalled ? t('Excel が見つかったので、キャンバスに本物のアイコンを表示します。') : t('Excel が見つからないため、名前の枠だけを表示します。')));
+          } }, t('変更'))), t('共有フォルダを選ぶと、チームで同じアイコンを使えます。')));
     },
     updates: () => updateSection,
   };

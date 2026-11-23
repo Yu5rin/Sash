@@ -859,3 +859,4 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 
 /* ---- シェルからの上書き（ペインへ移ったことが分かるように、ビュー側の outline: none より優先する） ---- */
 #canvas:focus-visible, #tree:focus-visible, #inspector:focus-visible, #bottom-body:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+.settings-modal .settings-saved { margin-left: auto; }
