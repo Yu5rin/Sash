@@ -500,3 +500,23 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .cv-msg { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2); border-radius: var(--radius-sm); font-size: var(--fs-xs); border: 1px solid var(--border); background: var(--surface); }
 .cv-msg.warning { border-color: var(--warning-border, var(--warning)); background: var(--warning-bg, var(--surface)); }
 .cv-msg.info { border-color: var(--border-strong); }
+
+/* ---- 複数選択（仕様書 §19） ----
+ * 主な選択は .selected（実線の枠、フォーカスがあれば --focus の色）。そのほかの選択は破線の枠にして、
+ * どれがインスペクタ・XML の強調の対象（主な選択）かを見分けられるようにする。色は選択のトークンだけを使う */
+.multi-selected { outline: 2px dashed var(--sel-border); outline-offset: -2px; background: var(--sel-bg); }
+.rb-menu-item.multi-selected { outline-width: 1px; outline-offset: -1px; }
+.rb-sep.multi-selected { outline-offset: 2px; }
+.tree-row.multi-selected { background: var(--sel-bg); box-shadow: inset 2px 0 0 var(--sel-border); outline: none; }
+.tree-row.multi-selected .tree-label { font-style: normal; }
+.cv-multi {
+  height: var(--ctl-h-sm); padding: 0 var(--sp-2); font-size: var(--fs-xs); white-space: nowrap;
+  color: var(--text); background: var(--sel-bg); border: 1px solid var(--sel-border); border-radius: var(--radius-sm); cursor: pointer;
+}
+.cv-multi:hover { background: var(--hover-bg); }
+.cv-multi:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.insp-multi-note { padding: var(--sp-2) var(--sp-3); font-size: var(--fs-xs); color: var(--text-subtle); }
+.insp-mixed::placeholder { font-style: italic; }
+.insp-mixed-tag { font-size: var(--fs-xs); color: var(--text-subtle); font-style: italic; }
+.insp-bulk-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); }
+.monaco-editor .sash-secondary-tag { background: var(--sel-bg); border-bottom: 1px dashed var(--sel-border); }

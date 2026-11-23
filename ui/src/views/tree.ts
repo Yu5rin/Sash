@@ -3,7 +3,7 @@
 import '../styles-views.css';
 import { app } from '../app';
 import { handleEditKey, moveSelected } from '../clipboard';
-import { canDropInto, drop, endDrag, startDrag } from '../dnd';
+import { canDropInto, canDropManyAt, drop, endDrag, startDrag } from '../dnd';
 import { debounce, h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { allElements, displayName, identifierOf, pathOf, samePath, type Path } from '../model';
@@ -45,6 +45,8 @@ export function focus(): void {
 export function mountTree(host: HTMLElement): void {
   hostEl = host;
   host.tabIndex = 0;
+  // Ctrl+クリック・Shift+クリックで複数を選べる（仕様書 §19）
+  host.setAttribute('aria-multiselectable', 'true');
   mountFilter(host);
   host.addEventListener('keydown', (e) => onKey(e, host));
   host.addEventListener('contextmenu', (e) => {
@@ -52,7 +54,8 @@ export function mountTree(host: HTMLElement): void {
     const path = row ? parsePath(row.dataset['path']) : null;
     if (!path || !app.store) return;
     e.preventDefault();
-    app.store.select(path, 'tree');
+    // 複数選択の中の行で開いたときは、選択を保ったまま、まとめての操作のメニューを出す
+    if (!(app.store.isMulti && app.store.isSelected(path))) app.store.select(path, 'tree');
     openElementMenu(e.clientX, e.clientY, path, 'tree', host);
   });
   // ドラッグを Esc で取り消したり、ツリーの外に落としたりしたときも印を残さない（不具合 33）
@@ -78,6 +81,11 @@ export function mountTree(host: HTMLElement): void {
     if (c.kinds.has('selection') || flashPath) scrollToSelected(host);
     flashPath = null;
   });
+}
+
+/** いま見えている行のパス（上から順）。 */
+function visibleRowPaths(host: HTMLElement): Path[] {
+  return Array.from(host.querySelectorAll<HTMLElement>('.tree-row'), (r) => parsePath(r.dataset['path'])!);
 }
 
 function parsePath(s: string | undefined): Path | null {
@@ -125,6 +133,8 @@ function renderTree(host: HTMLElement): void {
     const hit = filter?.matches.has(el) ?? false;
     const c = counts.get(k);
     const selected = samePath(store.selection, path);
+    // 主な選択以外に選んでいる行（複数選択）
+    const secondary = !selected && store.isMulti && store.isSelected(path);
     const name = displayName(el);
     const id = el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.getAttribute('idQ');
     const label = name && name !== id ? name : el.localName;
@@ -133,9 +143,9 @@ function renderTree(host: HTMLElement): void {
       'div',
       {
         id: rowId(path),
-        class: `tree-row${selected ? ' selected' : ''}${el.getAttribute('visible') === 'false' ? ' hidden-el' : ''}${filter ? (hit ? ' filter-hit' : ' filter-ancestor') : ''}`,
+        class: `tree-row${selected ? ' selected' : ''}${secondary ? ' multi-selected' : ''}${el.getAttribute('visible') === 'false' ? ' hidden-el' : ''}${filter ? (hit ? ' filter-hit' : ' filter-ancestor') : ''}`,
         role: 'treeitem',
-        'aria-selected': String(selected),
+        'aria-selected': String(selected || secondary),
         // 絞り込み中は畳めないので、開閉の状態を伝えない（← で親へ移れるようにする）
         'aria-expanded': hasKids && !filter ? String(!isCollapsed) : undefined,
         'aria-level': String(depth + 1),
@@ -143,7 +153,12 @@ function renderTree(host: HTMLElement): void {
         draggable: depth > 0,
         dataset: { path: k, fold: fk },
         style: `padding-left:${4 + depth * 14}px`,
-        onclick: () => store.select(path, 'tree'),
+        onclick: (e: MouseEvent) => {
+          if (e.ctrlKey || e.metaKey) store.toggleSelect(path, 'tree');
+          // 親が違う行の間は、いま見えている行の順で範囲を決める（畳んだ中の要素は選ばない）
+          else if (e.shiftKey) store.selectRange(path, 'tree', visibleRowPaths(host));
+          else store.select(path, 'tree');
+        },
         ondblclick: () => focusField('label'),
         ondragstart: (e: DragEvent) => startDrag(e, { kind: 'move', path }),
         ondragend: () => {
@@ -295,8 +310,10 @@ function zoneOf(e: DragEvent, el: Element, row: HTMLElement): Zone | null {
   const rect = row.getBoundingClientRect();
   const y = (e.clientY - rect.top) / rect.height;
   const parent = el.parentElement;
-  const canSibling = parent !== null && canDropInto(doc, parent);
-  const canInside = canDropInto(doc, el);
+  const index = parent ? Array.prototype.indexOf.call(parent.children, el) as number : -1;
+  // まとめて運んでいるときは、並び順と個数まで確かめる（置けない位置には印を出さない）
+  const canSibling = parent !== null && canDropInto(doc, parent) && (canDropManyAt(doc, pathOf(parent), y < 0.5 ? index : index + 1));
+  const canInside = canDropInto(doc, el) && canDropManyAt(doc, pathOf(el), el.children.length);
   if (canInside && ((y > 0.25 && y < 0.75) || !canSibling)) return 'inside';
   if (canSibling) return y < 0.5 ? 'before' : 'after';
   return null;
@@ -345,6 +362,13 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
     focusTreeFilter();
   } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     moveSelected(e.key === 'ArrowUp' ? -1 : 1, 'tree');
+  } else if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && idx >= 0) {
+    // Shift+↑↓：起点から1行ずつ範囲を広げる・狭める（仕様書 §19）。主な選択が範囲の動く端になる
+    const next = e.key === 'ArrowUp' ? idx - 1 : idx + 1;
+    if (next >= 0 && next < rows.length) store.selectRange(pathAt(next), 'tree', visibleRowPaths(host));
+  } else if (e.key === 'Escape' && store.isMulti) {
+    // 複数選択をやめ、主な選択だけに戻す
+    store.clearMulti('tree');
   } else if (e.key === 'ArrowDown') {
     if (idx < rows.length - 1) store.select(pathAt(idx + 1), 'tree');
   } else if (e.key === 'ArrowUp') {

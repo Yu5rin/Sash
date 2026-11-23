@@ -53,6 +53,13 @@ export function samePath(a: Path | null, b: Path | null): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
+/** 文書の順（先行順）での前後。a が先なら負、同じなら 0、後なら正。祖先は子孫より先。 */
+export function comparePaths(a: Path, b: Path): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return a[i]! - b[i]!;
+  return a.length - b.length;
+}
+
 export function isAncestorPath(ancestor: Path, path: Path): boolean {
   return ancestor.length < path.length && ancestor.every((v, i) => v === path[i]);
 }

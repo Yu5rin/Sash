@@ -6,7 +6,7 @@ import '../styles-views.css';
 import { app } from '../app';
 import { catalog, labels, onLabelsLoaded } from '../catalog/catalog';
 import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard';
-import { canDropInto, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
+import { canDropInto, canDropManyAt, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
 import {
   allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, pathOf, samePath, isAncestorPath, type Path,
@@ -313,6 +313,23 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     hideIndicator(host);
     endDrag();
   }, true);
+  // Ctrl（⌘）+クリックで選び足す・外す、Shift+クリックで範囲を選ぶ（仕様書 §19）。
+  // 要素ごとのクリックの処理（タブの切り替え・メニューを開くなど）より先に、捕捉の段階で受けて止める
+  host.addEventListener('click', (e) => {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+    const node = (e.target as HTMLElement).closest<HTMLElement>('[data-sel][data-path]');
+    const path = parsePath(node?.dataset['path']);
+    const store = app.store;
+    if (!node || !path || !store || !host.contains(node) || node.closest('.cv-header, .cv-pop')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.shiftKey && !(e.ctrlKey || e.metaKey)) {
+      // 親が違うときは、キャンバスに描かれている順（文書の順と同じ先行順）で範囲を決める
+      store.selectRange(path, 'canvas', selectableNodes(host).map((n) => parsePath(n.dataset['path'])!));
+    } else {
+      store.toggleSelect(path, 'canvas');
+    }
+  }, true);
   host.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     if (target === host || target.classList.contains('rb-body') || target.classList.contains('cv-stage') || target.classList.contains('cv-frame') || target.classList.contains('cv-zoom')) app.store?.select(null, 'canvas');
@@ -323,7 +340,8 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     const path = parsePath(node?.dataset['path']);
     if (!path || !app.store) return;
     e.preventDefault();
-    app.store.select(path, 'canvas');
+    // 複数選択の中の要素で開いたときは、選択を保ったまま、まとめての操作のメニューを出す
+    if (!(app.store.isMulti && app.store.isSelected(path))) app.store.select(path, 'canvas');
     openElementMenu(e.clientX, e.clientY, path, 'canvas', host);
   });
 }
@@ -468,11 +486,40 @@ function renderHeader(fit: ViewFit | null): HTMLElement {
     }, short ? [h('span', { class: 'cv-long' }, label), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, short)] : label);
   const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'), tr('右クリック')));
   // 操作の説明は長いので、小さな「?」のツールチップに回す（1 行に収めるため）
-  const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー') }, '?');
+  const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー・Ctrl+クリックで選び足す・Shift+クリックで範囲を選ぶ') }, '?');
+  // 複数選択の数（仕様書 §19）。見出しの 1 行に収まるよう、短い印にする
+  const count = app.store?.isMulti ? multiBadge(app.store.selections.length) : null;
   // 見出しは 1 行に収める（2 段・3 段になると、既定の高さ 260px のキャンバスでリボンが見出しの下に隠れるため）。
   // 毎回は使わない切り替え（比べる・キーヒント・VBA で変わる表示・チェックする幅・Excel の幅）は「表示」メニューにまとめた
-  if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, modes, h('span', { class: 'cv-spacer' }), hint);
-  return h('div', { class: 'cv-header' }, modes, renderWidthControls(), renderStatus(fit), renderViewMenu(), hint);
+  if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, modes, h('span', { class: 'cv-spacer' }), count, hint);
+  return h('div', { class: 'cv-header' }, modes, renderWidthControls(), renderStatus(fit), count, renderViewMenu(), hint);
+}
+
+/** 「3 個選択中」の印。押すと、主な選択だけに戻す（Esc と同じ）。 */
+function multiBadge(n: number): HTMLElement {
+  return h('button', {
+    type: 'button',
+    class: 'cv-multi',
+    'aria-live': 'polite',
+    title: tr('Esc で主な選択だけに戻します'),
+    onclick: (e: MouseEvent) => {
+      e.stopPropagation();
+      app.store?.clearMulti('canvas');
+    },
+  }, tr('{n} 個選択中', { n }));
+}
+
+/** 複数選択のうち、主な選択以外の要素に印を付ける（主な選択はこれまでどおり selected で、フォーカスの枠も付く）。 */
+function markSecondary(host: HTMLElement): void {
+  const store = app.store;
+  if (!store?.isMulti) return;
+  for (const p of store.selections) {
+    if (samePath(p, store.selection)) continue;
+    for (const n of Array.from(host.querySelectorAll<HTMLElement>(`[data-sel][data-path="${p.join('.')}"]`))) {
+      n.classList.add('multi-selected');
+      n.setAttribute('aria-selected', 'true');
+    }
+  }
 }
 
 function option(value: string, label: string, selected: boolean): HTMLOptionElement {
@@ -784,6 +831,7 @@ function renderCanvas(host: HTMLElement): void {
   const tabScroll = resetTabScroll ? 0 : editableTabStrip(host)?.scrollLeft ?? 0;
   resetTabScroll = false;
   host.replaceChildren(renderHeader(fit), stage, h('div', { class: 'drop-indicator', hidden: true }));
+  markSecondary(host);
   if (active) Array.from(host.querySelectorAll<HTMLElement>('[data-fk]')).find((n) => n.dataset['fk'] === active)?.focus({ preventScroll: true });
 
   updateZoom(host);
@@ -1857,6 +1905,11 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
     selectNode(key === 'Home' ? sibs[0] : sibs.at(-1));
   } else if (key === 'Escape') {
     closeMenu();
+    // 複数選択中なら、まず主な選択だけに戻す（親へ上がるのは、その次の Esc）
+    if (store.clearMulti('canvas')) {
+      e.preventDefault();
+      return;
+    }
     if (sel.length > 0 && nodeOf(host, sel.slice(0, -1))) {
       e.preventDefault();
       store.select(sel.slice(0, -1), 'canvas');
@@ -1942,6 +1995,9 @@ function checkOrder(doc: Document, spot: DropSpot | null): DropSpot | null {
   const parent = elementAt(doc, spot.parentPath);
   const tag = draggedTag(doc);
   if (!parent || !tag) return null;
+  // まとめて運んでいるときは、全部をその位置に置けるかを確かめる（1つでも置けなければ表示を出さない）
+  const payload = dragPayload();
+  if (payload?.kind === 'move' && payload.paths && payload.paths.length > 1) return canDropManyAt(doc, spot.parentPath, spot.index) ? spot : null;
   const moving = movingElement(doc);
   const allowed = allowedIndex(parent, tag, spot.index, moving && moving.parentElement === parent ? moving : null);
   return allowed === null ? null : spot;

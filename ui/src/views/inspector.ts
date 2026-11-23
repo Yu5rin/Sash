@@ -19,6 +19,7 @@ import { imageMsoNames, labels as msoLabels } from '../catalog/catalog';
 import { buildSvg, DEFAULT_COLOR, displayName as fluentName, loadFluentIcons, type FluentIcon } from '../fluent/fluent';
 import { suggestFluent, suggestImageMso, suggestTerms } from '../iconSuggest';
 import { msoIcon } from '../msoIcons';
+import { renderBulkInspector } from './bulkInspector';
 import '../styles-w3.css';
 
 export interface InspectorHooks {
@@ -28,11 +29,11 @@ export interface InspectorHooks {
   pickFromLibrary(): void;
 }
 
-type Section = '基本' | '表示' | '画像' | 'コールバック' | '詳細';
-const SECTIONS: readonly Section[] = ['基本', '表示', '画像', 'コールバック', '詳細'];
+export type Section = '基本' | '表示' | '画像' | 'コールバック' | '詳細';
+export const SECTIONS: readonly Section[] = ['基本', '表示', '画像', 'コールバック', '詳細'];
 
 /** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
-function sectionName(s: Section): string {
+export function sectionName(s: Section): string {
   return lang === 'en' && s === '表示' ? 'Appearance' : t(s);
 }
 
@@ -57,18 +58,18 @@ const ATTR_LABEL: Readonly<Record<string, string>> = {
 };
 
 /** 真偽値の属性の既定値（分かっているものだけ）。「既定（はい）」のように出す。 */
-const BOOL_DEFAULT: Readonly<Record<string, boolean>> = {
+export const BOOL_DEFAULT: Readonly<Record<string, boolean>> = {
   visible: true, enabled: true, showLabel: true, showImage: true, showItemLabel: true, showItemImage: true,
   startFromScratch: false, autoScale: false, centerVertically: false, invalidateContentOnDrop: false, noWrap: false,
   isDefinitive: false, showInRibbon: true,
 };
 
-function attrLabel(name: string): string {
+export function attrLabel(name: string): string {
   const ja = ATTR_LABEL[name];
   return ja ? t(ja) : name;
 }
 
-function sectionOf(d: AttrDef): Section {
+export function sectionOf(d: AttrDef): Section {
   if (d.name === 'image' || d.name === 'imageMso' || d.name === 'getImage') return '画像';
   if (d.kind === 'callback') return 'コールバック';
   if (d.category === '動作') return '基本';
@@ -267,6 +268,14 @@ function renderInspector(host: HTMLElement): void {
   if (!store || !el || !store.selection) {
     pendingIcon = null;
     host.replaceChildren(h('div', { class: 'insp-empty' }, store ? t('キャンバスかツリーで要素を選択してください') : ''));
+    return;
+  }
+  // 複数を選んでいるときは、共通の属性をまとめて変える画面にする（仕様書 §19）
+  if (store.isMulti) {
+    pendingIcon = null;
+    host.replaceChildren(...renderBulkInspector(store.selectedElements, { pickImageMso: hooks.pickImageMso }));
+    host.scrollTop = scroll;
+    restoreFocus(host, memo);
     return;
   }
   const path = store.selection;
