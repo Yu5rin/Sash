@@ -8,6 +8,8 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <RootNamespace>Sash.App</RootNamespace>
     <AssemblyName>Sash</AssemblyName>
+    <!-- エクスプローラーやタスクバーに出る exe のアイコン（元画像は assets/icon/sash-1024.png） -->
+    <ApplicationIcon>..\..\assets\icon\sash.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +24,8 @@
   <!-- 単一exeでも動くよう、UIはファイルではなく埋め込みリソースとして持つ -->
   <ItemGroup>
     <EmbeddedResource Include="wwwroot\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- ウィンドウのアイコン。単一 exe では exe のパスからアイコンを取り出せないことがあるので、リソースとして持つ -->
+    <EmbeddedResource Include="..\..\assets\icon\sash.ico" LogicalName="sash.ico" />
   </ItemGroup>
 
   <!-- WebView2 パッケージは WPF 用の dll も参照に加えるが、WinForms だけを使うので外す（WindowsBase の競合警告を防ぐ） -->

@@ -56,6 +56,7 @@ internal sealed class MainForm : Form
         }), PostEventFromAnyThread);
 
         Text = "Sash";
+        Icon = LoadAppIcon();
         ClientSize = new Size(1440, 900);
         MinimumSize = new Size(960, 600);
         StartPosition = FormStartPosition.CenterScreen;
@@ -395,5 +396,12 @@ internal sealed class MainForm : Form
         await Task.Yield();
         var response = await _router.HandleAsync(request);
         PostEvent(response);
+    }
+
+    /// <summary>ウィンドウとタスクバーに出すアイコンを、埋め込みリソースから読む。読めなければ Windows の既定のまま。</summary>
+    private static Icon? LoadAppIcon()
+    {
+        using var stream = typeof(MainForm).Assembly.GetManifestResourceStream("sash.ico");
+        return stream is null ? null : new Icon(stream);
     }
 }
