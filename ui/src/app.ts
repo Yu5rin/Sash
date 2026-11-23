@@ -71,6 +71,8 @@ class App {
   }
 
   close(): void {
+    // 閉じたあとに予約済みの検査が走ると、閉じたファイルの画面を描き直そうとする
+    window.clearTimeout(this.lintTimer);
     this.unsubscribeStore?.();
     this.session = null;
     this.problems = [];

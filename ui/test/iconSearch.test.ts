@@ -6,7 +6,7 @@ import { CATEGORIES, categorize, categoryBit } from '../src/fluent/iconCategorie
 import { CONCEPTS } from '../src/fluent/iconConcepts';
 import { buildIndex, CONCEPT_COUNT, conceptsInText, expandToken, relatedConcepts, searchIconSet, searchTerms, splitQuery } from '../src/fluent/iconSearch';
 import { normalize } from '../src/fluent/iconWords';
-import { suggestFluent } from '../src/iconSuggest';
+import { hasSuggestTerms, suggestFluent } from '../src/iconSuggest';
 
 const all: FluentIcon[] = [...toIcons(fluentData as unknown as FluentData), ...toTablerIcons(tablerData as unknown as TablerData)];
 
@@ -205,6 +205,72 @@ describe('概念による検索', () => {
   });
 });
 
+describe('検索の質の調整', () => {
+  it('最長一致：「ログイン」は、中に含まれる短い見出し「ログ」（履歴）を拾わない', () => {
+    expect(conceptsInText('ログイン').map((c) => c.display)).toEqual(['ログイン']);
+    // 離れた位置にある短い見出しは、これまでどおり拾う
+    expect(conceptsInText('ログを見る').map((c) => c.display)).toContain('履歴');
+    // 同じ位置で別の長さの見出しがあれば、長いほうだけ
+    expect(conceptsInText('ログイン履歴').map((c) => c.display)).toEqual(expect.arrayContaining(['ログイン', '履歴']));
+  });
+
+  it('「せいさん」は精算（支払い）と生産の両方の概念が出る', () => {
+    expect(conceptsInText('せいさん').map((c) => c.display)).toEqual(expect.arrayContaining(['支払い', '生産']));
+  });
+
+  it('「印刷」で動物の足跡（animal_paw_print）を上位に出さない。プリンターは出る', () => {
+    const top = names('印刷', 8);
+    expect(top).toContain('printer');
+    expect(top.some((n) => /paw/.test(n))).toBe(false);
+    // 英語で打った探し方は外さない
+    expect(names('paw print', 5).some((n) => /paw/.test(n))).toBe(true);
+  });
+
+  it('「ばなな」の候補は食べ物のカテゴリだけ（apple のタグが付いた機器 device-imac などを出さない）', () => {
+    const hits = searchIconSet(all, 'ばなな').hits.slice(0, 40).map((h) => h.icon);
+    expect(hits.map((i) => i.name)).toContain('banana');
+    expect(hits.every((i) => has(i, 'food'))).toBe(true);
+    expect(hits.some((i) => /^device-/.test(i.name))).toBe(false);
+  });
+
+  it('ラベルからの候補も、食べ物の概念は食べ物のカテゴリだけ', async () => {
+    const picks = await suggestFluent(all, 'バナナを数える');
+    expect(picks.length).toBeGreaterThan(0);
+    expect(picks.some((i) => /^device-/.test(i.name))).toBe(false);
+  });
+
+  it('1 文字の入力には、関係のない「近い言葉」を出さない。2 文字以上は出す', () => {
+    expect(relatedConcepts('こ')).toEqual([]);
+    expect(relatedConcepts('あ')).toEqual([]);
+    expect(relatedConcepts('どうぶ')).toContain('動物');
+  });
+
+  it('1 文字の英数字は、その文字のアイコンに当たる', () => {
+    expect(names('a', 5).some((n) => /letter-a|^a$/.test(n))).toBe(true);
+    expect(names('5', 5).some((n) => /number-5/.test(n))).toBe(true);
+  });
+
+  it('英語の画面では、近い言葉を英語で出す（押すとそのまま検索できる）', () => {
+    const en = relatedConcepts('どうぶ', 6, 'en');
+    expect(en.length).toBeGreaterThan(0);
+    expect(en.every((w) => /^[\x20-\x7e]+$/.test(w))).toBe(true);
+    expect(en).toContain('animal');
+    expect(searchIconSet(all, en[0]!).hits.length).toBeGreaterThan(0);
+    // 何にも似ていないときの既定の案内も英語
+    expect(relatedConcepts('ほげほげ', 6, 'en').every((w) => /^[\x20-\x7e]+$/.test(w))).toBe(true);
+    // 日本語の画面は見出しのまま
+    expect(relatedConcepts('どうぶ', 6, 'ja')).toContain('動物');
+  });
+
+  it('ラベルの言葉の判定は、概念の辞書にだけある言葉（出荷・精算する・猫・納期・発注）でも true', async () => {
+    for (const w of ['出荷', '精算する', '猫', '納期', '発注']) expect(await hasSuggestTerms(w), w).toBe(true);
+    expect(await hasSuggestTerms('ほげ')).toBe(false);
+    expect(await hasSuggestTerms('')).toBe(false);
+    // 英数字の語はそのまま探すので true
+    expect(await hasSuggestTerms('CSV')).toBe(true);
+  });
+});
+
 describe('カテゴリ・出どころ・スタイルの絞り込み', () => {
   it('カテゴリは 32 個以内で、ビジネス・動物・乗り物・食べ物・文字・数字がある', () => {
     expect(CATEGORIES.length).toBeLessThanOrEqual(31);
@@ -274,16 +340,16 @@ describe('カテゴリ・出どころ・スタイルの絞り込み', () => {
 });
 
 describe('ラベルからの候補', () => {
-  it('ラベルの中の概念ごとに探し、Tabler も含めて候補を出す', () => {
+  it('ラベルの中の概念ごとに探し、Tabler も含めて候補を出す', async () => {
     expect(conceptsInText('在庫確認').map((c) => c.display)).toEqual(expect.arrayContaining(['在庫', '確認']));
-    const s = suggestFluent(all, '売上集計').map((i) => i.name).join(' ');
+    const s = (await suggestFluent(all, '売上集計')).map((i) => i.name).join(' ');
     expect(s).toMatch(/chart|sum|trending|calculator/);
-    const csv = suggestFluent(all, 'CSV出力').map((i) => i.name);
+    const csv = (await suggestFluent(all, 'CSV出力')).map((i) => i.name);
     expect(csv.some((n) => /csv/.test(n))).toBe(true);
     expect(csv.some((n) => /print|export/.test(n))).toBe(true);
     expect(csv.length).toBeLessThanOrEqual(5);
-    expect(suggestFluent(all, '配送リスト').some((i) => i.set === 'tabler')).toBe(true);
-    expect(suggestFluent(all, 'ほげ')).toEqual([]);
+    expect((await suggestFluent(all, '配送リスト')).some((i) => i.set === 'tabler')).toBe(true);
+    expect(await suggestFluent(all, 'ほげ')).toEqual([]);
   });
 });
 

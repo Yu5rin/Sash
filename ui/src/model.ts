@@ -38,6 +38,28 @@ export function elementAt(doc: Document, path: Path): Element | null {
   return el;
 }
 
+/**
+ * その場で名前を入力している間、入力欄が持つパスがまだ同じ要素を指しているかを確かめるための控え。
+ * 文書が（XML の編集・元に戻す・並べ替えなどで）変わると、パスの先が別の要素になりうる。確定してしまうと別の要素の
+ * ラベルを書き換えるので、同じ種類・同じ id（id がなければ同じラベル）かどうかで見分ける。
+ */
+export interface ElementSnapshot {
+  tag: string;
+  id: string | null;
+  label: string | null;
+}
+
+export function snapshotOf(el: Element): ElementSnapshot {
+  return { tag: el.localName, id: el.getAttribute('id'), label: el.getAttribute('label') };
+}
+
+/** path の先が、snapshot を取ったときと同じ要素か。 */
+export function isSameElementAt(doc: Document, path: Path, snap: ElementSnapshot): boolean {
+  const cur = elementAt(doc, path);
+  if (!cur || cur.localName !== snap.tag) return false;
+  return snap.id !== null ? cur.getAttribute('id') === snap.id : cur.getAttribute('label') === snap.label;
+}
+
 export function pathOf(el: Element): number[] {
   const path: number[] = [];
   let cur: Element = el;

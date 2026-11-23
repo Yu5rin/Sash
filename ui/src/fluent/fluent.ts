@@ -151,8 +151,8 @@ export function buildSvg(icon: FluentIcon, variant: FluentVariant, color: string
 // ---- 検索 ----
 // 日本語の語の扱い（normalize・JA_KEYWORDS・jaToEnglish・jaTermsInText）は iconWords.ts。これまでの import が動くよう、ここからも出す。
 export { JA_KEYWORDS, jaToEnglish, jaTermsInText, normalize } from './iconWords';
-// 検索（概念による絞り込み）は iconSearch.ts に移した。これまでの import が動くよう、ここからも出す。
-export { searchIcons } from './iconSearch';
+// 検索（概念による絞り込み）は iconSearch.ts。ここから再び出すと、fluent.ts を読むだけで概念の辞書（約 100KB）が
+// 最初の読み込みに入ってしまうので、出さない（検索を使う側が iconSearch.ts を動的 import で読む）。
 
 export interface IconSetData {
   icons: FluentIcon[];

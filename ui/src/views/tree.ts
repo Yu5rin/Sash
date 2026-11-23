@@ -6,7 +6,7 @@ import { handleEditKey, moveSelected } from '../clipboard';
 import { canDropInto, canDropManyAt, drop, endDrag, startDrag } from '../dnd';
 import { debounce, h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
-import { allElements, displayName, elementAt, identifierOf, pathOf, samePath, type Path } from '../model';
+import { allElements, displayName, elementAt, identifierOf, isSameElementAt, pathOf, samePath, snapshotOf, type Path } from '../model';
 import { defFor } from '../schema';
 import { openElementMenu } from './contextMenu';
 import { focusField } from './inspector';
@@ -31,6 +31,8 @@ let filterInput: HTMLInputElement | null = null;
 let filterCount: HTMLElement | null = null;
 /** 行の中でラベルを書き換えている間。描き直しで入力欄を消してしまわないよう、この間は描き直しを止める。 */
 let renaming = false;
+/** 入力中のその場リネームを、入力欄のパスが別の要素を指すようになったときに捨てる関数（入力中だけ入る）。 */
+let cancelRename: ((doc: Document) => void) | null = null;
 
 /** 絞り込みの欄にフォーカスを移す（コマンドから呼ぶ）。 */
 export function focusTreeFilter(): void {
@@ -75,6 +77,9 @@ export function mountTree(host: HTMLElement): void {
   app.on('store', (c) => {
     const store = app.store;
     if (!c || !store) return;
+    // 入力中に文書が変わって入力欄のパスが別の要素を指すようになったら、確定せずに捨てる
+    // （残すと renaming が立ったままで描き直しが止まり、確定すると別の要素のラベルを書き換える）
+    if (renaming && c.kinds.has('doc')) cancelRename?.(store.doc);
     if (c.kinds.has('doc') && c.source !== 'xml' && c.source !== 'history') {
       const sel = store.selectedElement;
       if (sel && !known.has(sel)) flashPath = store.selection;
@@ -446,6 +451,9 @@ export function startRename(host: HTMLElement, path: Path): boolean {
   const row = host.querySelector<HTMLElement>(`.tree-row[data-path="${path.join('.')}"]`);
   const labelNode = row?.querySelector<HTMLElement>('.tree-label');
   if (!row || !labelNode || renaming) return false;
+  // 畳んだ枠の中（非表示）では入力欄にフォーカスが移らず、blur も来ないので、始めない
+  if (typeof row.checkVisibility === 'function' && !row.checkVisibility({ visibilityProperty: true })) return false;
+  const snap = snapshotOf(el);
   const original = el.getAttribute('label') ?? '';
   const input = h('input', { type: 'text', class: 'tree-rename', value: original, spellcheck: false, 'aria-label': t('ラベル') });
   const saved = Array.from(labelNode.childNodes);
@@ -456,6 +464,8 @@ export function startRename(host: HTMLElement, path: Path): boolean {
     if (done) return;
     done = true;
     renaming = false;
+    cancelRename = null;
+    window.removeEventListener('mousedown', trackPointer, true);
     const v = input.value;
     if (!keyboard && (!commit || v === original)) {
       // 何も変えずに外れたときは、行を作り直さない（クリックした先の行が消えて、選べなくなるのを避ける）
@@ -474,7 +484,22 @@ export function startRename(host: HTMLElement, path: Path): boolean {
     }
     renderTree(host);
     if (keyboard) host.focus({ preventScroll: true });
+    // 外れた原因が別の行のクリックなら、再描画でその行が作り直されてクリックが届かないので、ここで選ぶ
+    else if (clicked) {
+      if (clicked.multi) store.toggleSelect(clicked.path, 'tree');
+      else if (clicked.range) store.selectRange(clicked.path, 'tree', visibleRowPaths(host));
+      else store.select(clicked.path, 'tree');
+    }
   };
+  /** 入力中に押された行（blur で確定して描き直すと、その行が消えて click が届かない）。 */
+  let clicked: { path: Path; multi: boolean; range: boolean } | null = null;
+  const trackPointer = (e: MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    const hit = target?.closest<HTMLElement>('.tree-row[data-path]');
+    const p = hit && host.contains(hit) && !target?.closest('.twisty, .tree-rename') ? parsePath(hit.dataset['path']) : null;
+    clicked = p && e.button === 0 ? { path: p, multi: e.ctrlKey || e.metaKey, range: e.shiftKey } : null;
+  };
+  window.addEventListener('mousedown', trackPointer, true);
   input.addEventListener('keydown', (e) => {
     // 日本語入力の変換確定の Enter で確定しない
     if (e.isComposing || e.keyCode === 229) return;
@@ -486,10 +511,26 @@ export function startRename(host: HTMLElement, path: Path): boolean {
   input.addEventListener('click', (e) => e.stopPropagation());
   input.addEventListener('dblclick', (e) => e.stopPropagation());
   input.addEventListener('mousedown', (e) => e.stopPropagation());
+  const undo = () => {
+    done = true;
+    renaming = false;
+    cancelRename = null;
+    window.removeEventListener('mousedown', trackPointer, true);
+    labelNode.replaceChildren(...saved);
+    row.draggable = wasDraggable;
+  };
   renaming = true;
+  cancelRename = (doc) => {
+    if (!isSameElementAt(doc, path, snap)) undo();
+  };
   row.draggable = false;
   labelNode.replaceChildren(input);
   input.focus();
+  // フォーカスが取れなかったなら、blur が来ないまま入力中が続くので、始めなかったことにする
+  if (document.activeElement !== input) {
+    undo();
+    return false;
+  }
   input.select();
   return true;
 }

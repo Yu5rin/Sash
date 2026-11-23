@@ -2,8 +2,20 @@
 // 何千もの imageMso やアイコン集から一から探すのは手間なので、ラベルの言葉から「たぶんこれ」を数個だけ先に見せる。
 // imageMso の候補は昔からの小さな辞書（JA_KEYWORDS）で、アイコン集の候補は概念の辞書（iconConcepts.ts）で探す。
 
-import { jaTermsInText, normalize, searchIcons, type FluentIcon } from './fluent/fluent';
-import { conceptsInText, searchTerms } from './fluent/iconSearch';
+import { jaTermsInText, normalize, type FluentIcon } from './fluent/fluent';
+// 概念の辞書と索引（iconSearch.ts）は大きいので、最初の読み込みに入れないよう、型だけ読み込み、使うときに動的 import する
+import type * as IconSearch from './fluent/iconSearch';
+
+let searchEngine: Promise<typeof IconSearch> | null = null;
+
+/** 検索の部品（iconSearch.ts）を読み込む（初回だけ。失敗したら次にもう一度読めるよう、覚えておかない）。 */
+export function loadSuggestEngine(): Promise<typeof IconSearch> {
+  searchEngine ??= import('./fluent/iconSearch').catch((e: unknown) => {
+    searchEngine = null;
+    throw e;
+  });
+  return searchEngine;
+}
 
 /** 候補の数。インスペクタは幅が狭いので、1行に収まる数にする。 */
 export const SUGGEST_LIMIT = 5;
@@ -92,9 +104,12 @@ export function suggestImageMso(label: string, names: readonly string[], labels:
  * 概念の順に1つずつ交互に取る（最初の概念の候補だけで埋まらず、「CSV出力」なら出力と CSV の両方の候補が並ぶように）。
  * 辞書にない英数字の語（ラベルの中の「Excel」「PDF」など）は、そのまま探す。
  */
-export function suggestFluent(icons: readonly FluentIcon[], label: string, limit = SUGGEST_LIMIT): FluentIcon[] {
+export async function suggestFluent(icons: readonly FluentIcon[], label: string, limit = SUGGEST_LIMIT): Promise<FluentIcon[]> {
+  const { conceptsInText, searchTerms, searchIcons } = await loadSuggestEngine();
   const lists: FluentIcon[][] = [];
-  for (const c of conceptsInText(label)) lists.push(searchTerms(icons, c.terms, { variant: 'regular' }).slice(0, limit).map((h) => h.icon));
+  for (const c of conceptsInText(label)) {
+    lists.push(searchTerms(icons, c.terms, { variant: 'regular', ...(c.category ? { onlyCategory: c.category } : {}) }).slice(0, limit).map((h) => h.icon));
+  }
   for (const w of asciiWords(label)) lists.push(searchIcons(icons, w, 'regular').slice(0, limit));
   const out: FluentIcon[] = [];
   for (let i = 0; out.length < limit && lists.some((l) => i < l.length); i++) {
@@ -105,4 +120,15 @@ export function suggestFluent(icons: readonly FluentIcon[], label: string, limit
     }
   }
   return out;
+}
+
+/**
+ * ラベルに、アイコンの候補を出せる言葉があるか。昔からの小さな辞書（imageMso 用）か、概念の辞書（アイコン集用）のどちらかに当たれば true。
+ * 「出荷」「精算する」「猫」のように、概念の辞書にしかない言葉でも候補を出すため、両方を見る。
+ * 大きなアイコン集のデータを読み込む前の足切りに使うので、概念の辞書だけを（動的 import で）読む。
+ */
+export async function hasSuggestTerms(label: string): Promise<boolean> {
+  if (suggestTerms(label).length > 0) return true;
+  const { conceptsInText } = await loadSuggestEngine();
+  return conceptsInText(label).length > 0;
 }

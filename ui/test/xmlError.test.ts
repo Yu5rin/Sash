@@ -14,6 +14,9 @@ describe('XML の構文エラーの日本語化', () => {
     ['1行目 5列：Element x:a prefix is unbound', '名前空間の接頭辞'],
     ['5行目 3列：Opening and ending tag mismatch: group line 4 and tab', '<group>（4行目）の閉じタグが <tab>'],
     ['5行目 3列：AttValue: " or \' expected', '引用符'],
+    // > の閉じ忘れ（<button id="a" <button …）で Chromium が出す文
+    ['4行目 20列：Unexpected token inside opening tag: <', '開始タグの中に予期しない文字があります（> の閉じ忘れの可能性）'],
+    ['4行目 20列：Unexpected token inside opening tag: x', '開始タグの中に予期しない文字があります'],
   ];
   for (const [src, expected] of cases) {
     it(src, () => {

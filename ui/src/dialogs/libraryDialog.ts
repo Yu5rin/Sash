@@ -3,6 +3,7 @@
 import type { ToastKind } from '../shell/toast';
 import { invoke, type LibraryIconDetail, type LibraryIconDto } from '../bridge';
 import { app } from '../app';
+import type { Path } from '../model';
 import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { fuzzyScore } from '../catalog/catalog';
@@ -14,6 +15,12 @@ export type LibraryPick = (icon: LibraryIconDetail) => void;
 export interface LibraryOptions {
   /** 閉じたときに呼ぶ。picked はアイコンを選んだか（取り消したときに呼び出し元の表示を戻すため）。 */
   onClose?: (picked: boolean) => void;
+  /**
+   * 空のライブラリの［アイコンを作る…］が押されたときに、選んでいる要素を渡してアイコンエディタを開く関数。
+   * アイコンエディタ（iconDialog.ts）もライブラリを開くので、ここから直接 import すると循環する。
+   * 動的 import で逃げると、同じモジュールが静的にも読まれていて分割の効果がなく、ビルドが警告するため、呼び出し側から渡してもらう。
+   */
+  onCreateIcon?: (target: Path) => void;
 }
 
 let opening = false;
@@ -49,7 +56,7 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
   const grid = h('div', { class: 'library-grid' });
   const status = h('div', { class: 'catalog-status' });
   // 空のときに検索欄・切り替え・空の格子を並べても意味がないので、代わりに次の一手を示す
-  const emptyState = buildEmptyState(() => modal.close(), !!onPick);
+  const emptyState = buildEmptyState(() => modal.close(), !!onPick, opts.onCreateIcon);
 
   const allTags = () => [...new Set(data.icons.flatMap((i) => i.tags))].sort((a, b) => a.localeCompare(b));
   const renderTags = () =>
@@ -175,7 +182,7 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
  * 要素を選んでいないとアイコンエディタの対象がないので、無効にして理由を添える。
  * 選ぶ目的で開いた場合（onPick あり）は、作る入口を出さず説明だけにする。
  */
-export function buildEmptyState(closeLibrary: () => void, picking: boolean): HTMLElement {
+export function buildEmptyState(closeLibrary: () => void, picking: boolean, onCreateIcon?: (target: Path) => void): HTMLElement {
   const sel = app.store?.selection ?? null;
   const reason = tr('先にキャンバスかツリーで、アイコンを付けるボタンなどを選んでください');
   const box = h('div', { class: 'library-empty' },
@@ -189,8 +196,7 @@ export function buildEmptyState(closeLibrary: () => void, picking: boolean): HTM
       title: sel ? null : reason,
       onclick: () => {
         closeLibrary();
-        // 循環参照を避けるため、アイコンエディタは押されたときに読み込む
-        void import('../icon/iconDialog').then((m) => m.openIconDialog(sel));
+        if (sel) onCreateIcon?.(sel);
       },
     }, tr('アイコンを作る…')));
     if (!sel) box.append(h('p', { class: 'muted library-empty-reason' }, reason));

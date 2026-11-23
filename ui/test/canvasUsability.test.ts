@@ -1,5 +1,5 @@
 // キャンバスの使い勝手（C-1 追加直後の名前入力、C-3 組み込みタブの「…」、C-5 選択の読み上げ、C-7 グループ名）。
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../src/app';
 import { builtinGroupName, describeSelection, mountCanvas, setCanvasGrowHandler, startRenameOf } from '../src/views/canvas';
 import { elementAt, pathOf } from '../src/model';
@@ -107,6 +107,30 @@ describe('C-1 足した直後の名前入力', () => {
   it('ラベルを持たない要素では何もしない', () => {
     expect(startRenameOf([])).toBe(false);
   });
+
+  it('入力欄にフォーカスが移らないとき（畳んだ枠の中など）は始めなかったことにし、描き直しが止まったままにならない', () => {
+    const spy = vi.spyOn(HTMLInputElement.prototype, 'focus').mockImplementation(() => undefined);
+    expect(startRenameOf(pathOf(el('b2')))).toBe(false);
+    spy.mockRestore();
+    expect(host.querySelector('input.cv-rename')).toBeNull();
+    expect(host.textContent).toContain('出力');
+    // 旗が残っていれば、次の編集が画面に出ない
+    app.store!.edit('other', (doc) => doc.querySelector('[id="b3"]')!.setAttribute('label', '別名'), 'test');
+    expect(host.textContent).toContain('別名');
+    expect(startRenameOf(pathOf(el('b2')))).toBe(true);
+    host.querySelector<HTMLInputElement>('input.cv-rename')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+
+  it('入力中に文書が変わって入力欄のパスが別の要素を指すようになったら、確定せずに捨てて描き直す', () => {
+    const b2 = el('b2');
+    startRenameOf(pathOf(b2));
+    const input = host.querySelector<HTMLInputElement>('input.cv-rename')!;
+    input.value = '古いパスへ書く';
+    app.store!.edit('xml', () => { b2.remove(); return undefined; }, 'test');
+    expect(host.querySelector('input.cv-rename')).toBeNull();
+    input.dispatchEvent(new FocusEvent('blur'));
+    expect(el('b3').getAttribute('label')).toBe('閉じる');
+  });
 });
 
 describe('C-3 組み込みタブのまとめ', () => {
@@ -146,5 +170,35 @@ describe('C-4 比べるモードの高さ', () => {
     app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
     expect(released).toBe(1);
     setCanvasGrowHandler(null);
+  });
+
+  it('広げるのは足りない分だけ（比べる枠の全高ではなく、枠の下端までに要る高さ − いまのキャンバスの高さ）', () => {
+    const calls: number[] = [];
+    setCanvasGrowHandler((px) => {
+      calls.push(px);
+      return () => undefined;
+    });
+    // キャンバスの枠は 500px、比べる枠は上端 380・下端 600（全高 220）。足りないのは 600 + 12 − 500 = 112
+    vi.spyOn(host, 'clientHeight', 'get').mockReturnValue(500);
+    const rect = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const orig = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('cv-compare')) return rect(380, 600);
+      return this === host ? rect(0, 500) : orig.call(this);
+    });
+    setPreview({ width: 1366, compare: true });
+    app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
+    expect(calls).toEqual([112]);
+    setPreview({ compare: false });
+    app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
+    // すでに十分な高さがあれば、広げない
+    vi.spyOn(host, 'clientHeight', 'get').mockReturnValue(900);
+    calls.length = 0;
+    setPreview({ width: 1366, compare: true });
+    app.open({ path: 'test.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
+    expect(calls).toEqual([]);
+    setPreview({ compare: false });
+    setCanvasGrowHandler(null);
+    vi.restoreAllMocks();
   });
 });

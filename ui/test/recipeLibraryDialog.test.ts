@@ -61,6 +61,16 @@ describe('アイコンライブラリが空のとき', () => {
     expect(btn.disabled).toBe(false);
   });
 
+  it('［アイコンを作る…］は、選んでいる要素を渡された関数に伝える（iconDialog を直接 import しない）', () => {
+    vi.spyOn(app, 'store', 'get').mockReturnValue({ selection: [0, 1] } as never);
+    const opened: unknown[] = [];
+    const closed: number[] = [];
+    const btn = buildEmptyState(() => closed.push(1), false, (p) => opened.push(p)).querySelector<HTMLButtonElement>('button')!;
+    btn.click();
+    expect(opened).toEqual([[0, 1]]);
+    expect(closed).toEqual([1]);
+  });
+
   it('アイコンを選ぶために開いたときは、作る入口を出さず説明だけにする', () => {
     vi.spyOn(app, 'store', 'get').mockReturnValue({ selection: [0] } as never);
     const box = buildEmptyState(() => undefined, true);

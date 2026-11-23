@@ -289,7 +289,7 @@ function commands(): AppCommand[] {
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
     { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
-    { id: 'tools.library', group: G.tools, title: t('アイコンライブラリ…'), keywords: 'icon library', run: () => void openOnce('library', () => openLibrary(undefined, notify)) },
+    { id: 'tools.library', group: G.tools, title: t('アイコンライブラリ…'), keywords: 'icon library', run: () => void openOnce('library', () => openLibrary(undefined, notify, { onCreateIcon: (target) => openIconDialog(target) })) },
     { id: 'tools.settings', group: G.tools, title: t('設定…'), keywords: 'settings options', run: () => void openSettings() },
     { id: 'tools.language', group: G.tools, title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
 

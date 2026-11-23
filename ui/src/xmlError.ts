@@ -18,6 +18,9 @@ export function describeXmlError(message: string): string {
     [/Unexpected end of stream: no root element found/i, () => 'XML が空です'],
     [/Unexpected end of stream/i, () => 'タグや引用符が閉じられないまま、XML が終わっています'],
     [/Unexpected token inside qualified name:\s*\/?>/i, () => '属性に値がありません（名前="値" の形にしてください）'],
+    // 開始タグの中に「<」が来た。いちばん多い原因は、直前のタグの「>」の閉じ忘れ（<button id="a" <button …）
+    [/Unexpected token inside opening tag:\s*<?\s*$/i, () => '開始タグの中に予期しない文字があります（> の閉じ忘れの可能性）'],
+    [/Unexpected token inside opening tag/i, () => '開始タグの中に予期しない文字があります'],
     [/Unexpected token inside qualified name/i, () => 'タグ名や属性名の途中に使えない文字があります'],
     [/Unexpected token inside entity/i, () => '「&」の使い方が正しくありません（文字としての「&」は &amp; にしてください）'],
     [/Unexpected token '--' before/i, () => 'コメントの中に「--」は書けません'],

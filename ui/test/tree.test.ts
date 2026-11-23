@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../src/app';
 import { pathOf } from '../src/model';
 import { mountTree } from '../src/views/tree';
@@ -136,5 +136,39 @@ describe('ツリーのその場での名前変更', () => {
     input()!.value = '途中';
     app.store!.edit('xml', (doc) => doc.querySelector('[id="g"]')!.setAttribute('screentip', 'x'), 'test');
     expect(input()!.value).toBe('途中');
+  });
+  it('入力欄にフォーカスが移らないとき（畳んだ枠の中など）は始めなかったことにする。入力中のまま残らない', () => {
+    select('b1');
+    const spy = vi.spyOn(HTMLInputElement.prototype, 'focus').mockImplementation(() => undefined);
+    press(tree, 'F2');
+    spy.mockRestore();
+    expect(input()).toBeNull();
+    expect(tree.querySelector('.tree-row.selected .tree-label')!.textContent).toBe('B1');
+    // 入力中の旗が立ったままなら、描き直しも次の入力も止まってしまう
+    press(tree, 'F2');
+    expect(input()).not.toBeNull();
+  });
+
+  it('入力中に文書が変わって入力欄の行が別の要素になったら、確定せずに捨てる', () => {
+    const b1 = select('b1');
+    press(tree, 'F2');
+    input()!.value = '古い行へ書く';
+    // b1 を消すと、同じパスの先は次の要素（b2）になる
+    app.store!.edit('xml', () => { b1.remove(); return undefined; }, 'test');
+    expect(input()).toBeNull();
+    expect(app.store!.doc.querySelector('[id="b2"]')!.getAttribute('label')).toBeNull();
+    expect(tree.querySelectorAll('.tree-row').length).toBeGreaterThan(0);
+  });
+
+  it('入力中に別の行を押して外れたとき、確定の描き直しでクリックが失われず、押した行が選ばれる', () => {
+    const el = select('b1');
+    press(tree, 'F2');
+    input()!.value = '確定する';
+    const other = tree.querySelector<HTMLElement>('.tree-row[data-path="0.0.0.0"]') ?? tree.querySelector<HTMLElement>('.tree-row[data-path="0.0.0"]')!;
+    const otherPath = other.dataset['path']!;
+    other.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    input()!.dispatchEvent(new FocusEvent('blur'));
+    expect(el.getAttribute('label')).toBe('確定する');
+    expect(app.store!.selection!.join('.')).toBe(otherPath);
   });
 });

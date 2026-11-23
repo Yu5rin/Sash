@@ -28,7 +28,24 @@ interface Entry {
   terms: readonly string[];
   /** 利用者に見せる見出し（概念の最初の言葉）。 */
   display: string;
+  /** 概念がこのカテゴリのアイコンだけを指すとき、そのカテゴリの id（食べ物など。下の FOOD_CONCEPTS）。 */
+  category?: string;
 }
+
+/**
+ * 食べ物の概念（見出しの最初の言葉）。これらは「食べ物のカテゴリのアイコン」だけに当てる。
+ * 「ばなな」→ apple の言葉がタグ（apple）として device-imac など機器のアイコンにも当たってしまうため。
+ * カテゴリが分かっているアイコンだけを絞る（カテゴリの割り当てがない＝その他、のアイコンは出さない）。
+ */
+const FOOD_CONCEPTS: ReadonlySet<string> = new Set(['食べ物', '飲み物', 'コーヒー', 'ビール', '肉', '野菜', '果物', '米', 'ハンバーガー', '調味料']);
+
+/**
+ * ある言葉のアイコンのうち、言葉の意味ではないものを外す（言葉 → 名前に含まれると外す単語）。
+ * 「印刷」→ print が、動物の足跡（animal_paw_print）の print にも当たって上位に出るため。
+ */
+const NOISE_WORDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  print: new Set(['paw']),
+};
 
 function stripLong(text: string): string {
   return text.replace(/ー/g, '');
@@ -47,7 +64,8 @@ function dictionary(): readonly Entry[] {
   for (const [keys, terms] of CONCEPTS) {
     const ks = keys.split('/');
     const ts = terms.split(' ').filter(Boolean).map(normTerm);
-    for (const k of ks) list.push({ key: stripLong(normalize(k)), terms: ts, display: ks[0]! });
+    const category = FOOD_CONCEPTS.has(ks[0]!) ? 'food' : undefined;
+    for (const k of ks) list.push({ key: stripLong(normalize(k)), terms: ts, display: ks[0]!, ...(category ? { category } : {}) });
   }
   // 昔からある小さな辞書（JA_KEYWORDS）も使う。新しい辞書にない言葉を取りこぼさないため
   for (const [k, v] of Object.entries(JA_KEYWORDS)) list.push({ key: stripLong(normalize(k)), terms: v.map(normTerm), display: k });
@@ -65,6 +83,8 @@ export interface ExpandedTerm {
   weight: number;
   /** どの見出しから来たか（ヒント表示用。英語の語をそのまま探すときは空）。 */
   from: string;
+  /** このカテゴリのアイコンだけに当てる（食べ物の概念）。 */
+  category?: string;
 }
 
 /** 辞書の何番目の言葉かによる重み。先頭ほど代表的な意味。 */
@@ -77,9 +97,9 @@ export function expandToken(token: string): ExpandedTerm[] {
   const q = stripLong(token);
   if (!q) return [];
   const out = new Map<string, ExpandedTerm>();
-  const put = (term: string, weight: number, from: string) => {
+  const put = (term: string, weight: number, from: string, category?: string) => {
     const old = out.get(term);
-    if (!old || old.weight < weight) out.set(term, { term, weight, from });
+    if (!old || old.weight < weight) out.set(term, category ? { term, weight, from, category } : { term, weight, from });
   };
   const ascii = /^[a-z0-9_-]+$/.test(q);
   if (ascii) {
@@ -108,7 +128,7 @@ export function expandToken(token: string): ExpandedTerm[] {
   // 入力が短いと前方一致が大量に当たるので、確かなもの・短い（近い）ものから最大 8 つの見出しだけ使う
   hits.sort((a, b) => b.quality - a.quality || a.entry.key.length - b.entry.key.length);
   for (const { entry, quality } of hits.slice(0, 8)) {
-    entry.terms.forEach((term, i) => put(term, quality * positionWeight(i), entry.display));
+    entry.terms.forEach((term, i) => put(term, quality * positionWeight(i), entry.display, entry.category));
   }
   return [...out.values()];
 }
@@ -231,6 +251,12 @@ function scoreToken(idx: Index, expanded: readonly ExpandedTerm[], typed: boolea
   const n = idx.icons.length;
   const ts: TokenScore = { best: new Float32Array(n), bonus: new Float32Array(n), via: new Int16Array(n).fill(-1) };
   const hit = (i: number, s: number, ti: number) => {
+    const e = expanded[ti]!;
+    // 食べ物の概念は食べ物のカテゴリだけ。意味の違う同名の単語（paw print など）も外す
+    if (e.category && (idx.cats[i]! & categoryBit(e.category)) === 0) return;
+    // 利用者が英語で打った言葉（from が空）は外さない（「paw print」で探せるように）
+    const noise = e.from ? NOISE_WORDS[e.term] : undefined;
+    if (noise && idx.icons[i]!.words.some((w) => noise.has(w))) return;
     if (s > ts.best[i]!) {
       ts.best[i] = s;
       ts.via[i] = ti;
@@ -443,9 +469,9 @@ export function searchIcons(icons: readonly FluentIcon[], query: string, variant
  * 英語の言葉の並びで探す（OR）。ラベルから出す候補のように、辞書の1つの概念が持つ言葉全体で探したいときに使う。
  * 言葉ごとの重みは、先頭ほど重い。
  */
-export function searchTerms(icons: readonly FluentIcon[], terms: readonly string[], opts: SearchOptions = {}): IconHit[] {
+export function searchTerms(icons: readonly FluentIcon[], terms: readonly string[], opts: SearchOptions & { onlyCategory?: string } = {}): IconHit[] {
   const idx = buildIndex(icons);
-  const expanded: ExpandedTerm[] = terms.map((t, i) => ({ term: normTerm(t), weight: positionWeight(i), from: 'x' }));
+  const expanded: ExpandedTerm[] = terms.map((t, i) => ({ term: normTerm(t), weight: positionWeight(i), from: 'x', ...(opts.onlyCategory ? { category: opts.onlyCategory } : {}) }));
   if (expanded.length === 0) return [];
   const ts = scoreToken(idx, expanded, false);
   const out: { i: number; s: number }[] = [];
@@ -466,6 +492,8 @@ export function searchTerms(icons: readonly FluentIcon[], terms: readonly string
 export interface ConceptHit {
   /** 見出し。 */
   display: string;
+  /** その概念がこのカテゴリのアイコンだけを指すとき、そのカテゴリの id。 */
+  category?: string;
   /** 文の中の位置。 */
   at: number;
   terms: readonly string[];
@@ -480,6 +508,7 @@ export function conceptsInText(text: string): ConceptHit[] {
   const t = stripLong(normalize(text));
   if (!t) return [];
   const hits: (ConceptHit & { len: number })[] = [];
+  const found: { display: string; at: number; len: number }[] = [];
   const seen = new Set<string>();
   for (const e of dictionary()) {
     if (!e.key) continue;
@@ -489,10 +518,14 @@ export function conceptsInText(text: string): ConceptHit[] {
     const id = `${e.display}@${at}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    hits.push({ display: e.display, at, terms: e.terms, len: e.key.length });
+    found.push({ display: e.display, at, len: e.key.length });
+    hits.push({ display: e.display, at, terms: e.terms, len: e.key.length, ...(e.category ? { category: e.category } : {}) });
   }
-  hits.sort((a, b) => a.at - b.at || b.len - a.len);
-  return hits.map((h) => ({ display: h.display, at: h.at, terms: h.terms }));
+  // 最長一致：より長い見出しの範囲に収まる短い見出しは使わない（「ログイン」の中の「ログ」＝履歴、が当たらないように）。
+  // 同じ概念の別の書き方（同じ display）の範囲は、同じ概念なので比べない
+  const kept = hits.filter((a) => !found.some((b) => b.display !== a.display && b.len > a.len && b.at <= a.at && b.at + b.len >= a.at + a.len));
+  kept.sort((a, b) => a.at - b.at || b.len - a.len);
+  return kept.map((h) => ({ display: h.display, at: h.at, terms: h.terms, ...(h.category ? { category: h.category } : {}) }));
 }
 
 // ---- 空の結果のときの案内 ----
@@ -509,9 +542,12 @@ function bigrams(s: string): Set<string> {
  * 合うアイコンがなかったときに、近い言葉（辞書の見出し）を出す。文字の並びが似ているもの（2文字組の重なり）を探し、
  * 何も似ていなければ、よく使う言葉を出す。
  */
-export function relatedConcepts(query: string, limit = 6): string[] {
+export function relatedConcepts(query: string, limit = 6, language: 'ja' | 'en' = 'ja'): string[] {
   const q = stripLong(normalize(query)).replace(/\s+/g, '');
-  if (!q) return DEFAULT_RELATED.slice(0, limit);
+  if (!q) return localizeRelated(DEFAULT_RELATED.slice(0, limit), language);
+  // 1文字（「こ」など）は2文字組が作れず、1字が含まれるだけの見出しが大量に当たって、関係のない言葉が並ぶので出さない。
+  // 1文字の英数字は、その文字のアイコン（letter-a・number-5）に当たるので、案内はいらない
+  if (q.length < 2) return [];
   const qb = bigrams(q);
   const scored = new Map<string, number>();
   for (const e of dictionary()) {
@@ -523,9 +559,26 @@ export function relatedConcepts(query: string, limit = 6): string[] {
       let common = 0;
       for (const b of qb) if (eb.has(b)) common++;
       if (common > 0) s = common / (qb.size + eb.size - common);
-    } else if (e.key.includes(q)) s = 0.5;
+    }
     if (s > 0 && s > (scored.get(e.display) ?? 0)) scored.set(e.display, s);
   }
   const list = [...scored.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length).map(([d]) => d);
-  return (list.length ? list : DEFAULT_RELATED).slice(0, limit);
+  return localizeRelated((list.length ? list : DEFAULT_RELATED).slice(0, limit), language);
+}
+
+/**
+ * 近い言葉を英語の画面用にする：見出し（日本語）を、その概念の最初の英語の言葉に置き換える。
+ * 英語の画面で日本語の見出しが並んでも読めず、押して検索すると日本語の語で探すことになるため。
+ * 英語の言葉はそのまま検索に使える（「animal」など）。同じ言葉になったものは1つにする。
+ */
+function localizeRelated(list: readonly string[], language: 'ja' | 'en'): string[] {
+  if (language === 'ja') return [...list];
+  const byDisplay = new Map<string, string>();
+  for (const e of dictionary()) if (!byDisplay.has(e.display) && e.terms[0]) byDisplay.set(e.display, e.terms[0].replace(/-/g, ' '));
+  const out: string[] = [];
+  for (const d of list) {
+    const en = byDisplay.get(d) ?? d;
+    if (!out.includes(en)) out.push(en);
+  }
+  return out;
 }

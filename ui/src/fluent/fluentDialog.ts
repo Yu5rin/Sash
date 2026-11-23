@@ -7,7 +7,7 @@ import './fluent.css';
 import { h, svg } from '../dom';
 import { openModal, openOnce } from '../dialogs/modal';
 import { notify } from '../clipboard';
-import { t } from '../i18n';
+import { lang, t } from '../i18n';
 import {
   buildSvg, COLOR_PRESETS, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor,
   type FluentIcon, type FluentVariant, type IconSet,
@@ -214,7 +214,7 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     if (results.length === 0) {
       more.hidden = true;
       const q = query.trim();
-      const related = q ? relatedConcepts(q) : [];
+      const related = q ? relatedConcepts(q, 6, lang) : [];
       grid.append(
         h('div', { class: 'empty-state fluent-empty' },
           h('strong', null, q ? t('「{q}」に合うアイコンはありません', { q }) : t('この条件に合うアイコンはありません')),

@@ -21,6 +21,9 @@ interface Sizes {
  * 下部パネルの既定は 140px。1366×768 では 200px だと、キャンバスと XML の高さが足りなくなるため。
  * 保存済みの大きさがある利用者には影響しない。
  */
+/** 比べるために一時的に広げるとき、XML エディタに残す最低限の高さ（px）。 */
+export const MIN_XML_HEIGHT = 120;
+
 export const DEFAULT_SIZES: Readonly<Sizes> = { left: 248, right: 300, top: 260, bottom: 140 };
 
 /** これより小さくしたら畳んだものとみなす。 */
@@ -393,8 +396,14 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
       };
     },
     growTemporarily: (_key, px) => {
-      // 窓の高さの 85% を超えて広げない（XML エディタの行が 1 つも見えなくならないように）
-      const room = Math.max(0, window.innerHeight * 0.85 - sizes.top - bonus.top);
+      // 中央の列（キャンバス + XML エディタ）の高さから、XML エディタの最低限の高さと仕切りを残した分までしか広げない。
+      // 窓の高さの割合で決めると、メニュー・ツールバー・下部パネルの分を無視して広げすぎ、
+      // 1366×768 で XML エディタの高さが 0 になった。中央の列の高さが測れない環境では、窓の高さの 85% を上限にする
+      const center = root.querySelector<HTMLElement>('.pane.center');
+      const column = center?.clientHeight ?? 0;
+      const splitterH = splitters.get('top')?.offsetHeight ?? 0;
+      const limit = column > 0 ? column - MIN_XML_HEIGHT - Math.max(1, splitterH) : window.innerHeight * 0.85;
+      const room = Math.max(0, limit - sizes.top - bonus.top);
       const added = sizes.top === 0 ? 0 : Math.max(0, Math.min(px, room));
       bonus.top += added;
       apply();

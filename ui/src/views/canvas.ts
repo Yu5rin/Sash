@@ -9,7 +9,7 @@ import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard
 import { canDropInto, canDropManyAt, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
 import {
-  allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, pathOf, samePath, isAncestorPath, type Path,
+  allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, isSameElementAt, pathOf, samePath, isAncestorPath, snapshotOf, type Path,
 } from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
@@ -91,6 +91,12 @@ let flashPath: Path | null = null;
 let scrollToSelection = false;
 /** その場でラベルを編集している間は描き直さない（入力中の文字が消えるため）。 */
 let renaming = false;
+/**
+ * 入力中のその場リネームを、確定せずに捨てる関数（入力中だけ入る）。
+ * 入力中に別の経路（XML エディタ・元に戻す・インスペクタなど）で文書が変わると、入力欄が持つパスが古くなり、
+ * 確定したときに別の要素のラベルを書き換えかねないため、ストアの変更を受けたらこれで捨てる。
+ */
+let cancelRename: ((doc: Document) => void) | null = null;
 /** 枠の大きさの変化を見張る。mountCanvas が二度呼ばれても前のものを外せるよう、モジュールで持つ。 */
 let popupObserver: ResizeObserver | null = null;
 let layoutObserver: MutationObserver | null = null;
@@ -296,6 +302,9 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   app.on('store', (c) => {
     const store = app.store;
     if (!c || !store) return;
+    // 入力中に文書が変わって入力欄のパスが別の要素を指すようになったら（自分の確定は renaming を下ろしてから編集するので、
+    // ここには来ない）入力を捨てて描き直す。捨てないと、確定したとき別の要素のラベルを書き換えてしまう
+    if (renaming && c.kinds.has('doc')) cancelRename?.(store.doc);
     if (c.kinds.has('selection')) {
       dismissedPopup = null;
       followSelection(c.source === 'canvas');
@@ -1128,30 +1137,45 @@ function measureAndReport(host: HTMLElement, doc: Document): Map<Element, GroupW
 
 let growHandler: ((px: number) => () => void) | null = null;
 let growRelease: (() => void) | null = null;
-let grownPx = 0;
+/** 広げたときの、比べる枠の下端までに要る高さと、そのあとのキャンバスの枠の高さ。大きく変わったときだけ広げ直すために覚える。 */
+let grownNeeded = 0;
+let grownClient = 0;
 
 /**
- * 比べるモードのとき、下の枠ぶんだけキャンバスの高さを一時的に広げる処理を登録する（main.ts が layout.growTemporarily('top', px) を渡す）。
- * 渡した関数は、元に戻す関数を返す。大きさは保存しない。canvas.ts が layout に依存しないよう、注入にしている。
+ * 比べるモードのとき、足りない高さだけキャンバスの高さを一時的に広げる処理を登録する（main.ts が layout.growTemporarily('top', px) を渡す）。
+ * px は「足りない分」（比べる枠の下端までに要る高さ − いまのキャンバスの高さ）。渡した関数は、元に戻す関数を返す。
+ * 大きさは保存しない。canvas.ts が layout に依存しないよう、注入にしている。
  */
 export function setCanvasGrowHandler(fn: ((px: number) => () => void) | null): void {
   growHandler = fn;
 }
 
-/** 比べる枠があれば高さを広げ、なくなったら戻す。枠の高さが変わったときだけ広げ直す（描き直しのたびに動かさないため）。 */
+/**
+ * 比べる枠があれば、足りない高さだけ広げ、なくなったら戻す。
+ * 比べる枠の全高を足すと、もともと余裕があるときも広げすぎて、下の XML エディタが潰れる（1366×768 で高さ 0 になった）ため、
+ * 広げる前のキャンバスの高さを測り、枠の下端までに足りない分だけを求める。
+ * 枠の高さやキャンバスの高さが変わったときだけ測り直す（描き直しのたびに動かさないため）。
+ */
 function syncCompareGrow(host: HTMLElement): void {
   const compare = mode === 'ribbon' && preview().compare ? host.querySelector<HTMLElement>('.cv-compare') : null;
   if (!compare) {
     growRelease?.();
     growRelease = null;
-    grownPx = 0;
+    grownNeeded = 0;
+    grownClient = 0;
     return;
   }
-  const px = Math.ceil(compare.getBoundingClientRect().height) + 12;
-  if (growRelease && Math.abs(px - grownPx) < 8) return;
+  const pane = paneOf(host);
+  // 枠の下端までの高さ（スクロールを含む、キャンバスの枠の上端から）。下に少し余白を足す
+  const needed = Math.ceil(compare.getBoundingClientRect().bottom - pane.getBoundingClientRect().top + pane.scrollTop) + 12;
+  if (growRelease && Math.abs(needed - grownNeeded) < 8 && Math.abs(pane.clientHeight - grownClient) < 8) return;
+  // いったん戻して、広げる前の高さを測る
   growRelease?.();
-  growRelease = growHandler ? growHandler(px) : null;
-  grownPx = px;
+  growRelease = null;
+  const missing = needed - pane.clientHeight;
+  if (missing > 0 && growHandler) growRelease = growHandler(missing);
+  grownNeeded = needed;
+  grownClient = pane.clientHeight;
 }
 
 /** 編集する枠と、「2つの幅を比べる」ときの比べる側の枠。 */
@@ -2186,13 +2210,19 @@ function startRename(host: HTMLElement, path: Path): boolean {
   if (!store || !el || !node || el.hasAttribute('getLabel') || !defFor(el)?.attrs.includes('label')) return false;
   const labelNode = node.querySelector<HTMLElement>(':scope > .rb-label, :scope > .rb-group-label > .rb-label, :scope > .rb-split-main > .rb-label, :scope > .rb-split-drop > .rb-label, :scope > span:not([class])') ?? (inBackstage(el) ? node : null);
   if (!labelNode) return false;
+  // 畳んだ枠の中（非表示）では入力欄にフォーカスが移らず、blur も来ないので、始めない
+  if (!isShown(node)) return false;
   const original = el.getAttribute('label') ?? '';
+  const saved = Array.from(labelNode.childNodes);
+  const wasDraggable = node.draggable;
+  const snap = snapshotOf(el);
   const input = h('input', { type: 'text', class: 'cv-rename', value: original, spellcheck: false, 'aria-label': tr('ラベル') });
   let done = false;
   const finish = (commit: boolean) => {
     if (done) return;
     done = true;
     renaming = false;
+    cancelRename = null;
     const v = input.value;
     if (commit && v !== original) {
       runEdit('canvas', (doc) => {
@@ -2216,12 +2246,34 @@ function startRename(host: HTMLElement, path: Path): boolean {
   input.addEventListener('blur', () => finish(true));
   input.addEventListener('click', (e) => e.stopPropagation());
   input.addEventListener('mousedown', (e) => e.stopPropagation());
+  /** 入力欄を外して元の表示に戻す（確定も描き直しもしない）。 */
+  const undo = () => {
+    done = true;
+    renaming = false;
+    cancelRename = null;
+    labelNode.replaceChildren(...saved);
+    node.draggable = wasDraggable;
+  };
   renaming = true;
+  cancelRename = (doc) => {
+    if (!isSameElementAt(doc, path, snap)) undo();
+  };
   labelNode.replaceChildren(input);
   node.draggable = false;
   input.focus();
+  // フォーカスが取れなかった（見えない枠の中など）なら、blur が来ないまま入力中が続くので、始めなかったことにする
+  if (document.activeElement !== input) {
+    undo();
+    return false;
+  }
   input.select();
   return true;
+}
+
+/** 画面に出ているか（display: none や visibility: hidden の枠の中ではない）。 */
+function isShown(node: HTMLElement): boolean {
+  // jsdom など checkVisibility のない環境は、見えるものとして扱う（getClientRects は jsdom で常に空になる）
+  return typeof node.checkVisibility === 'function' ? node.checkVisibility({ visibilityProperty: true }) : true;
 }
 
 // ---- ドラッグ＆ドロップ ----

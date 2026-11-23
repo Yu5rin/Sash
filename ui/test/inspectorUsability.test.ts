@@ -107,6 +107,21 @@ describe('I-2 ID の提案', () => {
   });
 });
 
+describe('I-2 提案が今の ID と同じとき', () => {
+  it('連番を選んで今の ID と同じなら、「のままです」だけを伝える（日本語ラベルから英字を作れない、とは言わない）', () => {
+    const el = select('b1');
+    el.setAttribute('id', 'btn1');
+    app.store!.select(pathOf(el), 'canvas');
+    insp.querySelector<HTMLButtonElement>('[data-attr="id"]')!.closest('.insp-inline')!.querySelector<HTMLButtonElement>('button')!.click();
+    const items = Array.from(document.querySelectorAll<HTMLElement>('.ctx-menu .ctx-item'));
+    items.find((i) => i.textContent === 'btn1（連番）')!.click();
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('ID は btn1 のままです');
+    expect(text).not.toContain('日本語のラベルからは英字の ID を作れない');
+    expect(el.getAttribute('id')).toBe('btn1');
+  });
+});
+
 describe('I-3 アイコンの見本', () => {
   it('組み込みアイコンの欄に 24px の見本の枠と、読み上げ用の名前がある', () => {
     select('b1');

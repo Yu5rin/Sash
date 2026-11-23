@@ -407,7 +407,6 @@ export const en: Readonly<Record<string, string>> = {
   'ラベルや連番から id を提案する': 'Suggest an id from the label or a sequence number',
   '{id}（ラベルから）': '{id} (from label)',
   '{id}（連番）': '{id} (sequential)',
-  '日本語のラベルからは英字の ID を作れないため、種類と連番（{id}）のままにしました': 'An English-letter ID cannot be made from a Japanese label, so the type and sequence number ({id}) were kept',
   'ID は {id} のままです': 'The ID stays {id}',
   'imageMso の名前': 'imageMso name',
   '{name} の見本を出せません': 'Cannot show a preview of {name}',

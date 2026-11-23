@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_PALETTE_RATIO, DEFAULT_SIZES, mountLayout, paletteHeightOf, parseLayout, ratioFromHeight, sanitizeLastRatio, sanitizeRatio } from '../src/layout';
+import { DEFAULT_PALETTE_RATIO, DEFAULT_SIZES, MIN_XML_HEIGHT, mountLayout, paletteHeightOf, parseLayout, ratioFromHeight, sanitizeLastRatio, sanitizeRatio } from '../src/layout';
 
 describe('パレットの比率の読み込み', () => {
   it('保存がなければ既定の比率になる', () => {
@@ -249,6 +249,23 @@ describe('一時的な操作', () => {
     Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true });
     h.growTemporarily('top', 5000);
     expect(parseFloat(root.style.getPropertyValue('--top'))).toBeCloseTo(600 * 0.85);
+  });
+
+  it('growTemporarily は中央の列の高さから XML エディタの最低高さと仕切りを残す（1366×768 で XML エディタが 0 にならない）', () => {
+    const root = fixture();
+    const center = document.createElement('main');
+    center.className = 'pane center';
+    // 1366×768 で、メニュー・ツールバー・下部パネルを除いた中央の列の高さ
+    Object.defineProperty(center, 'clientHeight', { value: 551, configurable: true });
+    root.append(center);
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
+    const h = mountLayout(root);
+    h.growTemporarily('top', 5000);
+    const shown = parseFloat(root.style.getPropertyValue('--top'));
+    // 仕切り（jsdom では高さ 0 なので 1px とみなす）と最低高さを残す
+    expect(shown).toBe(551 - MIN_XML_HEIGHT - 1);
+    // 窓の高さの 85%（652px）で切ると、中央の列（551px）を超えて XML エディタが 0 になる
+    expect(shown).toBeLessThan(768 * 0.85);
   });
 
   it('畳んだ帯には要約を出し、名前を「開く」にする', () => {

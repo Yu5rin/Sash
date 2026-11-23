@@ -1,5 +1,5 @@
 // 複数選択の画面（インスペクタのまとめて変更・ツリーの Ctrl / Shift +クリック。仕様書 §19）のテスト。
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { app } from '../src/app';
 import { pathOf } from '../src/model';
 import { mountInspector } from '../src/views/inspector';
@@ -35,6 +35,9 @@ beforeAll(() => {
   mountInspector(insp, { pickIdMso: noop, pickImageMso: noop, editImage: noop, pickFromLibrary: noop });
   mountTree(tree);
 });
+
+// 予約済みの検査がテスト環境の後始末のあとに走って、window がないエラーになるのを避ける
+afterAll(() => app.close());
 
 beforeEach(() => {
   (document.activeElement as HTMLElement | null)?.blur();

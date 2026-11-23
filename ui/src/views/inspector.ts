@@ -18,7 +18,7 @@ import { attrValueError } from '../attrValidate';
 import { lang, t } from '../i18n';
 import { imageMsoNames, labels as msoLabels } from '../catalog/catalog';
 import { buildSvg, DEFAULT_COLOR, displayName as fluentName, iconSet, loadIconSet, type FluentIcon } from '../fluent/fluent';
-import { suggestFluent, suggestImageMso, suggestTerms } from '../iconSuggest';
+import { hasSuggestTerms, suggestFluent, suggestImageMso } from '../iconSuggest';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { openMenu } from './contextMenu';
 import { renderBulkInspector } from './bulkInspector';
@@ -469,14 +469,10 @@ function suggestIdMenu(el: Element, current: string, input: HTMLInputElement, op
   const apply = (next: string) => {
     const before = input.value;
     if (next === current) {
-      // 何も起きないと、押したのに反応がないように見える。なぜ変わらないかを知らせる
-      const nonAscii = label !== null && label !== '' && !/^[\x20-\x7e]+$/.test(label);
-      notify({
-        kind: 'info',
-        message: nonAscii
-          ? t('日本語のラベルからは英字の ID を作れないため、種類と連番（{id}）のままにしました', { id: next })
-          : t('ID は {id} のままです', { id: next }),
-      });
+      // 何も起きないと、押したのに反応がないように見える。変わらないことだけを知らせる。
+      // 「日本語のラベルからは英字の ID を作れない」とは言わない：ラベルから作った案が別にあった（これは連番を選んだだけ）か、
+      // 記号だけのラベルで作れなかっただけで、理由が違うため
+      notify({ kind: 'info', message: t('ID は {id} のままです', { id: next }) });
       return;
     }
     input.value = next;
@@ -708,7 +704,6 @@ function labelForSuggest(el: Element): string {
 function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean): HTMLElement | null {
   const label = labelForSuggest(el);
   if (!label) return null;
-  const hasTerms = suggestTerms(label).length > 0;
   msoNames ??= imageMsoNames();
   const mso = suggestImageMso(label, msoNames, msoLabels);
   const msoRow = mso.length
@@ -726,10 +721,17 @@ function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean
         }))
     : null;
   const fluentRow = h('div', { class: 'icon-suggest-row', hidden: true }, h('span', { class: 'icon-suggest-kind' }, t('アイコン集')));
-  const fillFluent = (icons: FluentIcon[]) => {
-    const picks = suggestFluent(icons, label);
-    if (picks.length === 0) return;
+  // 組み込みの候補がなく、アイコン集の候補も出せなかったときは、見出しだけの箱を出さないよう、箱ごと隠しておく
+  const box = h('div', { class: 'icon-suggest-box', 'aria-label': t('ラベルから選んだアイコンの候補'), hidden: !msoRow },
+    h('div', { class: 'icon-suggest-head muted' }, t('候補（ラベル「{label}」から）', { label })),
+    msoRow,
+    fluentRow);
+  const fillFluent = async (icons: FluentIcon[]) => {
+    const picks = await suggestFluent(icons, label);
+    // 待っている間に欄が描き直されて外れていたら、何もしない
+    if (picks.length === 0 || !fluentRow.isConnected) return;
     fluentRow.hidden = false;
+    box.hidden = false;
     fluentRow.append(...picks.map((icon) => {
       const markup = buildSvg(icon, 'regular', 'currentColor', 20);
       return h('button', {
@@ -741,21 +743,16 @@ function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean
       }, markup ? svg(markup) : null);
     }));
   };
-  if (hasTerms) {
-    if (fluentIcons) fillFluent(fluentIcons);
-    else
-      void loadIconSet()
-        .then(({ icons }) => {
-          fluentIcons = icons;
-          if (fluentRow.isConnected) fillFluent(icons);
-        })
-        .catch(() => undefined);
-  }
-  if (!msoRow && !hasTerms) return null;
-  return h('div', { class: 'icon-suggest-box', 'aria-label': t('ラベルから選んだアイコンの候補') },
-    h('div', { class: 'icon-suggest-head muted' }, t('候補（ラベル「{label}」から）', { label })),
-    msoRow,
-    fluentRow);
+  // 概念の辞書（小さい）で言葉が見つかったときだけ、大きなアイコン集のデータを読み込む。
+  // 旧来の小さな辞書だけで足切りすると、「出荷」「精算する」「猫」のような言葉で候補が出なくなる
+  void hasSuggestTerms(label)
+    .then(async (ok) => {
+      if (!ok || !fluentRow.isConnected) return;
+      if (!fluentIcons) fluentIcons = (await loadIconSet()).icons;
+      await fillFluent(fluentIcons);
+    })
+    .catch(() => undefined);
+  return box;
 }
 
 /**

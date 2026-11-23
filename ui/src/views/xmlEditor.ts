@@ -23,18 +23,13 @@ function categoryName(cat: string): string {
   return lang === 'en' && cat === '表示' ? 'Appearance' : t(cat);
 }
 
-/** 構文エラーで同期が止まっている間、ほかの画面を暗くして「いまは編集できない」ことを示す対象。 */
-const DIM_TARGETS = ['.pane.left', '.canvas-pane', '.pane.right'];
-
-/** 停止中の見た目と読み上げの状態を切り替える。見た目は styles-w3.css が #app.xml-sync-error で決める。 */
+/**
+ * 構文エラーで同期が止まっている間、見た目だけほかの画面を暗くする（styles-w3.css が #app.xml-sync-error で決める）。
+ * 左右の枠に aria-disabled は付けない：ツリーでの選択などは止まっていないので、「操作できない」と読み上げると実態と合わない。
+ * 止まっていることは、XML エディタの帯（role="status"）が伝える。
+ */
 function setSyncStopped(stopped: boolean): void {
   document.getElementById('app')?.classList.toggle('xml-sync-error', stopped);
-  for (const sel of DIM_TARGETS) {
-    const el = document.querySelector(sel);
-    if (!el) continue;
-    if (stopped) el.setAttribute('aria-disabled', 'true');
-    else el.removeAttribute('aria-disabled');
-  }
 }
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
