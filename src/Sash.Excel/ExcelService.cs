@@ -97,6 +97,9 @@ public sealed class ExcelService : IDisposable
     /// <summary>Application.Run に渡す名前（'ブック名'!モジュール.関数）。</summary>
     private string? _bulkMacro;
 
+    /// <summary>確認用の小さな関数（SashPing）を Application.Run で呼べたか。呼べたのに本体が呼べなければ、本体のコンパイルを疑う。</summary>
+    private bool _bulkPingWorked;
+
     /// <summary>VBA と受け渡しする一時フォルダ（%TEMP%\Sash\imagemso\&lt;guid&gt;）。片付けで消す。</summary>
     private string? _bulkTempDir;
 
@@ -1233,6 +1236,18 @@ public sealed class ExcelService : IDisposable
         Log?.Invoke($"imageMso の取り込みのため見えない Excel を起動（版 {text ?? "不明"}、{(Environment.Is64BitProcess ? "Sash は 64bit" : "Sash は 32bit")}、プロセス {(_bulkPid == 0 ? "不明" : _bulkPid.ToString(System.Globalization.CultureInfo.InvariantCulture))}）");
         CheckStartLimit(sw, "起動");
 
+        // Sash が開くブックのマクロを有効にする（msoAutomationSecurityLow = 1）。自動化で起動した Excel の既定も
+        // これのはずだが、実機で「マクロを実行できません」が出たため、明示する。グループ ポリシーで変えられない環境もあるので失敗は記録だけ
+        int? security = SafeValue(() => (int)app.AutomationSecurity);
+        try
+        {
+            app.AutomationSecurity = 1;
+        }
+        catch (Exception ex) when (IsComFailure(ex))
+        {
+            Log?.Invoke($"imageMso: AutomationSecurity を変えられなかった（いまの値 {security?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "不明"}）: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+        }
+
         // VBA のモジュールを入れる先。見えないまま開き、終わったら保存せずに閉じる
         _bulkScratch = app.Workbooks.Add();
         CheckStartLimit(sw, "作業用のブック");
@@ -1289,10 +1304,63 @@ public sealed class ExcelService : IDisposable
         component.Name = ImageMsoVbaExport.ModuleName;
         component.CodeModule.AddFromString(ImageMsoVbaExport.ModuleSource);
 
-        // ブックの名前に ' があれば '' にする（Run の名前の書き方）
+        // 確認用の小さな関数を、別のモジュールに入れる。これが呼べて本体が呼べなければ本体のコンパイルの問題、
+        // これも呼べなければ名前の書き方かマクロの設定の問題、と切り分けられるようにするため。
+        // このモジュールは取り除かない（作業用のブックは保存せずに閉じるので残らない）
+        dynamic ping = project.VBComponents.Add(VbextStdModule);
+        ping.Name = "SashImageMsoPing";
+        ping.CodeModule.AddFromString("Public Function SashPing() As Long\r\n    SashPing = 1\r\nEnd Function\r\n");
+        Release(ping);
+
+        // 名前を書かない呼び方は作業中のブックから探すので、作業用のブックを前に出しておく
+        _ = Safe(() => { wb.Activate(); return true; });
+
         string bookName = wb.Name;
-        _bulkMacro = $"'{bookName.Replace("'", "''", StringComparison.Ordinal)}'!{ImageMsoVbaExport.ModuleName}.{ImageMsoVbaExport.FunctionName}";
+        _bulkMacro = ResolveMacroName(bookName);
         Log?.Invoke($"imageMso: 作業用のブックに VBA モジュールを入れた（{_bulkMacro}）");
+    }
+
+    /// <summary>
+    /// Application.Run で呼ぶ名前の書き方を決める。実機で「'Book2'!モジュール.関数」が「マクロを実行できません」に
+    /// なったので、確認用の関数をいくつかの書き方で呼び、呼べた書き方を本体にも使う。結果はすべて記録する。
+    /// </summary>
+    private string ResolveMacroName(string bookName)
+    {
+        var quoted = $"'{bookName.Replace("'", "''", StringComparison.Ordinal)}'";
+        string[] prefixes = ["", "SashImageMsoPing.", $"{bookName}!SashImageMsoPing.", $"{quoted}!SashImageMsoPing."];
+        string[] mainForms =
+        [
+            ImageMsoVbaExport.FunctionName,
+            $"{ImageMsoVbaExport.ModuleName}.{ImageMsoVbaExport.FunctionName}",
+            $"{bookName}!{ImageMsoVbaExport.ModuleName}.{ImageMsoVbaExport.FunctionName}",
+            $"{quoted}!{ImageMsoVbaExport.ModuleName}.{ImageMsoVbaExport.FunctionName}",
+        ];
+        var failures = new List<string>();
+        for (var i = 0; i < prefixes.Length; i++)
+        {
+            var name = prefixes[i] + "SashPing";
+            try
+            {
+                object? r = _bulkApp!.Run(name);
+                if (r is not null && Convert.ToInt32(r, System.Globalization.CultureInfo.InvariantCulture) == 1)
+                {
+                    _bulkPingWorked = true;
+                    Log?.Invoke($"imageMso: 確認用の関数を呼べた（{name}）{(failures.Count > 0 ? "。呼べなかった書き方：" + string.Join(" / ", failures) : string.Empty)}");
+                    return mainForms[i];
+                }
+
+                failures.Add($"{name} → 戻り値 {r ?? "なし"}");
+            }
+            catch (Exception ex) when (IsComFailure(ex) || ex is FormatException or InvalidCastException)
+            {
+                failures.Add($"{name} → 0x{ex.HResult:X8} {ex.Message}");
+            }
+        }
+
+        _bulkPingWorked = false;
+        int? security = SafeValue(() => (int)((dynamic)_bulkApp!).AutomationSecurity);
+        Log?.Invoke($"imageMso: 確認用の関数をどの書き方でも呼べなかった（AutomationSecurity {security?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "不明"}）。マクロの実行が止められている可能性: {string.Join(" / ", failures)}");
+        return mainForms[^1];
     }
 
     /// <summary>
@@ -1408,7 +1476,8 @@ public sealed class ExcelService : IDisposable
             }
             catch (Exception ex) when (IsComFailure(ex) || ex is FormatException or OverflowException)
             {
-                _onceLog.Write($"vba-run:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: VBA の関数を呼べなかった（{_bulkMacro}）: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+                var hint = _bulkPingWorked ? "。確認用の関数は呼べたので、取り出し用のモジュールがコンパイルできていない可能性がある" : string.Empty;
+                _onceLog.Write($"vba-run:{ex.GetType().Name}:{ex.HResult:X8}", $"imageMso: VBA の関数を呼べなかった（{_bulkMacro}）: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}{hint}");
             }
 
             // Run が途中で失敗しても、それまでに書かれた分は使う
@@ -1494,6 +1563,7 @@ public sealed class ExcelService : IDisposable
         var app = _bulkApp;
         _bulkApp = null;
         _bulkMacro = null;
+        _bulkPingWorked = false;
         try
         {
             if (force)

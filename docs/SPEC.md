@@ -491,6 +491,12 @@ Office のアイコンは Microsoft の著作物で、Sash（MIT）には同梱�
 - **この方法も、利用者の PC で確かめるまでは未確認。** app.log の「作業用のブックに VBA モジュールを入れた」「Excel の中（VBA）で FileSave を取り出せた」「Excel の中（VBA）で取り出せなかった … Err.Number=…」「imageMso の取り込みを完了」を見て確かめる。
 
 
+**実機で分かったこと（2）**：VBA モジュールは入れられたが、`Application.Run("'Book2'!SashImageMsoExport.SashExportImageMso", …)` が 0x800A03EC「マクロを実行できません…」で失敗した。原因が名前の書き方か、マクロの設定か、モジュールのコンパイルかを切り分けるため、次のようにした。
+
+- 作業用のブックを開く前に `AutomationSecurity` を 1（マクロを有効）にする。変えられなければ記録する。
+- 確認用の小さな関数（`SashImageMsoPing.SashPing`）を別のモジュールに入れ、名前の書き方を 4 通り（関数名だけ、モジュール.関数、ブック名!モジュール.関数、'ブック名'!モジュール.関数）で順に呼ぶ。呼べた書き方を本体にも使い、呼べなかった書き方と理由をすべて記録する。
+- 確認用の関数は呼べたのに本体が呼べなければ、本体のコンパイルの問題として記録する。
+
 ### 17.8 同梱のアイコン集（Fluent UI System Icons）
 
 - 自分で作るボタン用に、Microsoft の Fluent UI System Icons（MIT License）を同梱する。Office の imageMso の画像は同梱しない（§17.7）。
