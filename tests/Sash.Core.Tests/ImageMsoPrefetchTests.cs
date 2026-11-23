@@ -288,9 +288,9 @@ public class ImageMsoPrefetchTests
         Assert.Equal(0, cache.ReadFailure()!.Method);
         Assert.Equal("none", new ImageMsoPrefetch(new ImageMsoCache(dir.Path), null, () => "16.0.19029").GetStatus().State);
 
-        // 2 は別のプロセスから呼んでいたころ、3 は Run の名前の書き方を決める前の記録。いまの 4 では当てはめない
-        Assert.Equal(4, ImageMsoFailureRecord.CurrentMethod);
-        foreach (var old in new[] { 2, 3 })
+        // 2 は別のプロセスから呼んでいたころ、3 は Run の名前の書き方を決める前、4 は Option Explicit が重なっていたころの記録。いまの 5 では当てはめない
+        Assert.Equal(5, ImageMsoFailureRecord.CurrentMethod);
+        foreach (var old in new[] { 2, 3, 4 })
         {
             cache.WriteFailure(new ImageMsoFailureRecord("16.0.19029", DateTimeOffset.Now, "打ち切り", old));
             Assert.Equal(old, new ImageMsoCache(dir.Path).ReadFailure()!.Method);
