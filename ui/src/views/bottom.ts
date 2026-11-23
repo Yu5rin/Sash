@@ -17,6 +17,7 @@ import { t } from '../i18n';
 import { generateStub, type CallbackState, type CallbackStatus } from '../vba';
 import { fitProblems, type FitProblem } from './ribbonFit';
 import { revealInVbe, canRevealInVbe } from '../vbaReveal';
+import { describeXmlError } from '../xmlError';
 
 type Tab = 'problems' | 'callbacks' | 'images';
 
@@ -211,7 +212,7 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
           role: 'button',
           onclick: () => syncError.line && revealLine(syncError.line),
           onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && syncError.line && revealLine(syncError.line),
-        }, svg(uiIcons.error), h('span', { class: 'msg' }, t('XMLの構文エラー：{message}', { message: syncError.message })), h('span', { class: 'where' }, syncError.line ? t('{line}行目', { line: syncError.line }) : '')),
+        }, svg(uiIcons.error), h('span', { class: 'msg' }, t('XMLの構文エラー：{message}', { message: describeXmlError(syncError.message) })), h('span', { class: 'where' }, syncError.line ? t('{line}行目', { line: syncError.line }) : '')),
       );
     }
     const order: Record<Severity, number> = { error: 0, warning: 1, info: 2 };
