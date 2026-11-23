@@ -24,7 +24,7 @@ import type { ImageEntry } from './store';
 import { defFor, titleOf } from './schema';
 import { builtinRecipes } from './recipes';
 import { mountBottom, showBottomTab } from './views/bottom';
-import { getCanvasMode, mountCanvas, setCanvasMode, type CanvasMode } from './views/canvas';
+import { getCanvasMode, mountCanvas, setCanvasGrowHandler, setCanvasMode, startRenameOf, type CanvasMode } from './views/canvas';
 import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
 import { flushPendingEdits, mountInspector } from './views/inspector';
@@ -382,7 +382,10 @@ function insertItem(tag: string): MenuItemDef {
   // ツールチップには何ができる部品かを出す。追加できないときは、その理由を添える
   const desc = describeElement(tag);
   const hint = [desc || tag, reason].filter(Boolean).join('\n');
-  return { label: titleOf(tag), hint, enabled: reason === null, run: () => void insertNearSelection(tag) };
+  return { label: titleOf(tag), hint, enabled: reason === null, // 挿入メニューから足したときだけ、すぐ名前の入力にする（パレットのダブルクリックはパレットにフォーカスを残す）
+    run: () => {
+      if (insertNearSelection(tag)) startRenameOf(app.store?.selection);
+    } };
 }
 
 const CANVAS_MODES: readonly { mode: CanvasMode; label: string }[] = [
@@ -730,6 +733,8 @@ setElementMenuHooks({
     return items;
   },
 });
+// 幅を比べるモードで、キャンバスの高さを一時的に広げる（保存しない）
+setCanvasGrowHandler((px) => layout.growTemporarily('top', px));
 const home = mountHome($('home'), (p) => void openFile(p));
 
 // XML ペインの名前に F6 での移り方を添える（index.html の既定は日本語のままなので、今の言語で付け直す）
