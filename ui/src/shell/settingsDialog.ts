@@ -69,7 +69,9 @@ async function build(start: CategoryId): Promise<void> {
             }).catch((e: Error) => toast({ kind: 'error', message: e.message }));
           }),
           notice), t('メニューやメッセージの言語です。リボンの XML の中身は変わりません。')),
-        settingRow(t('バージョン'), h('div', { class: 'setting-row' }, `Sash ${app.info.version}`),
+        settingRow(t('バージョン'), h('div', { class: 'setting-row' }, `Sash ${app.info.version}`)),
+        // Excel の有無はバージョンとは別の事柄なので、行を分ける（以前は「バージョン」の説明に混ざっていた）
+        settingRow(t('Excel 連携'), h('div', { class: 'setting-row' }, app.info.excelInstalled ? t('利用できます') : t('利用できません')),
           app.info.excelInstalled ? t('Excel が見つかりました。反映と VBA との照合が使えます。') : t('Excel が見つからないため、ファイルの編集と保存だけができます。')));
     },
     view: () => {
@@ -200,7 +202,15 @@ async function build(start: CategoryId): Promise<void> {
   });
   show(start);
 
-  const m = openModal(t('設定'), h('div', { class: 'settings-layout' }, nav, panel), { key: 'settings', initialFocus: tabs[CATEGORIES.findIndex((c) => c.id === start)] });
+  const m = openModal(t('設定'), h('div', { class: 'settings-layout' }, nav, panel), {
+    key: 'settings',
+    // 設定は変えた時点で保存されるので、確定のボタンはなく、閉じるだけを置く。Enter で閉じてしまわないよう主ボタンにはしない
+    footer: [
+      h('span', { class: 'left muted settings-footer-note' }, t('変更はすぐに保存されます')),
+      h('button', { type: 'button', onclick: () => m.close() }, t('閉じる')),
+    ],
+    initialFocus: tabs[CATEGORIES.findIndex((c) => c.id === start)],
+  });
   m.root.classList.add('settings-modal');
   m.root.querySelector('header h2')?.after(saved);
 }

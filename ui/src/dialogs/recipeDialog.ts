@@ -9,7 +9,7 @@ import { generateStub, parseProcedures, procedureCode, RIBBON_HOLDER_MODULE, RIB
 import { copyText } from '../clipboard';
 import type { ToastKind } from '../shell/toast';
 import { h } from '../dom';
-import { ask, openModal } from './modal';
+import { ask, openModal, type ModalHandle } from './modal';
 import type { Instance } from '../recipes';
 import { t } from '../i18n';
 
@@ -198,12 +198,18 @@ export async function applyRecipe(recipe: Recipe): Promise<string> {
       return t('レシピ「{title}」をXMLとVBAに挿入しました{note}。Excelでブックを保存してください', { title: t(recipe.title), note: renamedNote });
     }
   }
-  const all = [recipe.needsRibbon ? `' ===== ${RIBBON_HOLDER_MODULE_NAME}${t('（まだなければ）')}=====\r\n${RIBBON_HOLDER_MODULE}` : '', `' ===== ${app.settings.callbackModule} =====\r\n${code}`, inst.workbookVba ? `' ===== ThisWorkbook =====\r\n${inst.workbookVba}` : ''].filter(Boolean).join('\r\n');
+  // モジュールごとに分けて持つ（コピー失敗時の画面で、貼り付け先ごとに［コピー］を出すため）
+  const modules: VbaSection[] = [
+    ...(recipe.needsRibbon ? [{ name: RIBBON_HOLDER_MODULE_NAME + t('（まだなければ）'), code: RIBBON_HOLDER_MODULE }] : []),
+    { name: app.settings.callbackModule, code },
+    ...(inst.workbookVba ? [{ name: 'ThisWorkbook', code: inst.workbookVba }] : []),
+  ];
+  const all = joinSections(modules);
   try {
     await navigator.clipboard.writeText(all);
   } catch {
     // コピーできなくても XML は入っているので、VBA は画面で見せる
-    showCode(all);
+    showCode(modules);
     return t('レシピ「{title}」を挿入しました。VBA はコピーできなかったので、表示した内容を貼り付けてください', { title: t(recipe.title) });
   }
   return t('レシピ「{title}」を挿入し、VBAをクリップボードにコピーしました{note}', { title: t(recipe.title), note: renamedNote });
@@ -251,11 +257,33 @@ function showConflicts(inst: Instance): void {
   });
 }
 
-function showCode(code: string): void {
-  const m = openModal(t('VBA'), h('div', { class: 'recipe-preview' }, h('pre', null, code)), {
-    wide: true,
-    footer: [h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))],
-  });
+export interface VbaSection {
+  name: string;
+  code: string;
 }
 
+/** クリップボードに一括で書く形（モジュールの見出しコメントで区切る）。 */
+export function joinSections(sections: readonly VbaSection[]): string {
+  return sections.filter((x) => x.code || x.name).map((x) => `' ===== ${x.name} =====\r\n${x.code}`).join('\r\n');
+}
 
+/**
+ * コピーに失敗したときに VBA を見せる画面。貼り付け先のモジュールごとに見出しと［コピー］を置き、
+ * 一括の［すべてコピー］を主にする（クリップボードが使えないとき、利用者が選択して手でコピーする手間を減らすため）。
+ */
+export function showCode(sections: readonly VbaSection[]): ModalHandle {
+  const copyAll = h('button', { type: 'button', class: 'primary', onclick: () => copyText(joinSections(sections), t('VBA をすべてコピーしました')) }, t('すべてコピー'));
+  const body = h('div', { class: 'recipe-preview vba-sections' },
+    ...sections.flatMap((x) => [
+      h('div', { class: 'vba-section-head' },
+        h('h3', null, x.name),
+        h('button', { type: 'button', class: 'small', onclick: () => copyText(x.code, t('{name} をコピーしました', { name: x.name })) }, t('コピー'))),
+      h('pre', null, x.code),
+    ]));
+  const m = openModal(t('VBA に貼り付けるコード'), body, {
+    wide: true,
+    footer: [copyAll, h('button', { type: 'button', onclick: () => m.close() }, t('閉じる'))],
+    initialFocus: copyAll,
+  });
+  return m;
+}
