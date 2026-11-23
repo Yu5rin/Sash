@@ -83,12 +83,12 @@ function defaultOptions(): IconOptions {
 export interface IconDialogOptions {
   /** 閉じたときに呼ぶ。applied は画像を設定（追加）したか。取り消したときに呼び出し元の表示を戻すのに使う。 */
   onClose?: (applied: boolean) => void;
-  /** アイコン集（Fluent）で選んだアイコンを元画像にして開く。 */
+  /** アイコン集（Fluent・Tabler）で選んだアイコンを元画像にして開く。 */
   fluent?: FluentPick;
 }
 
 /**
- * アイコン集（Fluent）を開く。ダイアログとデータは、ここで初めて読み込む（最初の画面を重くしないため）。
+ * アイコン集（Fluent・Tabler）を開く。ダイアログとデータは、ここで初めて読み込む（最初の画面を重くしないため）。
  * 読み込みに失敗したら知らせて、閉じた扱いにする。
  */
 export function openFluentIcons(onPick: (pick: FluentPick) => void, onClose?: (picked: boolean) => void): void {
@@ -146,7 +146,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     { class: 'icon-sources' },
     h('button', { type: 'button', onclick: () => fileInput.click() }, tr('ファイル')),
     h('button', { type: 'button', title: tr('EXE / DLL に埋め込まれたアイコンから選ぶ'), onclick: () => void fromExecutable() }, 'EXE / DLL'),
-    h('button', { type: 'button', title: tr('同梱のアイコン集（Fluent UI System Icons）から選ぶ。Excel がなくても使えます'), onclick: () => openFluentIcons((p) => void loadFluent(p).catch(reportError)) }, tr('アイコン集（Fluent）')),
+    h('button', { type: 'button', title: tr('同梱のアイコン集（Fluent・Tabler、約 8,000 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます'), onclick: () => openFluentIcons((p) => void loadFluent(p).catch(reportError)) }, tr('アイコン集')),
     app.info.excelInstalled ? h('button', { type: 'button', title: tr('組み込みアイコン（imageMso）を元にする'), onclick: () => fromImageMso() }, tr('組み込みアイコン')) : null,
     h('button', { type: 'button', title: tr('アイコンライブラリから選ぶ（元画像と設定があれば加工し直せます）'), onclick: () => fromLibrary() }, tr('ライブラリ')),
     h('button', { type: 'button', title: tr('フォルダ内の画像を、今の加工設定でまとめて取り込む（コントロールには設定しません）'), onclick: () => folderInput.click() }, tr('フォルダを一括')),
@@ -318,7 +318,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
 
   /**
    * アイコン集のアイコンを元にする。余白の自動カットを切り、余白を 0 にする。
-   * Fluent のアイコンは 24px の枠の中で余白まで含めて形をそろえてあるので、そのまま使うと
+   * Fluent・Tabler のアイコンは 24px の枠の中で余白まで含めて形をそろえてあるので、そのまま使うと
    * 並べたボタンのアイコンの大きさがそろう（カットすると、小さな形ほど大きく引き伸ばされてしまう）。
    */
   async function loadFluent(pick: FluentPick): Promise<void> {

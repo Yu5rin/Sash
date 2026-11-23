@@ -1,9 +1,18 @@
-/* アイコン集（Fluent）のダイアログ。色はアプリのテーマの変数だけを使い、明暗どちらでも読めるようにする。 */
+/* アイコン集（Fluent・Tabler）のダイアログ。色はアプリのテーマの変数だけを使い、明暗どちらでも読めるようにする。 */
 
 .fluent-picker { min-height: 0; }
-.fluent-toolbar { display: flex; gap: var(--sp-2); align-items: center; }
-.fluent-toolbar .fluent-search { flex: 1; min-width: 0; }
+.fluent-toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.fluent-toolbar .fluent-search { flex: 1; min-width: 160px; }
 .fluent-toolbar .segmented button { height: var(--ctl-h); padding: 0 12px; }
+
+/* カテゴリのチップ：件数つきの小さなピル。押されているものは強調する */
+.fluent-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.fluent-chips button.fluent-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border-radius: 12px; font-size: var(--fs-sm); border: 1px solid var(--border-strong); background: var(--surface); }
+.fluent-chip-count { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.fluent-chip-count:empty { display: none; }
+.fluent-chips button.fluent-chip.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.fluent-chips button.fluent-chip.active .fluent-chip-count { color: inherit; }
+.fluent-chips button.fluent-chip:disabled { opacity: 0.45; }
 
 .fluent-colors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 /* 共通のボタンの :hover などで背景が上書きされないよう、詳細度を上げて色を固定する */
@@ -25,6 +34,10 @@
 .fluent-more { display: block; margin: var(--sp-2) auto; }
 .fluent-more[hidden] { display: none; }
 .fluent-empty { grid-column: 1 / -1; }
+.fluent-related { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: var(--sp-2); }
+
+/* 出どころのバッジ（プレビューの名前の横）。色は出どころごとに少し変える */
+.fluent-badge { display: inline-block; padding: 0 6px; border-radius: 8px; font-family: inherit; font-size: 11px; border: 1px solid var(--border-strong); color: var(--text-muted); vertical-align: 1px; }
 
 .fluent-preview { width: 300px; flex: none; display: flex; flex-direction: column; gap: var(--sp-2); overflow: auto; }
 .fluent-preview h3 { margin: 0; font-size: var(--fs-sm); }
