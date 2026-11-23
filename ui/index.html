@@ -37,11 +37,12 @@
 
       <aside class="pane left" aria-label="パレットとツリー">
         <section class="palette" data-pane="palette" aria-labelledby="palette-heading">
-          <h2 id="palette-heading" class="pane-title" data-i18n="パレット">パレット</h2>
+          <h2 id="palette-heading" class="pane-title"><button type="button" class="pane-toggle" data-split-toggle="palette" aria-expanded="true" aria-controls="palette" data-i18n="パレット">パレット</button></h2>
           <div id="palette" class="palette-body"></div>
         </section>
+        <div class="splitter h" data-splitter="palette" role="separator" aria-orientation="horizontal" aria-label="パレットとツリーの高さ" tabindex="0" title="ドラッグで高さを変更、ダブルクリックで既定の比率に戻す" data-i18n-title="ドラッグで高さを変更、ダブルクリックで既定の比率に戻す"></div>
         <section class="tree-pane" aria-labelledby="tree-heading">
-          <h2 id="tree-heading" class="pane-title" data-i18n="ツリー">ツリー</h2>
+          <h2 id="tree-heading" class="pane-title"><button type="button" class="pane-toggle" data-split-toggle="tree" aria-expanded="true" aria-controls="tree" data-i18n="ツリー">ツリー</button></h2>
           <div id="tree" role="tree" aria-label="ツリー" data-pane="tree"></div>
         </section>
       </aside>
@@ -52,7 +53,7 @@
           <div id="canvas" tabindex="0" data-pane="canvas" aria-label="キャンバス"></div>
         </section>
         <div class="splitter h" data-splitter="top" aria-label="キャンバスの高さ" title="ドラッグで高さを変更、ダブルクリックで畳む" data-i18n-title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
-        <section class="xml-pane" aria-label="XMLエディタ" data-pane="xml">
+        <section class="xml-pane" aria-label="XMLエディタ（F6 で次のペインへ）" data-pane="xml">
           <div class="xml-status" id="xml-status" hidden></div>
           <div id="xml-editor"></div>
         </section>
@@ -67,7 +68,7 @@
       <div class="splitter h" data-splitter="bottom" style="grid-area: sb" aria-label="下部パネルの高さ" title="ドラッグで高さを変更、ダブルクリックで畳む" data-i18n-title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
       <footer class="bottom" data-pane="bottom">
         <div id="bottom-tabs" class="bottom-tabs" role="tablist"></div>
-        <div id="bottom-body" class="bottom-body" tabindex="-1"></div>
+        <div id="bottom-body" class="bottom-body" role="tabpanel" tabindex="-1"></div>
       </footer>
 
       <div id="home" class="home"></div>

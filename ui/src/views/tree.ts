@@ -6,7 +6,8 @@ import { handleEditKey, moveSelected } from '../clipboard';
 import { canDropInto, canDropManyAt, drop, endDrag, startDrag } from '../dnd';
 import { debounce, h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
-import { allElements, displayName, identifierOf, pathOf, samePath, type Path } from '../model';
+import { allElements, displayName, elementAt, identifierOf, pathOf, samePath, type Path } from '../model';
+import { defFor } from '../schema';
 import { openElementMenu } from './contextMenu';
 import { focusField } from './inspector';
 import { t } from '../i18n';
@@ -28,6 +29,8 @@ let typeAheadTimer: number | undefined;
 let filterQuery = '';
 let filterInput: HTMLInputElement | null = null;
 let filterCount: HTMLElement | null = null;
+/** 行の中でラベルを書き換えている間。描き直しで入力欄を消してしまわないよう、この間は描き直しを止める。 */
+let renaming = false;
 
 /** 絞り込みの欄にフォーカスを移す（コマンドから呼ぶ）。 */
 export function focusTreeFilter(): void {
@@ -112,6 +115,7 @@ function rowId(path: Path): string {
 }
 
 function renderTree(host: HTMLElement): void {
+  if (renaming) return;
   const store = app.store;
   if (!store) {
     host.replaceChildren();
@@ -167,7 +171,9 @@ function renderTree(host: HTMLElement): void {
           else if (e.shiftKey) store.selectRange(path, 'tree', visibleRowPaths(host));
           else store.select(path, 'tree');
         },
-        ondblclick: () => focusField('label'),
+        ondblclick: () => {
+          if (!startRename(host, path)) focusField('label');
+        },
         ondragstart: (e: DragEvent) => startDrag(e, { kind: 'move', path }),
         ondragend: () => {
           endDrag();
@@ -407,7 +413,9 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
       store.select(pathAt(idx + 1), 'tree');
     }
   } else if (e.key === 'Enter' || e.key === 'F2') {
-    focusField('label');
+    // その場でラベルを直す（インスペクタへ飛ぶと Esc で戻れず、確定してもフォーカスがツリーから離れてしまうため）。
+    // ラベルを持たない要素や VBA で返すラベルのときだけ、従来どおりインスペクタの欄へ移る
+    if (!sel || !startRename(host, sel)) focusField('label');
   } else if ((e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) && sel && selRow) {
     const r = selRow.getBoundingClientRect();
     openElementMenu(r.left + 24, r.bottom, sel, 'tree', host);
@@ -425,4 +433,63 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
     return;
   }
   e.preventDefault();
+}
+
+/**
+ * ツリーの行でラベルをその場で書き換える（キャンバスの F2 と同じ。Enter で確定、Esc で取り消し）。
+ * 確定してもツリーにフォーカスを残す。ラベルを持てない要素や、VBA で返すラベルなら false。
+ */
+export function startRename(host: HTMLElement, path: Path): boolean {
+  const store = app.store;
+  const el = store ? elementAt(store.doc, path) : null;
+  if (!store || !el || el.hasAttribute('getLabel') || !defFor(el)?.attrs.includes('label')) return false;
+  const row = host.querySelector<HTMLElement>(`.tree-row[data-path="${path.join('.')}"]`);
+  const labelNode = row?.querySelector<HTMLElement>('.tree-label');
+  if (!row || !labelNode || renaming) return false;
+  const original = el.getAttribute('label') ?? '';
+  const input = h('input', { type: 'text', class: 'tree-rename', value: original, spellcheck: false, 'aria-label': t('ラベル') });
+  const saved = Array.from(labelNode.childNodes);
+  const wasDraggable = row.draggable;
+  let done = false;
+  /** keyboard：Enter・Esc で終えたとき。フォーカスをツリーに戻す。ほかの場所をクリックして外れたとき（blur）は、移った先を奪わない。 */
+  const finish = (commit: boolean, keyboard: boolean) => {
+    if (done) return;
+    done = true;
+    renaming = false;
+    const v = input.value;
+    if (!keyboard && (!commit || v === original)) {
+      // 何も変えずに外れたときは、行を作り直さない（クリックした先の行が消えて、選べなくなるのを避ける）
+      labelNode.replaceChildren(...saved);
+      row.draggable = wasDraggable;
+      return;
+    }
+    if (commit && v !== original) {
+      store.edit('tree', (doc) => {
+        const target = elementAt(doc, path);
+        if (!target) return undefined;
+        if (v === '') target.removeAttribute('label');
+        else target.setAttribute('label', v);
+        return undefined;
+      }, t('ラベルを「{name}」に変更', { name: v }));
+    }
+    renderTree(host);
+    if (keyboard) host.focus({ preventScroll: true });
+  };
+  input.addEventListener('keydown', (e) => {
+    // 日本語入力の変換確定の Enter で確定しない
+    if (e.isComposing || e.keyCode === 229) return;
+    e.stopPropagation();
+    if (e.key === 'Enter') finish(true, true);
+    else if (e.key === 'Escape') finish(false, true);
+  });
+  input.addEventListener('blur', () => finish(true, false));
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('dblclick', (e) => e.stopPropagation());
+  input.addEventListener('mousedown', (e) => e.stopPropagation());
+  renaming = true;
+  row.draggable = false;
+  labelNode.replaceChildren(input);
+  input.focus();
+  input.select();
+  return true;
 }

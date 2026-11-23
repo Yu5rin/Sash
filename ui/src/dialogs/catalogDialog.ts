@@ -91,6 +91,12 @@ function openCatalogDialog(mode: CatalogMode, current: string, apply: (value: st
   const filters = h('div', { class: 'segmented wrap', role: 'group', 'aria-label': t('種類で絞り込む') });
   const results = h('div', { class: mode === 'imageMso' ? 'catalog-grid' : 'catalog-list', role: 'listbox', 'aria-label': t('候補') });
   const status = h('div', { class: 'catalog-status', 'aria-live': 'polite' });
+  // 長い名前は 2 行までの表示で切れることがあるので、注目している項目（フォーカス・マウス・選択中）の名前の全文をここに出す（D-3）
+  const fullName = h('div', { class: 'catalog-fullname', 'aria-hidden': 'true' });
+  const showFull = (id: string | undefined) => {
+    const label = id ? labels.get(id) : undefined;
+    fullName.textContent = id ? (label ? `${id}（${label}）` : id) : '';
+  };
 
   const choose = (id: string) => {
     chosen = true;
@@ -178,6 +184,7 @@ function openCatalogDialog(mode: CatalogMode, current: string, apply: (value: st
     results.replaceChildren(...(list.length ? list.map(item) : [h('div', { class: 'panel-empty' }, t('見つかりませんでした。別の言葉で検索してください'))]));
     const first = results.querySelector<HTMLElement>('.catalog-item');
     if (first) first.tabIndex = 0;
+    showFull(focusedId ?? (current && list.some((c) => c.id === current) ? current : undefined));
     if (focusedId) results.querySelector<HTMLElement>(`.catalog-item[data-id="${CSS.escape(focusedId)}"]`)?.focus();
     status.textContent = t('{n} 件', { n: list.length }) + (list.length >= 240 ? t('（上位のみ表示）') : '') + (labels.size === 0 ? t(' ・ 日本語名はExcelがある環境で取得します') : '');
   };
@@ -279,7 +286,10 @@ function openCatalogDialog(mode: CatalogMode, current: string, apply: (value: st
     }
     renderBanner();
   });
-  const content = h('div', { class: 'catalog' }, input, banner, mode === 'idMso' ? filters : null, results, h('div', { class: 'catalog-foot' }, status, hint));
+  const idOf = (e: Event) => (e.target as HTMLElement).closest<HTMLElement>('.catalog-item')?.dataset['id'];
+  results.addEventListener('focusin', (e) => showFull(idOf(e)));
+  results.addEventListener('mouseover', (e) => showFull(idOf(e)));
+  const content = h('div', { class: 'catalog' }, input, banner, mode === 'idMso' ? filters : null, results, fullName, h('div', { class: 'catalog-foot' }, status, hint));
   const dialog = openModal(mode === 'idMso' ? t('idMso を選ぶ') : t('imageMso を選ぶ'), content, {
     wide: true,
     onClose: () => {

@@ -164,9 +164,9 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
     if (next < 0) search.focus();
     else items[Math.min(next, items.length - 1)]?.focus();
   });
-  const modal = openModal(onPick ? tr('ライブラリからアイコンを選ぶ') : tr('アイコンライブラリ'), h('div', { class: 'catalog' }, search, tags, grid, emptyState, status), { wide: true, onClose: () => opts.onClose?.(picked) });
+  // 空かどうかで検索欄を隠すので、先に描いてから開く（開いた時点のフォーカス先を正しく決めるため）
   render();
-  // 空のときは検索欄が隠れているので、押せるボタンか、なければ閉じるボタンの側にフォーカスを任せる
+  const modal = openModal(onPick ? tr('ライブラリからアイコンを選ぶ') : tr('アイコンライブラリ'), h('div', { class: 'catalog' }, search, tags, grid, emptyState, status), { wide: true, onClose: () => opts.onClose?.(picked) });
   if (!search.hidden) search.focus();
 }
 

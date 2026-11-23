@@ -12,7 +12,7 @@
 .fluent-chip-count:empty { display: none; }
 .fluent-chips button.fluent-chip.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
 .fluent-chips button.fluent-chip.active .fluent-chip-count { color: inherit; }
-.fluent-chips button.fluent-chip:disabled { opacity: 0.45; }
+.fluent-chips button.fluent-chip[hidden] { display: none; }
 
 .fluent-colors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 /* 共通のボタンの :hover などで背景が上書きされないよう、詳細度を上げて色を固定する */

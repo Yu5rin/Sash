@@ -197,8 +197,8 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
       const on = id === category;
       chip.setAttribute('aria-pressed', String(on));
       chip.classList.toggle('active', on);
-      // 件数が 0 のチップは押せないようにする（選んでいるものは、外せるよう押せるまま）
-      (chip as HTMLButtonElement).disabled = !on && result !== null && n === 0;
+      // 件数が 0 のチップは隠す（選んでいるものは、外せるよう残す）。検索語に関係のないカテゴリが並んで、場所を取らないように
+      chip.hidden = !on && result !== null && n === 0;
     }
   }
 

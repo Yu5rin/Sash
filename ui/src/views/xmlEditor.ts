@@ -8,16 +8,33 @@ import 'monaco-editor/esm/vs/editor/contrib/hover/browser/hoverContribution';
 import 'monaco-editor/esm/vs/editor/contrib/find/browser/findController';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { app } from '../app';
-import { allElements, pathOf } from '../model';
+import { h } from '../dom';
+import { allElements, pathOf, serialize } from '../model';
 import { attributes, backstageElements, callbackSignature, elements } from '../schema';
 import { attrRange, elementIndexAt, scanElements, type ElementSpan } from '../xmlpos';
 import { lang, t } from '../i18n';
+import { describeXmlError } from '../xmlError';
 import { minimalEdit } from './textDiff';
 import { setElementMenuHooks } from './contextMenu';
+import { ask } from '../dialogs/modal';
 
 /** 分類名。「表示」はメニューの［表示］と同じ文言なので、英語はここで決める。 */
 function categoryName(cat: string): string {
   return lang === 'en' && cat === '表示' ? 'Appearance' : t(cat);
+}
+
+/** 構文エラーで同期が止まっている間、ほかの画面を暗くして「いまは編集できない」ことを示す対象。 */
+const DIM_TARGETS = ['.pane.left', '.canvas-pane', '.pane.right'];
+
+/** 停止中の見た目と読み上げの状態を切り替える。見た目は styles-w3.css が #app.xml-sync-error で決める。 */
+function setSyncStopped(stopped: boolean): void {
+  document.getElementById('app')?.classList.toggle('xml-sync-error', stopped);
+  for (const sel of DIM_TARGETS) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    if (stopped) el.setAttribute('aria-disabled', 'true');
+    else el.removeAttribute('aria-disabled');
+  }
 }
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -102,9 +119,34 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
     if (el) store.select(pathOf(el), 'xml');
   });
 
+  // 帯の中身は一度だけ作る。同期のたびに作り直すと、ボタンにフォーカスがあるとき失われるため
+  const statusMsg = h('span', { class: 'xml-status-msg' });
+  const jumpBtn = h('button', { type: 'button', class: 'small', onclick: () => { const ln = app.store?.syncError?.line; if (ln) revealLine(ln); } }, t('エラーの行へ移る'));
+  const restoreBtn = h('button', { type: 'button', class: 'small', onclick: () => void restoreLastValid() }, t('最後の正しい状態に戻す'));
+  statusEl.replaceChildren(statusMsg, h('span', { class: 'xml-status-actions' }, jumpBtn, restoreBtn));
+  statusEl.setAttribute('role', 'status');
+
+  /** 壊れた XML を捨てて、同期が止まる前の（最後に正しく読めた）文書に戻す。入力中の XML は失われるので確認する。 */
+  const restoreLastValid = async () => {
+    const store = app.store;
+    if (!store?.syncError) return;
+    const r = await ask(t('最後の正しい状態に戻しますか？'), t('XML エディタの内容を、構文エラーになる前の状態に置き換えます。いま書いている内容は失われます。'), [
+      { value: 'ok', label: t('戻す'), primary: true },
+      { value: 'cancel', label: t('キャンセル') },
+    ]);
+    if (r !== 'ok' || !app.store?.syncError) return;
+    // エディタの文字を置き換えれば、変更通知でストアにも伝わる（ストアだけを書き換えると、エディタの壊れた文字が残る）
+    editor.setValue(serialize(app.store.doc));
+    editor.focus();
+  };
+
   const sync = (fromSelf: boolean) => {
     const store = app.store;
-    if (!store) return;
+    if (!store) {
+      statusEl.hidden = true;
+      setSyncStopped(false);
+      return;
+    }
     const model = editor.getModel()!;
     const current = model.getValue();
     if (!fromSelf && current !== store.text) {
@@ -121,8 +163,11 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
         applying = false;
       }
     }
-    statusEl.hidden = store.syncError === null;
-    statusEl.textContent = store.syncError ? t('同期停止中：XMLの構文を直すと再開します（{message}）', { message: store.syncError.message }) : '';
+    const err = store.syncError;
+    statusEl.hidden = err === null;
+    statusMsg.textContent = err ? t('同期停止中：XMLの構文を直すと再開します（{message}）', { message: describeXmlError(err.message) }) : '';
+    jumpBtn.hidden = !err?.line;
+    setSyncStopped(err !== null);
   };
 
   app.on('session', () => {

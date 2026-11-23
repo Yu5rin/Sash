@@ -14,7 +14,7 @@ import { elementAt } from '../model';
 import { ABORT } from '../store';
 import type { AttrDef } from '../schema';
 import { t } from '../i18n';
-import { attrLabel, BOOL_DEFAULT, SECTIONS, sectionName, sectionOf } from './inspector';
+import { attrLabel, BOOL_DEFAULT, enumUnsetText, SECTIONS, sectionName, sectionOf } from './inspector';
 
 export interface BulkHooks {
   pickImageMso(current: string, apply: (v: string) => void): void;
@@ -136,7 +136,7 @@ function enumEditor(d: AttrDef, v: BulkValue): HTMLElement {
       },
     },
     v.mixed ? h('option', { value: '\u0000', selected: true, disabled: true }, mixedText()) : null,
-    h('option', { value: '', selected: value === '' }, t('未指定')),
+    h('option', { value: '', selected: value === '' }, enumUnsetText(d.name)),
     (d.values ?? []).map((x) => h('option', { value: x, selected: x === value }, x)),
     value && !(d.values ?? []).includes(value) ? h('option', { value, selected: true }, value) : null,
   );

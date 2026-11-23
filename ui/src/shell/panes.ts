@@ -39,6 +39,8 @@ export function focusPane(id: PaneId): void {
   // キャンバスは上の仕切り（--top）が 0 のときに隠れる。XML は残るので、キャンバスのときだけ戻す
   const key = COLLAPSE_KEY[id];
   if (layout?.isCollapsed(key) && id !== 'xml') layout.expand(key);
+  // パレットとツリーの境目で畳んでいる側へ移るときは、その側を開いてから移る（見えない場所へフォーカスしないように）
+  if (id === 'palette' || id === 'tree') layout?.expandSplit(id);
   const el = paneElement(id);
   const fn = VIEW_FOCUS[id];
   if (fn) fn();

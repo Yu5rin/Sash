@@ -172,6 +172,21 @@ export function suggestId(tag: string, label: string | null, used: ReadonlySet<s
   for (let n = 1; ; n++) if (!used.has(prefix + n)) return prefix + n;
 }
 
+/**
+ * 日本語などのラベルそのものを使った id の案（例：ボタン「出荷一覧を作る」→ btn出荷一覧を作る）。
+ * id には Unicode の文字を使える（仕様書 §17.2）ので、英字にできないラベルでも、読んで分かる id を選べるようにする。
+ * 空白や記号は落とし、文字・数字・_ だけを残す。使えない形になるとき（空・数字だけなど）は null。
+ */
+export function suggestIdFromLabel(tag: string, label: string | null, used: ReadonlySet<string>): string | null {
+  const prefix = ID_PREFIX[tag] ?? tag.slice(0, 3);
+  const body = (label ?? '').normalize('NFKC').replace(/[^\p{L}\p{N}_]/gu, '');
+  if (!body) return null;
+  const base = prefix + body;
+  if (!isXmlId(base)) return null;
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) if (!used.has(base + n)) return base + n;
+}
+
 // ---- 編集操作 ----
 
 // ---- 要素の作成（接頭辞つきの文書に対応） ----

@@ -155,12 +155,30 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
   });
   drop.addEventListener('drop', () => drop.classList.remove('over'));
 
+  /**
+   * ホームは編集画面の上に重ねて出すので、下の要素に Tab が入り込む（見えないキャンバスや XML エディタで止まり、
+   * ホームのボタンに届かなくなる）。ホームの間は下の要素を inert にして、フォーカスも読み上げも届かないようにする。
+   * メニューバーは残す（ホームからも「ファイル」を開けるように）。
+   */
+  const setBackgroundInert = (inert: boolean) => {
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('#toolbar, .pane.left, .pane.center, .pane.right, .bottom, .splitter'))) {
+      if (inert) el.setAttribute('inert', '');
+      else el.removeAttribute('inert');
+    }
+  };
+  let shown = false;
+
   const render = () => {
     if (app.session) {
       host.hidden = true;
+      shown = false;
+      setBackgroundInert(false);
       return;
     }
+    const entering = !shown;
+    shown = true;
     host.hidden = false;
+    setBackgroundInert(true);
     const hadFocus = host.contains(document.activeElement) ? (document.activeElement as HTMLElement).textContent : null;
     host.replaceChildren(
       h('div', { class: 'home-inner' },
@@ -175,6 +193,13 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
     );
     // 一覧を描き直してもフォーカスを失わないよう、同じ文字のボタンへ戻す
     if (hadFocus !== null) Array.from(host.querySelectorAll<HTMLElement>('button')).find((b) => b.textContent === hadFocus)?.focus();
+    else if (entering) {
+      // ホームを出したとき（ファイルを閉じた直後や起動直後）は「ファイルを開く」へ。
+      // 閉じる前のフォーカスは inert になった要素にあったので、そのままだと BODY に落ちてしまう。
+      // メニューやダイアログを操作中なら奪わない
+      const a = document.activeElement as HTMLElement | null;
+      if (!a || a === document.body || a.closest('[inert]')) host.querySelector<HTMLElement>('.home-open')?.focus();
+    }
   };
 
   const loadRecent = async () => {

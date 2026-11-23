@@ -8,7 +8,9 @@ import { revealLine } from './xmlEditor';
 import type { ToastKind } from '../shell/toast';
 import { h, svg } from '../dom';
 import { uiIcons } from '../icons';
-import { allElements, displayName, elementAt, pathOf } from '../model';
+import { allElements, displayName, elementAt, pathOf, suggestId, type Path } from '../model';
+import { titleOf } from '../schema';
+import { focusField } from './inspector';
 import { insertStubs, setupRibbonHolder, vba } from '../callbacks';
 import type { ImageEntry, PartStore } from '../store';
 import { t } from '../i18n';
@@ -17,6 +19,11 @@ import { fitProblems, type FitProblem } from './ribbonFit';
 import { revealInVbe, canRevealInVbe } from '../vbaReveal';
 
 type Tab = 'problems' | 'callbacks' | 'images';
+
+/** タブの並び（← → で移る順）。 */
+const TABS: readonly Tab[] = ['problems', 'callbacks', 'images'];
+/** 次の描き直しのあと、選んだタブにフォーカスを戻す。描き直しでボタンが作り直され、フォーカスが BODY に落ちるため。 */
+let focusTabNext = false;
 
 let current: Tab = 'problems';
 /** 問題の一覧に出す重大度。 */
@@ -36,6 +43,16 @@ export function mountBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (ms
   openIcon = iconEditor;
   bodyEl = body;
   const render = () => renderBottom(tabsHost, body, toast);
+  tabsHost.setAttribute('aria-label', t('下部パネル'));
+  // タブは ← → ・Home・End で移る（WAI-ARIA の tabs と同じ。選ぶと同時に表示も切り替える）
+  tabsHost.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
+    const i = TABS.indexOf(current);
+    const j = e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + TABS.length) % TABS.length;
+    e.preventDefault();
+    focusTabNext = true;
+    showBottomTab(TABS[j]!);
+  });
   app.on('session', render);
   app.on('problems', render);
   app.on('vba', render);
@@ -101,11 +118,13 @@ function renderCallbacks(store: PartStore, toast: (msg: string, kind?: ToastKind
               ? h('button', {
                   type: 'button',
                   class: 'small',
+                  // 何がクリップボードに入るかが分かるよう、写す雛形の 1 行目を見せる
+                  title: t('コピーする内容：{line}', { line: stubOf(x).split(/\r?\n/)[0] ?? '' }),
                   onclick: (e: MouseEvent) => {
                     e.stopPropagation();
                     copy(stubOf(x), t('{name} の雛形をコピーしました', { name: x.name }));
                   },
-                }, t('コピー'))
+                }, t('雛形をコピー'))
               : null,
             x.state === 'missing' && vba.canWrite
               ? h('button', {
@@ -132,7 +151,20 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
   const unused = images.filter((i) => !uses.has(i.id));
 
   const tab = (id: Tab, label: string | HTMLElement[]) =>
-    h('button', { type: 'button', role: 'tab', class: current === id ? 'active' : '', 'aria-selected': String(current === id), onclick: () => showBottomTab(id) }, label);
+    h('button', {
+      type: 'button',
+      role: 'tab',
+      id: `bottom-tab-${id}`,
+      class: current === id ? 'active' : '',
+      'aria-selected': String(current === id),
+      'aria-controls': 'bottom-body',
+      // 選んでいるタブだけが Tab で止まる（残りは ← → で移る）
+      tabIndex: current === id ? 0 : -1,
+      onclick: () => {
+        focusTabNext = true;
+        showBottomTab(id);
+      },
+    }, label);
   const syncError = store?.syncError ?? null;
   // キャンバスで測った幅の問題。今の文書にない要素を指すもの（測る前の古い結果）は出さない
   const fit: FitProblem[] = store ? fitProblems().filter((p) => elementAt(store.doc, p.path)?.localName === 'group') : [];
@@ -141,11 +173,16 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
   const warnCount = count('warning');
   const infoCount = count('info');
   const badge = (sev: Severity, n: number) => (n ? h('span', { class: `count-badge ${sev}`, title: t({ error: 'エラー {n}', warning: '警告 {n}', info: '情報 {n}' }[sev], { n }) }, String(n)) : null);
+  const hadTabFocus = focusTabNext || tabsHost.contains(document.activeElement);
+  focusTabNext = false;
   tabsHost.replaceChildren(
     tab('problems', [h('span', null, t('問題')), badge('error', errorCount), badge('warning', warnCount), badge('info', infoCount)].filter((x): x is HTMLElement => x !== null)),
     tab('callbacks', t('コールバック {n}', { n: callbacks.length }) + (vba.status === 'ok' && cbIssues ? t('（要対応 {n}）', { n: cbIssues }) : '')),
     tab('images', t('アイコン {n}', { n: images.length }) + (unused.length ? t('（未使用 {n}）', { n: unused.length }) : '')),
   );
+
+  body.setAttribute('aria-labelledby', `bottom-tab-${current}`);
+  if (hadTabFocus) tabsHost.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
 
   if (!store) {
     body.replaceChildren();
@@ -182,15 +219,20 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
     for (const p of list) {
       const el = elementAt(store.doc, p.path);
       const go = () => store.select(p.path, 'other');
+      const isFit = fit.includes(p as FitProblem);
+      // 「対象のラベル（種類）：文」の順で左に寄せる。どの要素の話かを先に読めるように
+      const name = el ? displayName(el) : '';
+      const kind = el ? titleOf(el.localName) : '';
+      const text = !el ? p.message : name ? t('{name}（{kind}）：{message}', { name, kind, message: p.message }) : t('{kind}：{message}', { kind, message: p.message });
       items.push(
         h('li', {
-          class: `problem ${p.severity}${fit.includes(p as FitProblem) ? ' fit' : ''}`,
-          title: fit.includes(p as FitProblem) ? t('キャンバスで測った幅からの見積もりです（実機の Excel と異なる場合があります）') : undefined,
+          class: `problem ${p.severity}${isFit ? ' fit' : ''}`,
+          title: isFit ? t('キャンバスで測った幅からの見積もりです（実機の Excel と異なる場合があります）') : text,
           tabIndex: 0,
           role: 'button',
           onclick: go,
-          onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && go(),
-        }, svg(uiIcons[p.severity]), h('span', { class: 'msg' }, p.message), h('span', { class: 'where' }, el ? `<${el.localName}> ${displayName(el)}` : '')),
+          onkeydown: (e: KeyboardEvent) => e.target === e.currentTarget && e.key === 'Enter' && go(),
+        }, svg(uiIcons[p.severity]), h('span', { class: 'msg' }, text), isFit || !('attr' in p) ? null : fixAction(store, p.path, p.attr)),
       );
     }
     const total = errorCount + warnCount + infoCount;
@@ -250,6 +292,46 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
           ),
     );
   }
+}
+
+/**
+ * 問題の行の右端に出す操作。直し方が決まるものだけ（長いラベル → ラベルを編集、id の重複 → 振り直す）。
+ * 規則の名前は Problem にないので、問題のある属性と文書の中身から判断する（文言には頼らない）。
+ */
+function fixAction(store: PartStore, path: Path, attr: string | undefined): HTMLElement | null {
+  const el = elementAt(store.doc, path);
+  if (!el) return null;
+  if (attr === 'label') {
+    return h('button', {
+      type: 'button',
+      class: 'small problem-fix',
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        store.select(path, 'other');
+        focusField('label');
+      },
+    }, t('ラベルを編集'));
+  }
+  const id = attr === 'id' ? el.getAttribute('id') : null;
+  if (id && allElements(store.doc).filter((x) => x.getAttribute('id') === id).length > 1) {
+    return h('button', {
+      type: 'button',
+      class: 'small problem-fix',
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        // 新しい id は編集の前に決める（履歴の名前に入れるため）。ほかで使っている id は避ける
+        const used = new Set(allElements(store.doc).map((x) => x.getAttribute('id')).filter((v): v is string => !!v));
+        const next = suggestId(el.localName, el.getAttribute('label'), used);
+        store.edit('other', (doc) => {
+          const target = elementAt(doc, path);
+          if (!target) return undefined;
+          target.setAttribute('id', next);
+          return undefined;
+        }, t('{attr} を「{value}」に変更', { attr: 'id', value: next }));
+      },
+    }, t('ID を振り直す'));
+  }
+  return null;
 }
 
 /** 一覧の中は上下の矢印で移る。 */
