@@ -82,6 +82,9 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   host.setAttribute('role', 'region');
   host.setAttribute('aria-label', tr('キャンバス'));
   const render = () => renderCanvas(host);
+  // スクロールや大きさの変更でメニューの開き口が動いたら、ポップアップも付いていかせる
+  host.addEventListener('scroll', () => placePopups(host), true);
+  window.addEventListener('resize', () => placePopups(host));
   app.on('session', () => {
     activeTab = null;
     resetBackstage();
@@ -289,6 +292,7 @@ function renderCanvas(host: HTMLElement): void {
   }
   host.replaceChildren(renderHeader(), stage, h('div', { class: 'drop-indicator', hidden: true }));
 
+  placePopups(host);
   known = new WeakSet(allElements(doc));
   const sel = store.selection;
   if (sel && (flashPath || scrollToSelection)) {
@@ -659,6 +663,38 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
         hasArrow ? menuPopup(el) : null,
       );
     }
+  }
+}
+
+/**
+ * メニューのポップアップを、開き口のすぐ下に画面基準（fixed）で置く。
+ * リボン本体は横スクロールのために overflow-x:auto にしており、CSS の決まりで縦も auto 扱いになる。
+ * そのまま absolute で置くと本体の中に閉じ込められて選択肢が隠れるため、本体の枠の外に出す。
+ */
+function placePopups(host: HTMLElement): void {
+  const margin = 8;
+  for (const popup of Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'))) {
+    const anchor = popup.parentElement;
+    if (!anchor) continue;
+    const r = anchor.getBoundingClientRect();
+    popup.style.position = 'fixed';
+    popup.style.maxHeight = '';
+    const w = popup.offsetWidth;
+    const ph = popup.offsetHeight;
+    const below = window.innerHeight - r.bottom - margin;
+    const above = r.top - margin;
+    // 下に入りきらず、上のほうが広ければ上に開く（Excel と同じ振る舞い）
+    let top: number;
+    if (ph <= below || below >= above) {
+      top = r.bottom;
+      if (ph > below) popup.style.maxHeight = `${Math.max(80, below)}px`;
+    } else {
+      top = Math.max(margin, r.top - Math.min(ph, above));
+      if (ph > above) popup.style.maxHeight = `${Math.max(80, above)}px`;
+    }
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - w - margin));
+    popup.style.top = `${top}px`;
+    popup.style.left = `${left}px`;
   }
 }
 

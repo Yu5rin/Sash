@@ -8,6 +8,7 @@ import { endDrag, startDrag } from '../dnd';
 import { h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { backstageElements, elements, titleOf } from '../schema';
+import { describeElement } from '../elementHelp';
 import { t } from '../i18n';
 import { insertAtSelection, probeInsert } from '../shell/compat';
 import { normalizeForSearch } from '../shell/text';
@@ -150,9 +151,10 @@ export function mountPalette(host: HTMLElement): void {
         const reason = unavailableReason(tag);
         li.classList.toggle('unavailable', reason !== null);
         li.setAttribute('aria-disabled', String(reason !== null));
-        li.title = reason
-          ? `${titleOf(tag)}（${tag}）\n${reason}`
-          : t('{name}（{tag}）\nダブルクリックか Enter で選択中の場所に追加、ドラッグで好きな場所に置く', { name: titleOf(tag), tag });
+        // 何ができる部品かを先に書き、追加のしかた（または追加できない理由）は最後に添える
+        const desc = describeElement(tag);
+        const head = desc ? `${titleOf(tag)}（${tag}）\n${desc}` : `${titleOf(tag)}（${tag}）`;
+        li.title = `${head}\n\n${reason ?? t('ダブルクリックか Enter で追加、ドラッグで好きな場所に配置')}`;
       }
     }, 80);
   };

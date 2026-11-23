@@ -33,6 +33,7 @@ import { mountTree } from './views/tree';
 import { mountXmlEditor, revealInXml } from './views/xmlEditor';
 import { probeInsert, setEditRefusedHandler } from './shell/compat';
 import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
+import { describeElement } from './elementHelp';
 import { inTextField, runEditCommand } from './shell/editCommands';
 import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
@@ -255,7 +256,10 @@ const INSERT_COMMON = ['tab', 'group', 'button', 'toggleButton', 'checkBox', 'dr
 function insertItem(tag: string): MenuItemDef {
   const store = app.store;
   const reason = store ? probeInsert(store.doc, store.selection, tag) : t('ファイルを開くと追加できます');
-  return { label: titleOf(tag), hint: reason ?? tag, enabled: reason === null, run: () => void insertNearSelection(tag) };
+  // ツールチップには何ができる部品かを出す。追加できないときは、その理由を添える
+  const desc = describeElement(tag);
+  const hint = [desc || tag, reason].filter(Boolean).join('\n');
+  return { label: titleOf(tag), hint, enabled: reason === null, run: () => void insertNearSelection(tag) };
 }
 
 const CANVAS_MODES: readonly { mode: CanvasMode; label: string }[] = [
