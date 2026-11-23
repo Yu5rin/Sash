@@ -66,7 +66,10 @@ function schedule(entry: Entry): void {
   entry.timer = undefined;
   if (entry.remaining <= 0 || entry.paused) return;
   entry.startedAt = Date.now();
-  entry.timer = window.setTimeout(entry.close, entry.remaining);
+  // テスト環境の破棄後に遅れて発火しても DOM を触らない
+  entry.timer = window.setTimeout(() => {
+    if (typeof window !== 'undefined') entry.close();
+  }, entry.remaining);
 }
 
 function pause(entry: Entry): void {

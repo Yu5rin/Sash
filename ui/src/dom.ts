@@ -41,6 +41,10 @@ export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: numb
   let t: number | undefined;
   return (...args: A) => {
     window.clearTimeout(t);
-    t = window.setTimeout(() => fn(...args), ms);
+    t = window.setTimeout(() => {
+      // テスト環境の破棄後に遅れて発火しても、画面の無い所で呼ばない
+      if (typeof window === 'undefined') return;
+      fn(...args);
+    }, ms);
   };
 }

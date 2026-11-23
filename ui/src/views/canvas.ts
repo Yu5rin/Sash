@@ -269,6 +269,8 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
+      // テスト環境の破棄後に遅れて発火しても DOM を触らない
+      if (typeof window === 'undefined') return;
       // 枠の幅が変わったら「収める」の縮小率も変わる
       updateZoom(host);
       placePopups(host);

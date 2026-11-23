@@ -147,8 +147,12 @@ export function mountInspector(host: HTMLElement, h0: InspectorHooks): void {
  * 終わってから描き直す。change の処理中に DOM を差し替えると、移動先の欄が消えてフォーカスを失うため。
  */
 function schedule(host: HTMLElement): void {
+  // テスト環境の破棄後に遅れて呼ばれると window が無く落ちるため、何もしない
+  if (typeof window === 'undefined') return;
   window.clearTimeout(renderTimer);
-  if (host.contains(document.activeElement)) renderTimer = window.setTimeout(() => renderInspector(host), 0);
+  if (host.contains(document.activeElement)) renderTimer = window.setTimeout(() => {
+      if (typeof window !== 'undefined') renderInspector(host);
+    }, 0);
   else renderInspector(host);
 }
 

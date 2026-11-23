@@ -104,7 +104,19 @@ class App {
     this.lintTimer = window.setTimeout(() => this.runLint(), 150);
   }
 
+  /**
+   * 予約済みのタイマーだけを止める（状態は捨てない）。テストファイルの終了時に呼ぶ。
+   * シングルトンの検査タイマーが jsdom の破棄後に発火すると、描き直しが window を触って落ちるため。
+   */
+  cancelTimers(): void {
+    if (typeof window === 'undefined') return;
+    window.clearTimeout(this.lintTimer);
+    this.lintTimer = undefined;
+  }
+
   runLint(): void {
+    // テスト環境の破棄後に遅れて発火したタイマーが、画面（window）の無い所で描き直さないようにする
+    if (typeof window === 'undefined') return;
     const store = this.store;
     if (!store) return;
     this.problems = lint(store.doc, {
@@ -118,5 +130,9 @@ class App {
 }
 
 export const app = new App();
+
+// テストの共通後始末（test/setup.ts）が app を import せずに止められるよう、取っ手を公開しておく。
+// 画面に無関係のテストファイルまで app を読み込ませないための間接
+(globalThis as { __sashCancelTimers?: () => void }).__sashCancelTimers = () => app.cancelTimers();
 
 onMsoIconsLoaded(() => app.scheduleLint());

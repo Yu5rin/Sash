@@ -276,6 +276,8 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
         // 描き直しは 1 フレームに 1 回にまとめる
         if (!frame) frame = requestAnimationFrame(() => {
           frame = 0;
+          // テスト環境の破棄後に遅れて発火しても DOM を触らない
+          if (typeof window === 'undefined') return;
           setPaletteHeight(pending, false);
         });
       };
@@ -341,6 +343,8 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
         // 描き直しは 1 フレームに 1 回にまとめる
         if (!frame) frame = requestAnimationFrame(() => {
           frame = 0;
+          // テスト環境の破棄後に遅れて発火しても DOM を触らない
+          if (typeof window === 'undefined') return;
           setSize(key, pending < COLLAPSE_BELOW / 2 ? 0 : pending, false);
         });
       };
