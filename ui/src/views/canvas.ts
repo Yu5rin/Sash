@@ -4,7 +4,7 @@
 
 import '../styles-views.css';
 import { app } from '../app';
-import { catalog, labels } from '../catalog/catalog';
+import { catalog, labels, onLabelsLoaded } from '../catalog/catalog';
 import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard';
 import { canDropInto, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
 import { h } from '../dom';
@@ -17,6 +17,16 @@ import { closeMenu, openElementMenu } from './contextMenu';
 import { focusField } from './inspector';
 import { defFor, inBackstage } from '../schema';
 import { lang, t as tr } from '../i18n';
+import { notify } from '../shell/toast';
+import { openRecipes } from '../dialogs/recipeDialog';
+import { openOnce } from '../dialogs/modal';
+import {
+  availableForGroups, effectiveWidth, getCheckWidths, RIBBON_RESERVED_PX, RULER_MARKS, SCALE_CHOICES, setCheckWidths, setFitReport, simulateFit, WIDTH_CHOICES,
+  type FitGroupInput, type FitGroupResult, type FitReportEntry, type GroupFitState,
+} from './ribbonFit';
+import { clearOverrides, getOverride, overrideCount, overrideKey, overridesSignature, preview, setOverride, setPreview, type FitMode, type PreviewSettings } from './ribbonPreview';
+import { excelWidthDisabledReason, fitExcelToPreview } from './excelWidth';
+import { attachScreentips, BUILTIN_TAB_KEYTIPS, duplicateKeytips, screentipContent, type ScreentipContent } from './ribbonTips';
 
 /** 表示する組み込みタブ（Excel の既定の並び）。 */
 const BUILTIN_TABS: readonly [string, string, string][] = [
@@ -60,6 +70,43 @@ let layoutObserver: MutationObserver | null = null;
 /** 直前の描画で選んでいた要素。選択が変わったときだけ、ポップアップの中の選択肢を見える位置まで送る。 */
 let lastPopupSelection: string | null = null;
 
+// ---- 幅のプレビュー（仕様書 §5.2「幅のプレビュー」） ----
+
+/** 畳んだグループのうち、一時的に広げて編集しているもの（パスの文字列）。幅を変えたら元に戻す。 */
+const tempExpanded = new Set<string>();
+/** 見出しで開いているメニュー。 */
+let headerMenu: 'view' | 'dynamic' | 'checks' | null = null;
+/** 「動的な状態を試す」で目立たせる要素（インスペクタの「キャンバスで試す」から開いたとき）。 */
+let dynamicFocus: string | null = null;
+/** グループの幅を測っている間は、ポップアップやキーヒントを描かない（幅に関係せず、選択の検索の邪魔になるため）。 */
+let measuring = false;
+/** 比べる側（読み取り専用）の枠を描いている間。メニューのポップアップは開かない。 */
+let readOnlyRender = false;
+/** 測った幅の控え。鍵はグループの XML・言語・試し表示。描き直しのたびに全部を測り直さないため。 */
+const widthCache = new Map<string, FitGroupInput['widths']>();
+
+/**
+ * 大きいボタンのラベルの折り返し。Excel は大きいボタンのラベルを 2 行までに収め、
+ * 2 行目の末尾に ▼ を置く。日本語の折り返し位置（文字単位で折るか、どの幅で折るか）は
+ * Microsoft 365 の画面写真からの見積もりで、実機の Excel では確かめていない。
+ */
+const LARGE_LABEL_WRAP = { maxWidthPx: 76, maxLines: 2 } as const;
+
+/** 1 枠ぶんの描き方。 */
+interface RibbonView {
+  /** 実効の幅（CSS px）。null は「自由」。 */
+  effective: number | null;
+  /** 比べる側の枠。編集できない。 */
+  readOnly: boolean;
+}
+
+/** 表示中のタブについての見積もり（見出しに出す）。 */
+interface ViewFit {
+  builtin: boolean;
+  collapsed: string[];
+  clipped: string[];
+}
+
 export function getCanvasMode(): CanvasMode {
   return mode;
 }
@@ -71,6 +118,43 @@ export function setCanvasMode(next: CanvasMode): void {
   mode = next;
   if (hostEl) renderCanvas(hostEl);
   if (changed) window.dispatchEvent(new CustomEvent('sash:canvasmode', { detail: { mode } }));
+}
+
+// ---- 幅のプレビューの切り替え（表示 メニュー・コマンドパレットから使う） ----
+
+/** 設定を変えて描き直す。幅や拡大率が変わったら、一時的に広げたグループは畳み直す（位置の前提が変わるため）。 */
+function applyPreview(patch: Partial<PreviewSettings>): void {
+  const p = preview();
+  if (('width' in patch && patch.width !== p.width) || (patch.scale !== undefined && patch.scale !== p.scale)) tempExpanded.clear();
+  if (patch.width !== undefined && patch.width !== null && !WIDTH_CHOICES.includes(patch.width)) patch.customWidth = patch.width;
+  setPreview(patch);
+  if (hostEl) renderCanvas(hostEl);
+}
+
+/** 画面の幅（px）。null は「自由」。 */
+export function setPreviewWidth(width: number | null): void {
+  applyPreview({ width });
+}
+
+/** Windows の拡大率（%。100 / 125 / 150）。 */
+export function setPreviewScale(scale: number): void {
+  if (SCALE_CHOICES.includes(scale)) applyPreview({ scale });
+}
+
+/** 収める（fit）／等倍（actual）。 */
+export function setFitMode(fit: FitMode): void {
+  applyPreview({ fit });
+}
+
+/** キーヒントの表示を切り替える。切り替えた後の状態を返す。 */
+export function toggleKeytips(): boolean {
+  applyPreview({ keytips: !preview().keytips });
+  return preview().keytips;
+}
+
+/** いまのプレビューの設定（読み取り専用）。 */
+export function getPreviewState(): Readonly<PreviewSettings> {
+  return preview();
 }
 
 /** キャンバスにフォーカスを移す（Ctrl+1 / F6）。 */
@@ -103,7 +187,10 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     if (e.target instanceof Element && e.target.closest('.rb-menu-popup')) return;
     placePopups(host);
   }, true);
-  window.addEventListener('resize', () => placePopups(host));
+  window.addEventListener('resize', () => {
+    updateZoom(host);
+    placePopups(host);
+  });
   // スプリッターのドラッグや隣の枠を畳んだときは window の resize が来ないので、枠の大きさの変化を見張る。
   // 左の枠を広げてもキャンバスの幅が変わらない（位置だけずれる）ことがあるので、大きさだけでなく、
   // レイアウトの変数（--left など）とクラス（collapsed-*）を書き換える #app の属性の変化も見張る
@@ -115,6 +202,8 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
+      // 枠の幅が変わったら「収める」の縮小率も変わる
+      updateZoom(host);
       placePopups(host);
     });
   };
@@ -131,6 +220,14 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   app.on('session', () => {
     activeTab = null;
     resetBackstage();
+    // 試し表示と一時的な展開は、別のファイルの同じ id に効いてしまわないよう消す
+    clearOverrides();
+    tempExpanded.clear();
+    widthCache.clear();
+    headerMenu = null;
+    // 別のファイルでは、タブの欄の位置を前のファイルから引き継がない
+    resetTabScroll = true;
+    lastActiveTabKey = null;
     known = new WeakSet();
     if (mode !== 'ribbon') setCanvasMode('ribbon');
     render();
@@ -154,6 +251,57 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   });
   app.on('problems', render);
   onMsoIconsLoaded(render);
+  // Excel の表示名が届いたら、表示名で描いた幅が変わるので測り直す
+  onLabelsLoaded(() => {
+    widthCache.clear();
+    render();
+  });
+  // 確かめる幅を変えたら測り直す
+  window.addEventListener('sash:fitsettings', render);
+  // 表示 メニュー（shell/previewCommands.ts）からの切り替え。detail は { width?, scale?, mode?, keytips? }
+  window.addEventListener('sash:preview', (e) => {
+    const d = (e as CustomEvent<{ width?: number | null; scale?: number; mode?: FitMode; keytips?: boolean } | undefined>).detail ?? {};
+    const patch: Partial<PreviewSettings> = {};
+    if ('width' in d && (d.width === null || (typeof d.width === 'number' && d.width >= 320))) patch.width = d.width ?? null;
+    if (typeof d.scale === 'number' && SCALE_CHOICES.includes(d.scale)) patch.scale = d.scale;
+    if (d.mode === 'fit' || d.mode === 'actual') patch.fit = d.mode;
+    if (typeof d.keytips === 'boolean') patch.keytips = d.keytips;
+    applyPreview(patch);
+  });
+  // 文字の読み込みが終わると幅が変わるので、測った幅を捨てる
+  document.fonts?.addEventListener?.('loadingdone', () => {
+    widthCache.clear();
+    render();
+  });
+  attachScreentips(host, (node) => tipFor(node));
+  // インスペクタの「キャンバスで試す」：その要素を選び、リボンの表示で「動的な状態を試す」を開く
+  window.addEventListener('sash:dynamicSim', (e) => {
+    const path = (e as CustomEvent<{ path?: number[] }>).detail?.path;
+    if (!app.store || !Array.isArray(path)) return;
+    dynamicFocus = path.join('.');
+    headerMenu = 'dynamic';
+    if (mode !== 'ribbon') setModeQuiet('ribbon');
+    if (!samePath(app.store.selection, path)) app.store.select(path, 'other');
+    render();
+    // 開いたメニューの中の、その要素の行へ送ってフォーカスする
+    const row = host.querySelector<HTMLElement>(`.cv-dyn-row[data-dyn-path="${dynamicFocus}"]`);
+    row?.scrollIntoView({ block: 'nearest' });
+    row?.querySelector<HTMLElement>('input')?.focus({ preventScroll: true });
+  });
+  // 見出しのメニューは、外を押したら閉じる
+  window.addEventListener('mousedown', (e) => {
+    if (!headerMenu) return;
+    const target = e.target as HTMLElement;
+    if (target.closest?.('.cv-pop, [data-menu-button]')) return;
+    // ここで描き直すと、押した要素（タブなど）が作り直されてクリックが届かなくなるので、メニューだけを外す
+    headerMenu = null;
+    dynamicFocus = null;
+    for (const pop of Array.from(host.querySelectorAll('.cv-pop'))) pop.remove();
+    for (const b of Array.from(host.querySelectorAll<HTMLElement>('[data-menu-button]'))) {
+      b.classList.remove('active');
+      b.setAttribute('aria-expanded', 'false');
+    }
+  }, true);
 
   host.addEventListener('dragover', (e) => onDragOver(e, host));
   host.addEventListener('dragleave', (e) => {
@@ -167,7 +315,7 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   }, true);
   host.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
-    if (target === host || target.classList.contains('rb-body') || target.classList.contains('cv-stage')) app.store?.select(null, 'canvas');
+    if (target === host || target.classList.contains('rb-body') || target.classList.contains('cv-stage') || target.classList.contains('cv-frame') || target.classList.contains('cv-zoom')) app.store?.select(null, 'canvas');
   });
   host.addEventListener('keydown', (e) => onKey(e, host));
   host.addEventListener('contextmenu', (e) => {
@@ -259,7 +407,9 @@ function collectTabs(doc: Document): TabEntry[] {
     const entry: TabEntry = { key: pathOf(x).join('.'), label: labelOf(x), builtin: false, el: x, idMso: null };
     const after = x.getAttribute('insertAfterMso');
     const before = x.getAttribute('insertBeforeMso');
-    const anchor = entries.findIndex((e) => e.idMso === (after ?? before));
+    // insertAfterMso / insertBeforeMso がなければ末尾に足す（null で探すと、先に足した自作のタブ（idMso が null）に当たり、並びが逆になるため）
+    const target = after ?? before;
+    const anchor = target ? entries.findIndex((e) => e.idMso === target) : -1;
     if (anchor >= 0) entries.splice(after ? anchor + 1 : anchor, 0, entry);
     else entries.push(entry);
   }
@@ -270,7 +420,8 @@ function labelOf(el: Element): string {
   const label = el.getAttribute('label');
   if (label !== null) return label;
   const getLabel = el.getAttribute('getLabel');
-  if (getLabel) return `{${getLabel}}`;
+  // 「動的な状態を試す」でラベルの例を入れていれば、それを出す
+  if (getLabel) return getOverride(overrideKey(el, pathOf(el)))?.label ?? `{${getLabel}}`;
   const idMso = el.getAttribute('idMso');
   if (idMso) return labels.get(idMso) ?? idMso;
   return el.getAttribute('id') ?? '';
@@ -294,25 +445,309 @@ function resolveActive(tabs: TabEntry[]): TabEntry | undefined {
   return active ?? tabs.find((x) => !x.builtin) ?? tabs.find((x) => x.el !== null) ?? tabs[0];
 }
 
-function renderHeader(): HTMLElement {
+/** 見出しやメニューの操作のあとに描き直す。 */
+function rerender(): void {
+  if (hostEl) renderCanvas(hostEl);
+}
+
+function renderHeader(fit: ViewFit | null): HTMLElement {
   const v2007 = app.store?.version === 'office2007';
-  const seg = (m: CanvasMode, label: string) =>
+  // short は見出しが狭いときに出す短い名前（CSS のコンテナークエリで切り替える）
+  const seg = (m: CanvasMode, label: string, short?: string) =>
     h('button', {
       type: 'button',
       class: mode === m ? 'active' : '',
       'aria-pressed': String(mode === m),
+      'aria-label': label,
       disabled: m !== 'ribbon' && v2007,
-      title: m !== 'ribbon' && v2007 ? tr('customUI14（2010以降）の形式でのみ使えます') : '',
+      title: m !== 'ribbon' && v2007 ? tr('customUI14（2010以降）の形式でのみ使えます') : short ? label : '',
       onclick: (e: MouseEvent) => {
         e.stopPropagation();
         setCanvasMode(m);
       },
+    }, short ? [h('span', { class: 'cv-long' }, label), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, short)] : label);
+  const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'), tr('右クリック')));
+  // 操作の説明は長いので、小さな「?」のツールチップに回す（1 行に収めるため）
+  const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー') }, '?');
+  // 見出しは 1 行に収める（2 段・3 段になると、既定の高さ 260px のキャンバスでリボンが見出しの下に隠れるため）。
+  // 毎回は使わない切り替え（比べる・キーヒント・VBA で変わる表示・チェックする幅・Excel の幅）は「表示」メニューにまとめた
+  if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, modes, h('span', { class: 'cv-spacer' }), hint);
+  return h('div', { class: 'cv-header' }, modes, renderWidthControls(), renderStatus(fit), renderViewMenu(), hint);
+}
+
+function option(value: string, label: string, selected: boolean): HTMLOptionElement {
+  return h('option', { value, selected }, label);
+}
+
+/** 画面の幅・拡大率・表示のしかた（全体を表示／実寸）。 */
+function renderWidthControls(): HTMLElement {
+  const p = preview();
+  const choice = p.width === null ? 'free' : WIDTH_CHOICES.includes(p.width) ? String(p.width) : 'custom';
+  const widthSel = h(
+    'select',
+    {
+      class: 'cv-select',
+      'aria-label': tr('画面の幅'),
+      title: tr('画面の幅'),
+      dataset: { fk: 'width' },
+      onchange: (e: Event) => {
+        const v = (e.target as HTMLSelectElement).value;
+        applyPreview({ width: v === 'free' ? null : v === 'custom' ? p.customWidth : Number(v) });
+      },
+    },
+    option('free', tr('自由'), choice === 'free'),
+    WIDTH_CHOICES.map((w) => option(String(w), `${w}`, choice === String(w))),
+    option('custom', tr('カスタム…'), choice === 'custom'),
+  );
+  const custom =
+    choice === 'custom'
+      ? h('input', {
+          type: 'number',
+          class: 'cv-num',
+          min: '640',
+          max: '7680',
+          step: '1',
+          value: String(p.width),
+          'aria-label': tr('画面の幅（px）'),
+          dataset: { fk: 'customWidth' },
+          onchange: (e: Event) => {
+            const n = Math.round(Number((e.target as HTMLInputElement).value));
+            if (!Number.isFinite(n) || n < 640 || n > 7680) {
+              (e.target as HTMLInputElement).value = String(p.width);
+              notify(tr('画面の幅は 640〜7680 の数で入れてください'), 'warning');
+              return;
+            }
+            applyPreview({ width: n, customWidth: n });
+          },
+        })
+      : null;
+  const scaleSel = h(
+    'select',
+    {
+      class: 'cv-select',
+      'aria-label': tr('Windows の拡大率'),
+      title: p.width === null ? tr('先に「画面の幅」を選んでください') : tr('Windows の設定の「拡大/縮小」'),
+      disabled: p.width === null,
+      dataset: { fk: 'scale' },
+      onchange: (e: Event) => applyPreview({ scale: Number((e.target as HTMLSelectElement).value) }),
+    },
+    SCALE_CHOICES.map((s) => option(String(s), `${s}%`, p.scale === s)),
+  );
+  const fitSeg = (m: 'fit' | 'actual', label: string, title: string) =>
+    h('button', {
+      type: 'button',
+      class: p.fit === m ? 'active' : '',
+      'aria-pressed': String(p.fit === m),
+      disabled: p.width === null,
+      title,
+      dataset: { fk: `fit-${m}` },
+      onclick: () => applyPreview({ fit: m }),
     }, label);
+  // 見出しが狭いときは「画面の幅」「拡大率」の文字を隠す（CSS のコンテナークエリ）。選択肢の aria-label と title は残す
   return h(
     'div',
-    { class: 'cv-header' },
-    h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'))),
-    h('span', { class: 'cv-hint' }, tr('矢印キーで移動・Enter で編集・右クリックでメニュー')),
+    { class: 'cv-width' },
+    h('label', { class: 'cv-field' }, h('span', { class: 'cv-field-label' }, tr('画面の幅')), widthSel),
+    custom,
+    h('label', { class: 'cv-field' }, h('span', { class: 'cv-field-label' }, tr('拡大率')), scaleSel),
+    h('div', { class: 'segmented cv-fit', role: 'group', 'aria-label': tr('表示のしかた') },
+      fitSeg('fit', tr('全体を表示'), tr('枠に収まるように縮小して表示します')),
+      fitSeg('actual', tr('実寸'), tr('実物と同じ大きさで表示し、横にスクロールします'))),
+  );
+}
+
+/**
+ * 見出しの状態の文字（Excel から見た幅・縮小率・畳まれる／収まらないグループの数）。
+ * 入りきらなければ「…」で切り、全文はツールチップで出す（見出しを 1 行に保つため）。
+ * 縮小率の部分は描き直さずに updateZoom が書き換える。
+ */
+function renderStatus(fit: ViewFit | null): HTMLElement[] {
+  const parts: string[] = [];
+  const details: string[] = [];
+  let warn = false;
+  if (fit?.builtin) {
+    parts.push(tr('組み込みグループの幅は再現していません'));
+    details.push(tr('組み込みグループの幅は再現していません。「表示」の［Excel をプレビューの幅にする］で、実物の Excel で確かめてください'));
+  } else if (fit && (fit.clipped.length || fit.collapsed.length)) {
+    if (fit.clipped.length) {
+      warn = true;
+      parts.push(tr('右の {n} グループが収まりません', { n: fit.clipped.length }));
+      details.push(`${tr('収まらない')}: ${fit.clipped.join('、')}`);
+    }
+    if (fit.collapsed.length) {
+      parts.push(tr('{n} グループが畳まれます', { n: fit.collapsed.length }));
+      details.push(`${tr('畳まれる')}: ${fit.collapsed.join('、')}`);
+    }
+    details.push(tr('目安（実機の Excel と異なる場合があります）'));
+  }
+  const status = h(
+    'span',
+    { class: `cv-status${warn ? ' warning' : ''}`, 'aria-live': 'polite', dataset: { detail: details.join('\n') } },
+    h('span', { class: 'cv-zoominfo' }),
+    parts.length ? h('span', { class: 'cv-fitinfo' }, parts.join('・') + tr('（目安）')) : null,
+  );
+  // 縮小が 50% を下回ったときだけ出す小さなリンク。畳むのは外枠（shell）の仕事なので、知らせるだけにする
+  const low = h('button', {
+    type: 'button',
+    class: 'cv-link cv-lowzoom',
+    hidden: true,
+    title: tr('50% より小さく縮めて表示しています。左右のペインを一時的に畳むと大きく表示できます（［実寸］で実物の大きさにもできます）'),
+    onclick: () => window.dispatchEvent(new CustomEvent('sash:collapseSidePanes')),
+  }, tr('ペインを畳む'));
+  return [status, low];
+}
+
+/** 見出しの「表示 ▾」と、そこから開くメニュー（表示・VBA で変わる表示を試す・チェックする画面の幅）。 */
+function renderViewMenu(): HTMLElement {
+  const dynCount = overrideCount();
+  const open = headerMenu !== null;
+  const button = h('button', {
+    type: 'button',
+    class: `small cv-viewbtn${open ? ' active' : ''}${dynCount || preview().compare || preview().keytips ? ' has-on' : ''}`,
+    'aria-haspopup': 'true',
+    'aria-expanded': String(open),
+    title: tr('2つの幅を比べる・キーヒント・VBA で変わる表示を試す・チェックする画面の幅・Excel をプレビューの幅にする'),
+    dataset: { menuButton: '1', fk: 'menu-view' },
+    onclick: () => {
+      headerMenu = open ? null : 'view';
+      dynamicFocus = null;
+      rerender();
+    },
+  }, tr('表示'), h('span', { class: 'rb-arrow', 'aria-hidden': 'true' }));
+  const pop = headerMenu === 'view' ? renderViewMenuItems() : headerMenu === 'dynamic' ? renderDynamicMenu() : headerMenu === 'checks' ? renderChecksMenu() : null;
+  return h('span', { class: 'cv-menu-wrap cv-viewmenu' }, button, pop);
+}
+
+function renderViewMenuItems(): HTMLElement {
+  const p = preview();
+  const dynCount = overrideCount();
+  const check = (on: boolean, label: string, title: string, fk: string, patch: Partial<PreviewSettings>, disabled = false) =>
+    h('label', { class: `cv-check cv-mi${disabled ? ' disabled' : ''}`, title },
+      h('input', { type: 'checkbox', checked: on, disabled, dataset: { fk }, onchange: () => applyPreview(patch) }),
+      label);
+  const item = (label: string, fk: string, onclick: () => void, opts: { reason?: string; title?: string } = {}) =>
+    h('button', {
+      type: 'button',
+      class: 'cv-mi',
+      disabled: !!opts.reason,
+      title: opts.reason || opts.title || '',
+      dataset: { fk },
+      onclick,
+    }, h('span', null, label), opts.reason ? h('span', { class: 'cv-mi-reason' }, opts.reason) : null);
+  const excelReason = excelWidthDisabledReason();
+  return h(
+    'div',
+    { class: 'cv-pop cv-viewpop', role: 'menu', 'aria-label': tr('表示') },
+    check(p.compare, tr('2つの幅を比べる'), tr('下に、別の幅で描いたリボンを並べます（編集はできません）'), 'compare', { compare: !p.compare }),
+    check(p.keytips, tr('キーヒントを表示'), tr('Alt キーを押したときに出る文字を重ねて表示します'), 'keytips', { keytips: !p.keytips }),
+    check(p.keytipsAll, tr('未設定も表示'), tr('keytip を書いていないコントロールにも「自動」（Excel が自動で割り当てます）を出します'), 'keytipsAll', { keytipsAll: !p.keytipsAll }, !p.keytips),
+    h('div', { class: 'cv-mi-sep' }),
+    item(dynCount ? tr('VBA で変わる表示を試す…（{n}）', { n: dynCount }) : tr('VBA で変わる表示を試す…'), 'menu-dynamic', () => {
+      headerMenu = 'dynamic';
+      rerender();
+    }, { title: tr('getVisible・getEnabled・getLabel の結果を仮に決めて、見え方を試します（保存されません）') }),
+    item(tr('チェックする画面の幅…'), 'menu-checks', () => {
+      headerMenu = 'checks';
+      rerender();
+    }, { title: tr('問題の一覧で、グループが畳まれないかを確かめる画面の幅') }),
+    h('div', { class: 'cv-mi-sep' }),
+    item(tr('Excel をプレビューの幅にする'), 'excelWidth', () => {
+      headerMenu = null;
+      rerender();
+      void fitExcelToPreview();
+    }, { reason: excelReason, title: tr('Excel のウィンドウをこの幅にして、実物のリボンで確かめます') }),
+  );
+}
+
+function inRibbon(el: Element): boolean {
+  for (let cur: Element | null = el.parentElement; cur; cur = cur.parentElement) if (cur.localName === 'ribbon') return true;
+  return false;
+}
+
+/** 「動的な状態を試す」：getVisible・getEnabled・getLabel の結果を仮に決める。保存しない。 */
+function renderDynamicMenu(): HTMLElement {
+  const store = app.store;
+  const els = store ? allElements(store.doc).filter((el) => inRibbon(el) && (el.hasAttribute('getVisible') || el.hasAttribute('getEnabled') || el.hasAttribute('getLabel'))) : [];
+  const rows = els.map((el) => {
+    const path = pathOf(el);
+    const key = overrideKey(el, path);
+    const o = getOverride(key) ?? {};
+    const check = (attr: 'getVisible' | 'getEnabled', prop: 'visible' | 'enabled', label: string) =>
+      el.hasAttribute(attr)
+        ? h('label', { class: 'cv-check', title: `${attr}="${el.getAttribute(attr) ?? ''}"` },
+            h('input', {
+              type: 'checkbox',
+              checked: o[prop] ?? true,
+              dataset: { fk: `dyn-${prop}-${key}` },
+              onchange: (e: Event) => {
+                const on = (e.target as HTMLInputElement).checked;
+                setOverride(key, { [prop]: on ? undefined : false });
+                rerender();
+              },
+            }),
+            label)
+        : null;
+    return h(
+      'div',
+      { class: `cv-dyn-row${dynamicFocus === path.join('.') ? ' focus' : ''}`, dataset: { dynPath: path.join('.') } },
+      h('span', { class: 'cv-dyn-name', title: key }, `<${el.localName}> ${labelOf(el) || key}`),
+      check('getVisible', 'visible', tr('表示する')),
+      check('getEnabled', 'enabled', tr('有効')),
+      el.hasAttribute('getLabel')
+        ? h('input', {
+            type: 'text',
+            class: 'cv-dyn-label',
+            value: o.label ?? '',
+            placeholder: tr('ラベルの例'),
+            'aria-label': tr('{name} のラベルの例', { name: el.getAttribute('getLabel') ?? '' }),
+            dataset: { fk: `dyn-label-${key}` },
+            onchange: (e: Event) => {
+              const v = (e.target as HTMLInputElement).value;
+              setOverride(key, { label: v === '' ? undefined : v });
+              rerender();
+            },
+          })
+        : null,
+    );
+  });
+  return h(
+    'div',
+    { class: 'cv-pop cv-dyn', role: 'dialog', 'aria-label': tr('VBA で変わる表示を試す') },
+    h('div', { class: 'cv-pop-title' }, tr('VBA で変わる表示を試す')),
+    rows.length ? rows : h('div', { class: 'muted' }, tr('getVisible・getEnabled・getLabel を使うコントロールはありません')),
+    h('div', { class: 'cv-pop-foot' },
+      h('span', { class: 'muted' }, tr('保存されません。見え方を試すためのものです')),
+      overrideCount() ? h('button', { type: 'button', class: 'small', onclick: () => { clearOverrides(); rerender(); } }, tr('すべて元に戻す')) : null),
+  );
+}
+
+/** 問題の一覧で確かめる画面の幅。 */
+function renderChecksMenu(): HTMLElement {
+  const current = getCheckWidths();
+  const choices = [...new Set([...WIDTH_CHOICES, 1440, 1600, ...current])].sort((a, b) => a - b);
+  return h(
+    'div',
+    { class: 'cv-pop cv-checks', role: 'dialog', 'aria-label': tr('チェックする画面の幅') },
+    h('div', { class: 'cv-pop-title' }, tr('チェックする画面の幅')),
+    h('div', { class: 'muted' }, tr('この幅でグループが畳まれる・収まらないときに、問題の一覧に出します（拡大率は「拡大率」で選んだもの）')),
+    choices.map((w) =>
+      h('label', { class: 'cv-check' },
+        h('input', {
+          type: 'checkbox',
+          checked: current.includes(w),
+          dataset: { fk: `check-${w}` },
+          onchange: (e: Event) => {
+            const on = (e.target as HTMLInputElement).checked;
+            const next = on ? [...current, w] : current.filter((x) => x !== w);
+            if (next.length === 0) {
+              (e.target as HTMLInputElement).checked = true;
+              notify(tr('少なくとも 1 つの幅を選んでください'), 'warning');
+              return;
+            }
+            setCheckWidths(next);
+          },
+        }),
+        `${w}`)),
   );
 }
 
@@ -325,25 +760,45 @@ function renderCanvas(host: HTMLElement): void {
   }
   const doc = store.doc;
   const errorPaths = new Set(app.problems.filter((p) => p.severity === 'error').map((p) => p.path.join('.')));
+  // 幅を測って見積もる。表示がリボンでなくても、問題の一覧のために毎回行う（変わらないグループは控えを使う）
+  const measured = measureAndReport(host, doc);
   let stage: HTMLElement;
+  let fit: ViewFit | null = null;
   if (mode === 'backstage') {
     stage = h('div', { class: 'cv-stage' }, renderBackstage(doc, errorPaths));
   } else if (mode === 'contextMenu') {
     stage = h('div', { class: 'cv-stage' }, renderContextMenus(doc, errorPaths));
   } else {
-    stage = h('div', { class: 'cv-stage' }, renderRibbon(host, doc, errorPaths));
+    const r = renderRibbonViews(host, doc, errorPaths, measured);
+    stage = h('div', { class: 'cv-stage' }, r.node);
+    fit = r.fit;
   }
   // 描き直すとポップアップも作り直されるので、開いていたメニューごとのスクロール位置を覚えておいて戻す
   const popupScroll = new Map<string, number>();
   for (const popup of Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'))) {
-    popupScroll.set(popup.dataset['container'] ?? '', popup.scrollTop);
+    popupScroll.set(popupKey(popup), popup.scrollTop);
   }
-  host.replaceChildren(renderHeader(), stage, h('div', { class: 'drop-indicator', hidden: true }));
+  // 見出しの切り替えを操作した直後に描き直しても、フォーカスがその欄に残るようにする
+  const active = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement.closest<HTMLElement>('[data-fk]')?.dataset['fk'] : undefined;
+  // タブの欄の横スクロールは、描き直しても戻す（戻さないと、タブが多いときに押すたびに先頭へ戻ってしまう）
+  const tabScroll = resetTabScroll ? 0 : editableTabStrip(host)?.scrollLeft ?? 0;
+  resetTabScroll = false;
+  host.replaceChildren(renderHeader(fit), stage, h('div', { class: 'drop-indicator', hidden: true }));
+  if (active) Array.from(host.querySelectorAll<HTMLElement>('[data-fk]')).find((n) => n.dataset['fk'] === active)?.focus({ preventScroll: true });
 
+  updateZoom(host);
+  const strip = editableTabStrip(host);
+  if (strip) {
+    strip.scrollLeft = tabScroll;
+    // 表示するタブが変わったときだけ、そのタブを欄の中で見える位置へ送る（毎回送ると、利用者が送った位置から引き戻すため）
+    const key = strip.querySelector<HTMLElement>('.rb-tab.active')?.dataset['path'] ?? strip.querySelector<HTMLElement>('.rb-tab.active')?.title ?? null;
+    if (key !== lastActiveTabKey) revealTab(strip);
+    lastActiveTabKey = key;
+  }
   placePopups(host);
   const selKey = store.selection ? store.selection.join('.') : null;
   for (const popup of Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'))) {
-    const saved = popupScroll.get(popup.dataset['container'] ?? '');
+    const saved = popupScroll.get(popupKey(popup));
     if (saved !== undefined) popup.scrollTop = saved;
     // 新しく開いたときと選択が変わったときだけ、選ばれた項目を見える位置へ送る。
     // 毎回送ると、別の理由（問題一覧の更新など）で描き直すたびに、利用者が送った位置から引き戻してしまう
@@ -369,47 +824,331 @@ function renderCanvas(host: HTMLElement): void {
   scrollToSelection = false;
 }
 
-function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>): HTMLElement {
+/** 直前の描画で表示していたタブ（タブの欄を送るかどうかを決める）。 */
+let lastActiveTabKey: string | null = null;
+/** 次の描画でタブの欄の位置を先頭に戻す（ファイルを開き直したとき）。 */
+let resetTabScroll = false;
+
+/** 編集する枠のタブの欄（「2つの幅を比べる」の比べる側ではないもの）。 */
+function editableTabStrip(host: HTMLElement): HTMLElement | null {
+  return Array.from(host.querySelectorAll<HTMLElement>('.rb-tabs-scroll')).find((x) => !x.closest('.cv-compare')) ?? null;
+}
+
+/**
+ * 表示中のタブを、タブの欄の中だけで見える位置に送る（scrollIntoView はキャンバスの枠まで動かすため使わない）。
+ * 矩形は縮小後、scrollLeft は縮小前の値なので、縮小率でそろえる（zoomOf を参照）。
+ */
+function revealTab(strip: HTMLElement): void {
+  const tab = strip.querySelector<HTMLElement>('.rb-tab.active');
+  if (!tab) return;
+  const z = zoomOf(strip);
+  const sr = strip.getBoundingClientRect();
+  const tr = tab.getBoundingClientRect();
+  if (tr.left < sr.left) strip.scrollLeft -= (sr.left - tr.left) / z + 8;
+  else if (tr.right > sr.right) strip.scrollLeft += (tr.right - sr.right) / z + 8;
+}
+
+// ---- 幅の測定と見積もり ----
+
+type GroupWidths = FitGroupInput['widths'];
+
+function isTrue(v: string | null): boolean {
+  return v === 'true' || v === '1';
+}
+
+/** 試し表示（動的な状態を試す）で隠したもの。 */
+function hiddenInPreview(el: Element): boolean {
+  return getOverride(overrideKey(el, pathOf(el)))?.visible === false;
+}
+
+/** 見積もりに入れないグループ（Excel では表示されないもの）。 */
+function excludedFromFit(g: Element): boolean {
+  return g.getAttribute('visible') === 'false' || hiddenInPreview(g);
+}
+
+function groupsOf(tab: Element): Element[] {
+  return childElements(tab).filter((g) => g.localName === 'group');
+}
+
+function hasGroupIcon(g: Element): boolean {
+  return g.hasAttribute('image') || g.hasAttribute('imageMso') || g.hasAttribute('getImage');
+}
+
+/**
+ * 自作のタブのグループを、状態ごと（large・small・ラベルなし・畳んだ形）に描いて幅を測り、
+ * 確かめる幅とプレビューの幅で畳まれる・はみ出すグループを getFitReport に渡す。
+ * 測るための要素は、測ったらすぐ外す（data-path が二重になって選択の検索を乱さないように）。
+ * 縮小表示（zoom）の外で測るので、幅はそのまま CSS px になる。
+ */
+function measureAndReport(host: HTMLElement, doc: Document): Map<Element, GroupWidths> {
+  const out = new Map<Element, GroupWidths>();
+  // 描かれていない（枠が非表示・テストの環境）ときは測れない。前の見積もりを残す
+  if (!host.isConnected || host.getClientRects().length === 0) return out;
+  const tabs = collectTabs(doc).filter((x) => x.el !== null && !x.builtin);
+  const all = tabs.flatMap((x) => groupsOf(x.el!));
+  const serializer = new XMLSerializer();
+  // 表示名（Excel から届く idMso の名前）の数も鍵に混ぜる。届く前と後で同じ控えを使わないため（onLabelsLoaded でも捨てる）
+  const sig = `${lang}|${labels.size}|${overridesSignature()}`;
+  const keys = new Map<Element, string>();
+  const need: Element[] = [];
+  for (const g of all) {
+    const key = `${serializer.serializeToString(g)}|${sig}`;
+    keys.set(g, key);
+    const cached = widthCache.get(key);
+    if (cached) out.set(g, cached);
+    else need.push(g);
+  }
+  if (need.length) {
+    // 控えが増えすぎないよう、ときどき捨てる
+    if (widthCache.size > 2000) widthCache.clear();
+    const none = new Set<string>();
+    const box = h('div', { class: 'rb-measure', 'aria-hidden': 'true' });
+    const nodes: [Element, Partial<Record<GroupFitState, HTMLElement>>][] = [];
+    measuring = true;
+    try {
+      for (const g of need) {
+        const auto = isTrue(g.getAttribute('autoScale'));
+        const n: Partial<Record<GroupFitState, HTMLElement>> = { large: renderGroup(g, none), collapsed: renderCollapsedGroup(g, none) };
+        if (auto) {
+          n.small = renderGroup(g, none, 'small');
+          n.nolabel = renderGroup(g, none, 'nolabel');
+        }
+        for (const node of Object.values(n)) box.append(h('div', { class: 'rb-measure-row' }, node));
+        nodes.push([g, n]);
+      }
+      host.append(box);
+      for (const [g, n] of nodes) {
+        const w = (s: GroupFitState) => (n[s] ? Math.ceil(n[s].getBoundingClientRect().width) : undefined);
+        const large = w('large') ?? 0;
+        const small = w('small') ?? large;
+        const widths: GroupWidths = { large, small, nolabel: w('nolabel') ?? small, collapsed: w('collapsed') ?? large };
+        widthCache.set(keys.get(g)!, widths);
+        out.set(g, widths);
+      }
+    } finally {
+      box.remove();
+      measuring = false;
+    }
+  }
+
+  const p = preview();
+  const widths = [...new Set([...getCheckWidths(), ...(p.width !== null ? [p.width] : [])])].sort((a, b) => b - a);
+  const entries = new Map<string, FitReportEntry>();
+  for (const tab of tabs) {
+    const gs = groupsOf(tab.el!).filter((g) => !excludedFromFit(g) && out.has(g));
+    const inputs = gs.map((g) => ({ id: pathOf(g).join('.'), widths: out.get(g)!, autoScale: isTrue(g.getAttribute('autoScale')) }));
+    for (const w of widths) {
+      const res = simulateFit(inputs, availableForGroups(effectiveWidth(w, p.scale)));
+      res.groups.forEach((r, i) => {
+        if (r.state !== 'collapsed' && !r.clipped) return;
+        const g = gs[i]!;
+        const e = entries.get(r.id) ?? { path: pathOf(g), id: g.getAttribute('id'), label: labelOf(g), tab: tab.label, noIcon: !hasGroupIcon(g) };
+        if (r.state === 'collapsed') e.collapsedAt = Math.max(e.collapsedAt ?? 0, w);
+        if (r.clipped) e.clippedAt = Math.max(e.clippedAt ?? 0, w);
+        entries.set(r.id, e);
+      });
+    }
+  }
+  setFitReport({ width: p.width, scale: p.scale, effective: p.width !== null ? effectiveWidth(p.width, p.scale) : null, checkedWidths: widths, overflowing: [...entries.values()] });
+  return out;
+}
+
+/** 編集する枠と、「2つの幅を比べる」ときの比べる側の枠。 */
+function renderRibbonViews(host: HTMLElement, doc: Document, errorPaths: Set<string>, measured: Map<Element, GroupWidths>): { node: HTMLElement; fit: ViewFit } {
+  const p = preview();
+  const primary = renderView(host, doc, errorPaths, measured, { effective: p.width !== null ? effectiveWidth(p.width, p.scale) : null, readOnly: false });
+  if (!p.compare) return primary;
+  readOnlyRender = true;
+  let other: { node: HTMLElement; fit: ViewFit };
+  try {
+    other = renderView(host, doc, errorPaths, measured, { effective: effectiveWidth(p.compareWidth, p.scale), readOnly: true });
+  } finally {
+    readOnlyRender = false;
+  }
+  makeReadOnly(other.node);
+  const choices = [...new Set([...WIDTH_CHOICES, p.compareWidth])].sort((a, b) => a - b);
+  const caption = h(
+    'div',
+    { class: 'cv-compare-caption' },
+    h('label', { class: 'cv-field' }, h('span', null, tr('比べる幅')),
+      h('select', {
+        class: 'cv-select',
+        dataset: { fk: 'compareWidth' },
+        onchange: (e: Event) => {
+          setPreview({ compareWidth: Number((e.target as HTMLSelectElement).value) });
+          rerender();
+        },
+      }, choices.map((w) => option(String(w), String(w), w === p.compareWidth)))),
+    h('span', { class: 'muted' }, tr('Excel から見た幅 {w}px・表示だけ（編集はできません）', { w: effectiveWidth(p.compareWidth, p.scale) })),
+    other.fit.clipped.length ? h('span', { class: 'cv-msg warning' }, tr('この幅では右の {n} グループが収まりません', { n: other.fit.clipped.length })) : null,
+    other.fit.collapsed.length ? h('span', { class: 'cv-msg info' }, tr('この幅では {n} グループが畳まれます', { n: other.fit.collapsed.length })) : null,
+  );
+  return { node: h('div', { class: 'cv-views' }, primary.node, h('div', { class: 'cv-compare' }, caption, other.node)), fit: primary.fit };
+}
+
+/** 比べる側の枠を、選べない・運べない・フォーカスが入らない形にする（同じ data-path が二つあると選択の検索を乱すため）。 */
+function makeReadOnly(root: HTMLElement): void {
+  root.setAttribute('inert', '');
+  for (const n of [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))]) {
+    delete n.dataset['path'];
+    delete n.dataset['sel'];
+    delete n.dataset['container'];
+    delete n.dataset['tip'];
+    if (n.draggable) n.draggable = false;
+  }
+}
+
+/** 1 枠：目盛り・幅を決めた枠（縮小表示）・リボン。「自由」なら枠を作らず、これまでどおり幅いっぱいに描く。 */
+function renderView(host: HTMLElement, doc: Document, errorPaths: Set<string>, measured: Map<Element, GroupWidths>, view: RibbonView): { node: HTMLElement; fit: ViewFit } {
+  const { ribbon, fit } = renderRibbon(host, doc, errorPaths, measured, view);
+  const eff = view.effective;
+  if (eff === null) return { node: h('div', { class: 'cv-view free' }, renderRuler(null), ribbon), fit };
+  const frame = h(
+    'div',
+    { class: 'cv-frame', style: `width:${eff}px` },
+    ribbon,
+    h('div', { class: 'cv-reserved', style: `width:${RIBBON_RESERVED_PX - 10}px`, title: tr('リボンの右端の余白（表示オプションのボタンなど・目安）') }),
+  );
+  // 縮小は transform ではなく zoom で行う。transform だと、ポップアップ（fixed）の置き場所の基準が
+  // 縮小した枠に変わってしまうため。zoom の中の座標の扱いは placePopups と revealInPopup を参照
+  const zoom = h('div', { class: 'cv-zoom', dataset: { eff: String(eff) } }, renderRuler(eff), frame);
+  return { node: h('div', { class: 'cv-view' }, zoom), fit };
+}
+
+/** よく使われる幅の目盛り。リボンの左端（ウィンドウの左端とみなす）から測る。 */
+function renderRuler(eff: number | null): HTMLElement {
+  const marks = RULER_MARKS.filter((m) => eff === null || m <= eff);
+  return h(
+    'div',
+    { class: `cv-ruler${eff === null ? ' free' : ''}`, style: eff === null ? '' : `width:${eff}px`, 'aria-hidden': 'true' },
+    marks.map((m) => h('span', { class: 'cv-mark', style: `left:${m}px`, title: m === 1536 ? tr('1920 を 125% で使ったときの幅') : '' }, m === 1536 ? '1536 (1920@125%)' : String(m))),
+    eff !== null && !RULER_MARKS.includes(eff) ? h('span', { class: 'cv-mark end', style: `left:${eff}px` }, String(eff)) : null,
+  );
+}
+
+/**
+ * 「収める」なら枠の幅に合わせて縮小率を決める。描き直さずに済むよう、大きさが変わるたびにここだけを呼ぶ。
+ * 縮小率が 50% を下回ったら、等倍にするかペインを畳むかを勧める。
+ */
+function updateZoom(host: HTMLElement): void {
+  const p = preview();
+  const cs = getComputedStyle(host);
+  const avail = host.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) - 1;
+  const zooms = Array.from(host.querySelectorAll<HTMLElement>('.cv-zoom'));
+  // 2つの幅を比べるときは、幅の違いがそのまま見えるよう、広いほうに合わせた同じ縮小率で描く
+  const widest = Math.max(0, ...zooms.map((z) => Number(z.dataset['eff']) || 0));
+  const primary: number | null = zooms.length === 0 ? null : p.fit === 'fit' && avail > 0 && widest > 0 ? Math.min(1, avail / widest) : 1;
+  for (const z of zooms) z.style.zoom = primary === null || primary === 1 ? '' : String(primary);
+  const status = host.querySelector<HTMLElement>('.cv-status');
+  const info = status?.querySelector<HTMLElement>('.cv-zoominfo');
+  if (status && info) {
+    info.textContent = p.width === null || primary === null ? '' : tr('{pct}% で表示・Excel から見た幅 {w}px', { w: effectiveWidth(p.width, p.scale), pct: Math.round(primary * 100) });
+    const fitText = status.querySelector('.cv-fitinfo')?.textContent ?? '';
+    if (info.textContent && fitText) info.textContent += '・';
+    // 「…」で切れても全文が読めるよう、ツールチップに全部を出す
+    status.title = [info.textContent + fitText, status.dataset['detail'] ?? ''].filter((x) => x).join('\n');
+  }
+  const low = host.querySelector<HTMLElement>('.cv-lowzoom');
+  if (low) low.hidden = !(primary !== null && primary < 0.5);
+}
+
+/** マウスを乗せたときのヒントの中身。 */
+function tipFor(node: HTMLElement): ScreentipContent | null {
+  const path = parsePath(node.dataset['path']);
+  const el = path && app.store ? elementAt(app.store.doc, path) : null;
+  return el ? screentipContent(el, labelOf(el)) : null;
+}
+
+/**
+ * キーヒントのバッジ。書いたもの（重なっていれば赤）と getKeytip（「VBA」）だけを出す。
+ * 書いていないものの灰色の「自動」は、「表示」の［未設定も表示］のときだけ出す（全部に付くと、書いたものが埋もれるため）。
+ */
+function keytipBadge(el: Element, dup: boolean): HTMLElement | null {
+  if (!preview().keytips || measuring || readOnlyRender) return null;
+  const keytip = el.getAttribute('keytip');
+  if (keytip) return h('span', { class: `rb-keytip${dup ? ' dup' : ''}`, title: dup ? tr('キーヒントが重なっています') : '' }, keytip);
+  if (el.hasAttribute('getKeytip')) return h('span', { class: 'rb-keytip auto', title: tr('VBA で決まります') }, 'VBA');
+  if (!preview().keytipsAll) return null;
+  return h('span', { class: 'rb-keytip auto', title: tr('Excel が自動で割り当てます') }, tr('自動'));
+}
+
+/** 表示中のタブで、キーヒントが重なっているコントロール。メニューの中身は開いたときの別の範囲なので数えない。 */
+let keytipDups = new Set<Element>();
+
+function computeKeytipDups(tab: Element | null): Set<Element> {
+  if (!tab || !preview().keytips) return new Set();
+  const list: Element[] = [];
+  const walk = (parent: Element) => {
+    for (const c of childElements(parent)) {
+      if (c.hasAttribute('keytip')) list.push(c);
+      if (c.localName === 'group' || c.localName === 'box' || c.localName === 'buttonGroup') walk(c);
+    }
+  };
+  walk(tab);
+  const keys = duplicateKeytips(list.map((el, i) => ({ key: String(i), keytip: el.getAttribute('keytip') ?? '' })));
+  return new Set(list.filter((_el, i) => keys.has(String(i))));
+}
+
+function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>, measured: Map<Element, GroupWidths>, view: RibbonView): { ribbon: HTMLElement; fit: ViewFit } {
   const store = app.store!;
-  const tabs = collectTabs(doc);
+  const tabs = collectTabs(doc).filter((x) => !(x.el && !x.builtin && hiddenInPreview(x.el)));
   const active = resolveActive(tabs);
   const hasCustom = tabs.some((x) => !x.builtin);
+  const showKeytips = preview().keytips && !view.readOnly;
+  keytipDups = computeKeytipDups(active?.el ?? null);
+
+  // タブのキーヒント：組み込みのタブ（ファイルは F）と自分のタブの重なりを見る
+  const tabTip = (x: TabEntry) => (x.el?.getAttribute('keytip') ?? (x.builtin && x.idMso ? BUILTIN_TAB_KEYTIPS[x.idMso] ?? '' : ''));
+  const tabDups = showKeytips ? duplicateKeytips([{ key: 'file', keytip: 'F' }, ...tabs.map((x) => ({ key: x.key, keytip: tabTip(x) }))]) : new Set<string>();
+  const tabBadge = (x: TabEntry | null) => {
+    if (!showKeytips) return null;
+    if (!x) return h('span', { class: `rb-keytip${tabDups.has('file') ? ' dup' : ''}` }, 'F');
+    if (x.el && !x.builtin) return keytipBadge(x.el, tabDups.has(x.key));
+    const tip = tabTip(x);
+    return tip ? h('span', { class: `rb-keytip builtin${tabDups.has(x.key) ? ' dup' : ''}`, title: tr('組み込みのタブ（目安）') }, tip) : null;
+  };
 
   const tabBar = h(
     'div',
     { class: 'rb-tabs', role: 'tablist' },
-    h('span', {
-      class: 'rb-tab file',
-      role: 'tab',
-      title: tr('Backstage（ファイル タブ）を表示'),
-      onclick: (e: MouseEvent) => {
-        e.stopPropagation();
-        if (store.version !== 'office2007') setCanvasMode('backstage');
-      },
-    }, tr('ファイル')),
-    tabs.map((x) =>
-      h(
-        'span',
-        {
-          class: ['rb-tab', x.builtin && !x.el ? 'builtin' : '', x === active ? 'active' : '', x.el && isSelected(x.el) ? 'selected' : ''].join(' '),
-          role: 'tab',
-          'aria-selected': String(x === active),
-          dataset: x.el ? { path: pathOf(x.el).join('.'), sel: '1' } : {},
-          draggable: x.el !== null && !x.builtin,
-          title: x.el?.getAttribute('id') ?? x.idMso ?? '',
-          onclick: (e: MouseEvent) => {
-            e.stopPropagation();
-            activeTab = x.el && !x.builtin ? { kind: 'el', id: x.el.getAttribute('id'), path: pathOf(x.el) } : { kind: 'builtin', idMso: x.idMso! };
-            if (x.el) store.select(pathOf(x.el), 'canvas');
-            else renderCanvas(host);
-          },
-          ondragstart: (e: DragEvent) => x.el && startDrag(e, { kind: 'move', path: pathOf(x.el) }),
-          ondragend: () => {
-            endDrag();
-            hideIndicator(host);
-          },
+    // タブが多くて横にあふれても「＋」が隠れないよう、タブだけを横スクロールの欄に入れ、「＋」はその外の右端に置く
+    h(
+      'div',
+      { class: 'rb-tabs-scroll' },
+      h('span', {
+        class: 'rb-tab file',
+        role: 'tab',
+        title: tr('Backstage（ファイル タブ）を表示'),
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          if (store.version !== 'office2007') setCanvasMode('backstage');
         },
-        h('span', { class: 'rb-label' }, x.label || tr('(ラベルなし)')),
+      }, tr('ファイル'), tabBadge(null)),
+      tabs.map((x) =>
+        h(
+          'span',
+          {
+            class: ['rb-tab', x.builtin && !x.el ? 'builtin' : '', x === active ? 'active' : '', x.el && isSelected(x.el) ? 'selected' : ''].join(' '),
+            role: 'tab',
+            'aria-selected': String(x === active),
+            dataset: x.el ? { path: pathOf(x.el).join('.'), sel: '1' } : {},
+            draggable: x.el !== null && !x.builtin,
+            title: x.el?.getAttribute('id') ?? x.idMso ?? '',
+            onclick: (e: MouseEvent) => {
+              e.stopPropagation();
+              activeTab = x.el && !x.builtin ? { kind: 'el', id: x.el.getAttribute('id'), path: pathOf(x.el) } : { kind: 'builtin', idMso: x.idMso! };
+              if (x.el) store.select(pathOf(x.el), 'canvas');
+              else renderCanvas(host);
+            },
+            ondragstart: (e: DragEvent) => x.el && startDrag(e, { kind: 'move', path: pathOf(x.el) }),
+            ondragend: () => {
+              endDrag();
+              hideIndicator(host);
+            },
+          },
+          h('span', { class: 'rb-label' }, x.label || tr('(ラベルなし)')),
+          tabBadge(x),
+        ),
       ),
     ),
     h('button', {
@@ -423,27 +1162,55 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>)
     }, hasCustom ? '+' : tr('＋ ここにタブを追加')),
   );
 
+  const fit: ViewFit = { builtin: active?.builtin === true, collapsed: [], clipped: [] };
   const body = h('div', { class: 'rb-body' });
   if (active) {
     // 組み込みタブ：組み込みグループのプレースホルダーと、足したグループを並べる
-    const groups = active.el ? childElements(active.el).filter((g) => g.localName === 'group') : [];
+    const groups = active.el ? groupsOf(active.el).filter((g) => !hiddenInPreview(g)) : [];
+    // 幅を決めているときは、Excel のように右のグループから縮める・畳む（自作のタブだけ。組み込みのグループの幅は分からないため）
+    const states = new Map<Element, FitGroupResult & { expanded: boolean }>();
+    if (view.effective !== null && !active.builtin) {
+      const gs = groups.filter((g) => !excludedFromFit(g));
+      if (gs.every((g) => measured.has(g))) {
+        const res = simulateFit(gs.map((g) => ({ id: pathOf(g).join('.'), widths: measured.get(g)!, autoScale: isTrue(g.getAttribute('autoScale')) })), availableForGroups(view.effective));
+        let left = 0;
+        const avail = availableForGroups(view.effective);
+        res.groups.forEach((r, i) => {
+          const g = gs[i]!;
+          // 一時的に広げたグループは、書いたとおりの大きさで描き、その分だけ右がはみ出す
+          const expanded = !view.readOnly && r.state === 'collapsed' && tempExpanded.has(r.id);
+          const width = expanded ? measured.get(g)!.large : r.width;
+          const clipped = left + width > avail;
+          left += width;
+          states.set(g, { ...r, width, clipped, expanded });
+          if (r.state === 'collapsed') fit.collapsed.push(labelOf(g) || (g.getAttribute('id') ?? ''));
+          if (clipped) fit.clipped.push(labelOf(g) || (g.getAttribute('id') ?? ''));
+        });
+      }
+    }
+    const renderOne = (g: Element) => {
+      const st = states.get(g);
+      if (!st) return renderGroup(g, errorPaths);
+      if (st.state === 'collapsed' && !st.expanded) return renderCollapsedGroup(g, errorPaths, st.clipped);
+      return renderGroup(g, errorPaths, st.expanded || st.state === 'collapsed' ? 'large' : st.state, { clipped: st.clipped, expanded: st.expanded });
+    };
     if (active.builtin) {
       const builtinGroups = catalog.filter((c) => c.type === 'group' && c.tab === active.idMso).slice(0, 8);
       const placed = new Set<Element>();
       for (const bg of builtinGroups) {
         for (const g of groups) if (g.getAttribute('insertBeforeMso') === bg.id && !placed.has(g)) {
-          body.append(renderGroup(g, errorPaths));
+          body.append(renderOne(g));
           placed.add(g);
         }
         body.append(h('div', { class: 'rb-group builtin', title: tr('組み込みのグループ（編集できません）') }, h('div', { class: 'rb-controls' }), h('div', { class: 'rb-group-label' }, h('span', null, labels.get(bg.id) ?? bg.id.replace(/^Group/, '')))));
         for (const g of groups) if (g.getAttribute('insertAfterMso') === bg.id && !placed.has(g)) {
-          body.append(renderGroup(g, errorPaths));
+          body.append(renderOne(g));
           placed.add(g);
         }
       }
-      for (const g of groups) if (!placed.has(g)) body.append(renderGroup(g, errorPaths));
+      for (const g of groups) if (!placed.has(g)) body.append(renderOne(g));
     } else {
-      for (const g of groups) body.append(renderGroup(g, errorPaths));
+      for (const g of groups) body.append(renderOne(g));
     }
     if (active.el) body.dataset['path'] = pathOf(active.el).join('.');
     if (groups.length === 0 && !active.builtin && active.el) {
@@ -456,11 +1223,18 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>)
     }
   }
   if (!hasCustom) {
-    body.append(h('div', { class: 'cv-empty floating' }, h('span', null, tr('まだ自分のタブがありません。タブを追加するか、組み込みタブにグループを足してください'))));
+    body.append(h('div', { class: 'cv-empty floating' },
+      h('span', null, tr('まだ自分のタブがありません。タブを追加するか、組み込みタブにグループを足してください')),
+      // 白紙から組むより、よく使う形から始めたほうが早いので、レシピへの入り口も置く
+      h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); void openOnce('recipes', () => openRecipes(notify)); } }, tr('レシピから始める'))));
   }
 
   const qat = renderQat(doc, errorPaths);
-  return h('div', { class: 'rb-window' }, qat, tabBar, body);
+  const ribbon = h('div', {
+    class: `rb-window${showKeytips ? ' show-keytips' : ''}`,
+    style: `--rb-large-label-max:${LARGE_LABEL_WRAP.maxWidthPx}px;--rb-large-label-lines:${LARGE_LABEL_WRAP.maxLines}`,
+  }, qat, tabBar, body);
+  return { ribbon, fit };
 }
 
 /** 新しいタブを作って選択する。 */
@@ -560,26 +1334,39 @@ function renderQat(doc: Document, errorPaths: Set<string>): HTMLElement | null {
   return h('div', { class: 'rb-qat', dataset: { path: pathOf(qat).join('.'), sel: '1' }, onclick: (e: MouseEvent) => { e.stopPropagation(); app.store?.select(pathOf(qat), 'canvas'); } }, h('span', { class: 'rb-qat-label' }, tr('クイック アクセス')), items.map((c) => renderControl(c, 'small', errorPaths)));
 }
 
-function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
+/**
+ * グループを描く。state は幅の見積もりで決まった大きさ（small は大きいボタンを小さくして 3 段に積む、
+ * nolabel はさらに小さいボタンのラベルを消す。autoScale="true" のグループだけがこうなる）。
+ */
+function renderGroup(g: Element, errorPaths: Set<string>, state: Exclude<GroupFitState, 'collapsed'> = 'large', opts: { clipped?: boolean; expanded?: boolean } = {}): HTMLElement {
   const path = pathOf(g);
   const builtinRef = g.hasAttribute('idMso');
   const launcher = childElements(g).find((c) => c.localName === 'dialogBoxLauncher');
-  const controls = h('div', { class: 'rb-controls', dataset: { container: path.join('.') } });
+  const controls = h('div', { class: `rb-controls${isTrue(g.getAttribute('centerVertically')) ? ' center-v' : ''}`, dataset: { container: path.join('.') } });
   const items = childElements(g).filter((c) => c.localName !== 'dialogBoxLauncher');
-  layoutControls(items, controls, errorPaths);
+  layoutControls(items, controls, errorPaths, state !== 'large');
   if (items.length === 0 && !builtinRef) controls.append(h('span', { class: 'rb-empty-slot group' }, tr('ここにコントロールをドラッグ')));
 
   return h(
     'div',
     {
-      class: ['rb-group', builtinRef ? 'builtin-ref' : '', isSelected(g) ? 'selected' : '', errorPaths.has(path.join('.')) ? 'has-error' : '', g.getAttribute('visible') === 'false' ? 'hidden-ctl' : ''].join(' '),
+      class: ['rb-group', builtinRef ? 'builtin-ref' : '', isSelected(g) ? 'selected' : '', errorPaths.has(path.join('.')) ? 'has-error' : '', g.getAttribute('visible') === 'false' ? 'hidden-ctl' : '', state === 'nolabel' ? 'nolabel' : '', opts.clipped ? 'rb-clipped' : '', opts.expanded ? 'temp-expanded' : ''].join(' '),
       dataset: { path: path.join('.'), sel: '1' },
       draggable: true,
-      title: g.getAttribute('id') ?? g.getAttribute('idMso') ?? 'group',
+      title: opts.clipped ? tr('この幅では収まりません（目安）') : g.getAttribute('id') ?? g.getAttribute('idMso') ?? 'group',
       onclick: (e: MouseEvent) => {
         e.stopPropagation();
         app.store?.select(path, 'canvas');
       },
+      ondblclick: opts.expanded
+        ? (e: MouseEvent) => {
+            // 一時的に広げたグループは、ダブルクリックで畳み直す
+            if ((e.target as HTMLElement).closest('.rb-ctl')) return;
+            e.stopPropagation();
+            tempExpanded.delete(path.join('.'));
+            rerender();
+          }
+        : undefined,
       ondragstart: (e: DragEvent) => {
         e.stopPropagation();
         startDrag(e, { kind: 'move', path });
@@ -591,6 +1378,18 @@ function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
       'div',
       { class: 'rb-group-label' },
       h('span', { class: 'rb-label' }, labelOf(g)),
+      opts.expanded
+        ? h('button', {
+            type: 'button',
+            class: 'rb-chip',
+            title: tr('この幅では畳まれるグループを、編集のために一時的に広げています'),
+            onclick: (e: MouseEvent) => {
+              e.stopPropagation();
+              tempExpanded.delete(path.join('.'));
+              rerender();
+            },
+          }, tr('畳む'))
+        : null,
       launcher
         ? h('span', {
             class: `rb-launcher${isSelected(launcher) ? ' selected' : ''}`,
@@ -606,6 +1405,63 @@ function renderGroup(g: Element, errorPaths: Set<string>): HTMLElement {
   );
 }
 
+/**
+ * 畳んだグループ：グループのアイコン（なければ汎用のアイコン）とラベルと ▼ の、大きいボタン一つ（Excel と同じ形）。
+ * 選ぶと、Excel で押したときと同じように中身をポップアップで開き、そこで編集できる。
+ * ダブルクリックか「展開して編集」で、その場に一時的に広げる。
+ */
+function renderCollapsedGroup(g: Element, errorPaths: Set<string>, clipped = false): HTMLElement {
+  const path = pathOf(g);
+  const key = path.join('.');
+  const sel = app.store?.selection ?? null;
+  const open = !measuring && !readOnlyRender && sel !== null && (samePath(sel, path) || isAncestorPath(path, sel));
+  const icon = hasGroupIcon(g) ? iconFor(g, 'large') : h('span', { class: 'rb-icon placeholder generic', style: 'width:32px;height:32px', title: tr('畳まれたときのアイコンが未設定です') });
+  const expand = () => {
+    tempExpanded.add(key);
+    rerender();
+  };
+  let popup: HTMLElement | null = null;
+  if (open) {
+    const controls = h('div', { class: `rb-controls${isTrue(g.getAttribute('centerVertically')) ? ' center-v' : ''}`, dataset: { container: key } });
+    const items = childElements(g).filter((c) => c.localName !== 'dialogBoxLauncher');
+    layoutControls(items, controls, errorPaths, false);
+    if (items.length === 0) controls.append(h('span', { class: 'rb-empty-slot group' }, tr('ここにコントロールをドラッグ')));
+    popup = h(
+      'div',
+      { class: 'rb-menu-popup rb-group-popup', dataset: { popup: key } },
+      controls,
+      h('div', { class: 'rb-group-label' }, h('span', { class: 'rb-label' }, labelOf(g)),
+        h('button', { type: 'button', class: 'rb-chip', onclick: (e: MouseEvent) => { e.stopPropagation(); expand(); } }, tr('展開して編集'))),
+    );
+  }
+  return h(
+    'div',
+    {
+      class: ['rb-group', 'collapsed', isSelected(g) ? 'selected' : '', errorPaths.has(key) ? 'has-error' : '', g.getAttribute('visible') === 'false' ? 'hidden-ctl' : '', clipped ? 'rb-clipped' : ''].join(' '),
+      dataset: { path: key, sel: '1', tip: '1' },
+      draggable: true,
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        app.store?.select(path, 'canvas');
+      },
+      ondblclick: (e: MouseEvent) => {
+        if ((e.target as HTMLElement).closest('.rb-group-popup')) return;
+        e.stopPropagation();
+        expand();
+      },
+      ondragstart: (e: DragEvent) => {
+        e.stopPropagation();
+        startDrag(e, { kind: 'move', path });
+      },
+      ondragend: () => endDrag(),
+    },
+    h('div', { class: 'rb-controls' },
+      h('div', { class: 'rb-ctl large rb-collapsed-btn' }, icon, h('span', { class: 'rb-label' }, labelOf(g) || tr('(ラベルなし)')), h('span', { class: 'rb-arrow', 'aria-hidden': 'true' }), keytipBadge(g, false))),
+    h('div', { class: 'rb-group-label collapsed-label' }, ''),
+    popup,
+  );
+}
+
 type Size = 'large' | 'small';
 
 function isLarge(el: Element): boolean {
@@ -613,15 +1469,17 @@ function isLarge(el: Element): boolean {
 }
 
 /** large は1列を占め、それ以外は3段ずつ縦に積む（本物のリボンと同じ並べ方）。 */
-function layoutControls(items: Element[], host: HTMLElement, errorPaths: Set<string>): void {
+function layoutControls(items: Element[], host: HTMLElement, errorPaths: Set<string>, forceSmall = false): void {
   let stack: HTMLElement | null = null;
   for (const c of items) {
+    // 「動的な状態を試す」で隠したものは、Excel と同じく場所も取らない
+    if (hiddenInPreview(c)) continue;
     if (c.localName === 'separator') {
       stack = null;
       host.append(renderControl(c, 'small', errorPaths));
       continue;
     }
-    if (isLarge(c)) {
+    if (isLarge(c) && !forceSmall) {
       stack = null;
       host.append(renderControl(c, 'large', errorPaths));
       continue;
@@ -648,18 +1506,25 @@ function iconFor(el: Element, size: Size): HTMLElement {
 }
 
 function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLElement {
+  const node = renderControlBody(el, size, errorPaths);
+  const badge = el.localName === 'separator' ? null : keytipBadge(el, keytipDups.has(el));
+  if (badge) node.append(badge);
+  return node;
+}
+
+function renderControlBody(el: Element, size: Size, errorPaths: Set<string>): HTMLElement {
   const path = pathOf(el);
   const tag = el.localName;
   const label = labelOf(el);
   const showLabel = el.getAttribute('showLabel') !== 'false' && !(size === 'small' && el.parentElement?.localName === 'buttonGroup' && !el.hasAttribute('showLabel'));
   const hidden = el.getAttribute('visible') === 'false';
-  const disabled = el.getAttribute('enabled') === 'false';
+  const disabled = el.getAttribute('enabled') === 'false' || getOverride(overrideKey(el, path))?.enabled === false;
   const cls = ['rb-ctl', `rb-${tag}`, size, isSelected(el) ? 'selected' : '', hidden ? 'hidden-ctl' : '', disabled ? 'disabled' : '', errorPaths.has(path.join('.')) ? 'has-error' : '', el.hasAttribute('idMso') ? 'builtin-ref' : ''].join(' ');
   const common = {
     class: cls,
-    dataset: { path: path.join('.'), sel: '1' },
+    // id はマウスを乗せたときのヒント（ribbonTips.ts）の下に出す。title だとヒントと二重に出るため付けない
+    dataset: { path: path.join('.'), sel: '1', tip: '1' },
     draggable: true,
-    title: el.getAttribute('id') ?? el.getAttribute('idMso') ?? tag,
     onclick: (e: MouseEvent) => {
       e.stopPropagation();
       app.store?.select(path, 'canvas');
@@ -693,13 +1558,13 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
       );
     case 'box': {
       const inner = h('div', { class: `rb-box-inner ${el.getAttribute('boxStyle') === 'vertical' ? 'vertical' : 'horizontal'}`, dataset: { container: path.join('.') } });
-      for (const c of childElements(el)) inner.append(renderControl(c, 'small', errorPaths));
+      for (const c of childElements(el)) if (!hiddenInPreview(c)) inner.append(renderControl(c, 'small', errorPaths));
       if (el.children.length === 0) inner.append(h('span', { class: 'rb-empty-slot' }, 'box'));
       return h('div', common, inner);
     }
     case 'buttonGroup': {
       const inner = h('div', { class: 'rb-bg-inner', dataset: { container: path.join('.') } });
-      for (const c of childElements(el)) inner.append(renderControl(c, 'small', errorPaths));
+      for (const c of childElements(el)) if (!hiddenInPreview(c)) inner.append(renderControl(c, 'small', errorPaths));
       if (el.children.length === 0) inner.append(h('span', { class: 'rb-empty-slot' }, 'buttonGroup'));
       return h('div', common, inner);
     }
@@ -726,6 +1591,22 @@ function renderControl(el: Element, size: Size, errorPaths: Set<string>): HTMLEl
   }
 }
 
+/** ポップアップごとの鍵（描き直したときにスクロール位置を戻すため）。 */
+function popupKey(popup: HTMLElement): string {
+  return popup.dataset['container'] ?? popup.dataset['popup'] ?? '';
+}
+
+/**
+ * 要素にかかっている CSS の zoom（幅のプレビューの「収める」）。
+ * Chromium では、getBoundingClientRect は縮小後の画面上の値、offsetWidth・scrollHeight・clientHeight・scrollTop は
+ * 縮小前の値を返し、zoom の中の position:fixed の top・left は縮小率を掛けて置かれる（Chromium 128 以降の標準の zoom）。
+ * 画面上の値で計算して、書き込むときに縮小率で割る。
+ */
+function zoomOf(el: HTMLElement): number {
+  const z = (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom;
+  return typeof z === 'number' && z > 0 ? z : 1;
+}
+
 /** キャンバスのスクロールする枠。見える範囲の基準にもする。 */
 function paneOf(host: HTMLElement): HTMLElement {
   return host.closest<HTMLElement>('.canvas-pane') ?? host;
@@ -744,7 +1625,9 @@ function placePopups(host: HTMLElement): void {
   const popups = Array.from(host.querySelectorAll<HTMLElement>('.rb-menu-popup'));
   if (popups.length === 0) return;
   const pr = paneOf(host).getBoundingClientRect();
-  const viewTop = Math.max(0, pr.top);
+  // 見出しは枠の上に貼り付く（sticky）ので、ポップアップは見出しの下から置く（見出しに重ねると、幅の切り替えが押せなくなるため）
+  const header = host.querySelector<HTMLElement>('.cv-header');
+  const viewTop = Math.max(0, pr.top, header ? header.getBoundingClientRect().bottom : 0);
   const viewBottom = Math.min(window.innerHeight, pr.bottom);
   const viewLeft = Math.max(0, pr.left);
   const viewRight = Math.min(window.innerWidth, pr.right);
@@ -758,8 +1641,10 @@ function placePopups(host: HTMLElement): void {
     // 高さは maxHeight を外して測らない。外すと中身が一瞬縮んで scrollTop が 0 に戻るため、
     // 中身の高さ（scrollHeight）と枠線の分から本来の高さを出す
     const scrollTop = popup.scrollTop;
-    const ph = popup.scrollHeight + (popup.offsetHeight - popup.clientHeight);
-    const w = popup.offsetWidth;
+    // 以下は画面上の大きさ（縮小後）で計算する
+    const z = zoomOf(popup);
+    const ph = (popup.scrollHeight + (popup.offsetHeight - popup.clientHeight)) * z;
+    const w = popup.offsetWidth * z;
     const below = viewBottom - r.bottom - margin;
     const above = r.top - viewTop - margin;
     // 下に入りきらず、上のほうが広ければ上に開く（Excel と同じ振る舞い）。どちらも枠の中で
@@ -772,11 +1657,11 @@ function placePopups(host: HTMLElement): void {
       room = above;
       top = r.top - Math.min(ph, above);
     }
-    popup.style.maxHeight = ph > room ? `${Math.max(0, Math.floor(room))}px` : '';
+    popup.style.maxHeight = ph > room ? `${Math.max(0, Math.floor(room / z))}px` : '';
     popup.style.visibility = anchorVisible && room >= 24 ? '' : 'hidden';
     const left = Math.max(viewLeft + margin, Math.min(r.left, viewRight - w - margin));
-    popup.style.top = `${top}px`;
-    popup.style.left = `${left}px`;
+    popup.style.top = `${top / z}px`;
+    popup.style.left = `${left / z}px`;
     // 高さを詰めると scrollTop が切り詰められることがあるので、測る前の位置に戻す
     popup.scrollTop = scrollTop;
   }
@@ -787,16 +1672,19 @@ function placePopups(host: HTMLElement): void {
  * scrollIntoView はキャンバスの枠まで一緒にスクロールさせ、リボンがずれてしまうため使わない。
  */
 function revealInPopup(popup: HTMLElement, item: HTMLElement): void {
+  // 矩形は縮小後、scrollTop・clientHeight は縮小前の値なので、縮小率でそろえる（zoomOf を参照）
+  const z = zoomOf(popup);
   const pr = popup.getBoundingClientRect();
   const ir = item.getBoundingClientRect();
-  const top = pr.top + popup.clientTop;
-  const bottom = top + popup.clientHeight;
-  if (ir.top < top) popup.scrollTop -= top - ir.top;
-  else if (ir.bottom > bottom) popup.scrollTop += Math.min(ir.bottom - bottom, ir.top - top);
+  const top = pr.top + popup.clientTop * z;
+  const bottom = top + popup.clientHeight * z;
+  if (ir.top < top) popup.scrollTop -= (top - ir.top) / z;
+  else if (ir.bottom > bottom) popup.scrollTop += Math.min(ir.bottom - bottom, ir.top - top) / z;
 }
 
 /** メニュー類が選択されているときだけ、中身を一覧で開いて選べるようにする。 */
 function menuPopup(el: Element): HTMLElement | null {
+  if (measuring || readOnlyRender) return null;
   const sel = app.store?.selection;
   const path = pathOf(el);
   if (!sel || !(samePath(sel, path) || isAncestorPath(path, sel))) return null;

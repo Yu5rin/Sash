@@ -15,6 +15,8 @@ export interface MenuItem {
   label: string;
   shortcut?: string;
   disabled?: boolean;
+  /** 無効の理由。項目の下に小さく出す（無効の項目はツールチップが出ない環境があり、押せない理由が分からないため）。 */
+  reason?: string;
   run?: () => void;
   submenu?: () => MenuItem[];
 }
@@ -73,8 +75,9 @@ export function openMenu(x: number, y: number, entries: Entry[], opts: { restore
       const row = h(
         'div',
         {
-          class: `ctx-item${entry.disabled ? ' disabled' : ''}${entry.submenu ? ' has-sub' : ''}`,
+          class: `ctx-item${entry.disabled ? ' disabled' : ''}${entry.submenu ? ' has-sub' : ''}${entry.reason ? ' has-reason' : ''}`,
           role: 'menuitem',
+          title: entry.reason ?? '',
           tabIndex: -1,
           'aria-disabled': entry.disabled ? 'true' : undefined,
           'aria-haspopup': entry.submenu ? 'menu' : undefined,
@@ -94,7 +97,7 @@ export function openMenu(x: number, y: number, entries: Entry[], opts: { restore
             entry.run?.();
           },
         },
-        h('span', { class: 'ctx-label' }, entry.label),
+        h('span', { class: 'ctx-label' }, entry.label, entry.reason ? h('span', { class: 'ctx-reason' }, entry.reason) : null),
         entry.shortcut ? h('span', { class: 'ctx-shortcut' }, entry.shortcut) : null,
         entry.submenu ? h('span', { class: 'ctx-arrow', 'aria-hidden': 'true' }, '›') : null,
       );
@@ -151,6 +154,11 @@ export function openMenu(x: number, y: number, entries: Entry[], opts: { restore
 export interface ElementMenuHooks {
   /** XML エディタでその要素を表示する。 */
   revealInXml?: (path: Path) => void;
+  /**
+   * 末尾に足す項目（「マクロを Excel で実行」「VBE で表示」など。仕様書 §18.4・§18.5）。
+   * Excel 連携の操作は main.ts 側で組み立て、このファイルは並べるだけにする（ビューが Excel 連携に依存しないように）。
+   */
+  extraItems?: (path: Path, el: Element) => MenuItem[];
 }
 
 let hooks: ElementMenuHooks = {};
@@ -188,5 +196,7 @@ export function openElementMenu(x: number, y: number, path: Path, source: Source
     { label: t('XML で表示'), disabled: !hooks.revealInXml, run: () => hooks.revealInXml?.(path) },
     { label: t('ID をコピー'), disabled: !(el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.getAttribute('idQ')), run: () => copyId() },
   ];
+  const extra = hooks.extraItems?.(path, el) ?? [];
+  if (extra.length) entries.push('sep', ...extra);
   openMenu(x, y, entries, { restoreFocus });
 }

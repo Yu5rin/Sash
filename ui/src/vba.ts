@@ -94,24 +94,47 @@ function stripComment(line: string): string {
   return line;
 }
 
-interface Param {
+export interface Param {
   name: string;
   type: string;
   byVal: boolean;
   optional: boolean;
+  /** 配列（name()）か ParamArray か。 */
+  array: boolean;
+}
+
+/** 引数リストを、括弧と文字列の外にあるカンマで分ける（既定値の Array(1, 2) を分けないため）。 */
+export function splitParams(params: string): string[] {
+  if (!params.trim()) return [];
+  const out: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let from = 0;
+  for (let i = 0; i < params.length; i++) {
+    const c = params[i];
+    if (c === '"') inString = !inString;
+    else if (!inString && c === '(') depth++;
+    else if (!inString && c === ')') depth--;
+    else if (!inString && depth === 0 && c === ',') {
+      out.push(params.slice(from, i));
+      from = i + 1;
+    }
+  }
+  out.push(params.slice(from));
+  return out;
 }
 
 export function parseParams(params: string): Param[] {
-  if (!params.trim()) return [];
-  return params.split(',').map((raw) => {
+  return splitParams(params).map((raw) => {
     const p = raw.trim();
     const optional = /^Optional\s+/i.test(p);
     const rest = p.replace(/^Optional\s+/i, '');
     const byVal = /^ByVal\s+/i.test(rest);
     const body = rest.replace(/^(ByVal|ByRef)\s+/i, '');
-    const m = new RegExp(String.raw`^(${ID_WORD})(\(\))?(?:\s+As\s+([\p{L}_][\p{L}\p{N}_.]*))?`, 'iu').exec(body);
+    const paramArray = /^ParamArray\s+/i.test(body);
+    const m = new RegExp(String.raw`^(${ID_WORD})(\s*\(\s*\))?(?:\s+As\s+([\p{L}_][\p{L}\p{N}_.]*))?`, 'iu').exec(body.replace(/^ParamArray\s+/i, ''));
     const type = (m?.[3] ?? 'Variant').replace(/^Office\./i, '');
-    return { name: m?.[1] ?? body, type: type.toLowerCase(), byVal, optional };
+    return { name: m?.[1] ?? body, type: type.toLowerCase(), byVal, optional, array: paramArray || !!m?.[2] };
   });
 }
 

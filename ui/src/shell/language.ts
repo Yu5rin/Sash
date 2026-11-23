@@ -4,6 +4,8 @@
 import { app } from '../app';
 import { invoke } from '../bridge';
 import { lang, storeLang, t, type Lang } from '../i18n';
+import { ask } from '../dialogs/modal';
+import { isSampleSession } from '../sample';
 import { toast } from './toast';
 
 export const REOPEN_KEY = 'sash.reopen';
@@ -37,13 +39,32 @@ export function reloadNeeded(): boolean {
   return app.settings.language !== lang;
 }
 
-/** 読み込み直して言語を反映する。未保存の変更があるときは読み込み直さない（false を返す）。 */
-export function reloadForLanguage(): boolean {
-  if (app.dirty) {
-    toast({ kind: 'warning', message: t('言語を切り替える前に、変更を保存してください') });
-    return false;
+/**
+ * 未保存の変更があっても読み込み直してよいか。ふつうのファイルは先に保存してもらう（false）。
+ * サンプルは保存できないので「保存してください」とは言わず、変更が破棄されることを確かめる。
+ */
+async function confirmReloadWithChanges(): Promise<boolean> {
+  if (!app.dirty) return true;
+  if (isSampleSession()) {
+    const r = await ask(t('言語を切り替える'), t('サンプルへの変更は破棄されます。言語を切り替えますか？'), [
+      { value: 'reload', label: t('破棄して切り替える'), danger: true },
+      { value: 'cancel', label: t('キャンセル'), primary: true },
+    ]);
+    return r === 'reload';
   }
-  if (app.session) sessionSet(REOPEN_KEY, app.session.path);
+  toast({ kind: 'warning', message: t('言語を切り替える前に、変更を保存してください') });
+  return false;
+}
+
+/** 読み込み直して言語を反映する。未保存の変更があるときは読み込み直さない（false を返す）。 */
+export async function reloadForLanguage(): Promise<boolean> {
+  if (!(await confirmReloadWithChanges())) return false;
+  return reload();
+}
+
+function reload(): boolean {
+  // パスのないセッション（同梱のサンプル）は開き直せないので、覚えない
+  if (app.session?.path) sessionSet(REOPEN_KEY, app.session.path);
   location.reload();
   return true;
 }
@@ -51,14 +72,11 @@ export function reloadForLanguage(): boolean {
 /** 言語を切り替えてすぐに読み込み直す（コマンドパレットから）。 */
 export async function changeLanguage(next: Lang): Promise<boolean> {
   if (next === lang) return true;
-  if (app.dirty) {
-    toast({ kind: 'warning', message: t('言語を切り替える前に、変更を保存してください') });
-    return false;
-  }
+  if (!(await confirmReloadWithChanges())) return false;
   try {
     await saveLanguage(next);
   } catch (e) {
     toast({ kind: 'error', message: (e as Error).message });
   }
-  return reloadForLanguage();
+  return reload();
 }

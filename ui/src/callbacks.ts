@@ -20,7 +20,8 @@ class VbaState {
   /** VBA を読み直す。Excel で開いていなければ notOpen になる。 */
   async refresh(): Promise<void> {
     const s = app.session;
-    if (!s) return;
+    // ファイルのないセッション（サンプル）は、Excel で開かれていることがないので読みに行かない（空のパスを送らない）
+    if (!s || !s.path) return;
     this.loading = true;
     app.emit('vba');
     try {
@@ -80,7 +81,8 @@ export const vba = new VbaState();
 app.on('session', () => {
   vba.status = 'idle';
   vba.modules = null;
-  if (app.session && app.info.excelInstalled) void vba.refresh();
+  // パスのないセッション（同梱のサンプル）は Excel で開かれていないので、VBA を読みに行かない
+  if (app.session && app.session.path && app.info.excelInstalled) void vba.refresh();
 });
 
 export function namingRule(): NamingRule {
@@ -194,6 +196,56 @@ async function renameCallbackUnsafe(path: Path, attr: string, oldName: string, n
   const ok = apply(true);
   await vba.refresh();
   return ok;
+}
+
+export interface VbaRenameResult {
+  /** VBA の宣言行を書き換えたもの（古い名前、bare）。 */
+  renamed: string[];
+  /** VBA に Sub がなかったもの（XML だけ変えればよい）。 */
+  notFound: string[];
+  /** 書き換えられなかったもの。 */
+  failed: { name: string; reason: string }[];
+}
+
+/**
+ * VBA の Sub 名をまとめて変える（ID の一括置換から使う）。renameCallback と同じく宣言行だけを書き換える。
+ * 1件ずつ順に書き換え、失敗しても残りは続ける（どれが失敗したかを呼び出し側が利用者に示し、XML の側もそれに合わせるため）。
+ * XML は書き換えない。終わったら VBA を読み直す。
+ */
+export async function renameVbaSubs(renames: readonly { oldName: string; newName: string }[]): Promise<VbaRenameResult> {
+  const result: VbaRenameResult = { renamed: [], notFound: [], failed: [] };
+  const s = app.session;
+  if (!s || !vba.canWrite || renames.length === 0) {
+    result.notFound = renames.map((r) => bareCallbackName(r.oldName));
+    return result;
+  }
+  const procs = vba.modules!.flatMap(parseProcedures);
+  for (const r of renames) {
+    const oldBare = bareCallbackName(r.oldName);
+    const newBare = bareCallbackName(r.newName);
+    const proc = procs.find((p) => p.name.toLowerCase() === oldBare.toLowerCase());
+    if (!proc) {
+      result.notFound.push(oldBare);
+      continue;
+    }
+    if (!isVbaIdentifier(newBare)) {
+      result.failed.push({ name: oldBare, reason: t('「{name}」はVBAのSub名として使えません', { name: newBare }) });
+      continue;
+    }
+    if (procs.some((p) => p !== proc && p.name.toLowerCase() === newBare.toLowerCase())) {
+      result.failed.push({ name: oldBare, reason: t('VBAに同じ名前の {name} がすでにあります', { name: newBare }) });
+      continue;
+    }
+    try {
+      const ok = await invoke('vba.replaceLine', { path: s.path, module: proc.module, line: proc.line, expected: proc.declaration, replacement: renameDeclaration(proc.declaration, proc.name, newBare) });
+      if (ok) result.renamed.push(oldBare);
+      else result.failed.push({ name: oldBare, reason: t('読み込んだときから {module} が変わっています', { module: proc.module }) });
+    } catch (e) {
+      result.failed.push({ name: oldBare, reason: (e as Error).message });
+    }
+  }
+  await vba.refresh();
+  return result;
 }
 
 /** §8.3：onLoad で IRibbonUI を保持し、Invalidate できるようにする雛形を入れる。 */

@@ -389,6 +389,27 @@ export function jaToEnglish(token: string): string[] {
   return [...out];
 }
 
+/**
+ * 文（ボタンのラベルなど）の中に含まれる日本語の言葉を辞書から探し、英単語（の並び）にする。文の中で先に出てくる言葉を先に返す。
+ * ラベルは「集計する」「CSV出力」のように言葉が空白で区切られていないので、jaToEnglish（語の単位で引く）ではなく、
+ * 辞書の言葉が文に含まれるかで探す。1文字の言葉（上・表など）は、文そのものと一致したときだけ使う（「上書き」で「上」が当たらないように）。
+ */
+export function jaTermsInText(text: string): string[] {
+  const t = stripLong(normalize(text));
+  if (!t) return [];
+  const hits: { at: number; len: number; terms: readonly string[] }[] = [];
+  for (const { key, terms } of normalizedJa) {
+    if (!key) continue;
+    const at = key.length >= 2 ? t.indexOf(key) : key === t ? 0 : -1;
+    if (at >= 0) hits.push({ at, len: key.length, terms });
+  }
+  // 先に出てくる言葉、同じ位置なら長い言葉（「フォルダを開く」の「フォルダ」より「フォルダを開く」）を先にする
+  hits.sort((a, b) => a.at - b.at || b.len - a.len);
+  const out: string[] = [];
+  for (const h of hits) for (const term of h.terms) if (!out.includes(term)) out.push(term);
+  return out;
+}
+
 /** term（単語か、_ でつないだ単語の並び）がアイコン名にどれだけ合うか。0 は合わない。 */
 function termScore(icon: FluentIcon, term: string): number {
   if (term.includes('_')) {

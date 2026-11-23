@@ -15,6 +15,11 @@ import type { ImageEntry } from '../store';
 import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, type AttrDef } from '../schema';
 import { bareCallbackName, generateStub, isCallbackName, type CallbackStatus } from '../vba';
 import { lang, t } from '../i18n';
+import { imageMsoNames, labels as msoLabels } from '../catalog/catalog';
+import { buildSvg, DEFAULT_COLOR, displayName as fluentName, loadFluentIcons, type FluentIcon } from '../fluent/fluent';
+import { suggestFluent, suggestImageMso, suggestTerms } from '../iconSuggest';
+import { msoIcon } from '../msoIcons';
+import '../styles-w3.css';
 
 export interface InspectorHooks {
   pickIdMso(current: string, apply: (v: string) => void): void;
@@ -545,8 +550,25 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
           }, lang === 'en' ? 'Add' : '追加'),
     ),
     value ? h('code', { class: 'insp-signature' }, `Sub ${value}(${callbackSignature(attr, el.localName)})`) : null,
+    value && (attr === 'getVisible' || attr === 'getEnabled') ? dynamicNote(path, attr) : null,
     stateText ? h('span', { class: `cb-state ${status!.state}`, title: status!.reason ?? '' }, stateText) : null,
   );
+}
+
+/**
+ * getVisible / getEnabled の「動的」の印。表示・押せるかは VBA が決めるので、キャンバスの見た目は既定（表示・押せる）のまま。
+ * そのことを示し、キャンバスで状態を切り替えて見られる機能（キャンバス側が受け持つ）へ案内する。
+ * キャンバスとはイベントでつなぐ（インスペクタがキャンバスの作りに依存しないように）。
+ */
+function dynamicNote(path: Path, attr: string): HTMLElement {
+  return h('div', { class: 'insp-dynamic' },
+    h('span', { class: 'insp-dynamic-badge' }, t('動的')),
+    h('span', { class: 'muted' }, attr === 'getVisible' ? t('表示するかは VBA が決めます') : t('押せるかは VBA が決めます')),
+    h('button', {
+      type: 'button',
+      class: 'link',
+      onclick: () => window.dispatchEvent(new CustomEvent('sash:dynamicSim', { detail: { path: [...path] } })),
+    }, t('キャンバスで試す')));
 }
 
 /** 静的な値とコールバックを切り替えられる行。 */
@@ -581,6 +603,87 @@ function row(el: Element, d: AttrDef, key: string): HTMLElement {
   // 「固定 | VBA」はラベルの下に置く（インスペクタは幅が狭く、入力欄の横に置くと値の欄が潰れるため）
   const label = labelCell(shown, el.localName, fieldId);
   return h('div', { class: `insp-row${modeSwitch ? ' has-mode' : ''}` }, modeSwitch ? h('div', { class: 'insp-label-cell' }, label, modeSwitch) : label, h('div', { class: 'insp-value' }, editor));
+}
+
+let msoNames: string[] | null = null;
+let fluentIcons: FluentIcon[] | null = null;
+
+/** アイコンの候補に使うラベル。splitButton はラベルを中のボタンに持つ。 */
+function labelForSuggest(el: Element): string {
+  const own = el.getAttribute('label');
+  if (own) return own;
+  if (el.localName === 'splitButton') return el.querySelector(':scope > button, :scope > toggleButton')?.getAttribute('label') ?? '';
+  return '';
+}
+
+/**
+ * アイコンがまだないときに、ラベルから候補を出す（組み込みアイコンとアイコン集から、それぞれ最大 5 個）。
+ * アイコン集のデータは大きいので、候補を出すときに初めて読み込み、読み込めたら同じ欄に足す（インスペクタ全体は描き直さない。
+ * 入力中の欄のフォーカスを動かさないため）。読み込めなければ組み込みアイコンの候補だけにする。
+ */
+function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean): HTMLElement | null {
+  const label = labelForSuggest(el);
+  if (!label) return null;
+  const hasTerms = suggestTerms(label).length > 0;
+  msoNames ??= imageMsoNames();
+  const mso = suggestImageMso(label, msoNames, msoLabels);
+  const msoRow = mso.length
+    ? h('div', { class: 'icon-suggest-row' },
+        h('span', { class: 'icon-suggest-kind' }, t('組み込み')),
+        mso.map((name) => {
+          const src = msoIcon(name);
+          const ja = msoLabels.get(name);
+          return h('button', {
+            type: 'button',
+            class: 'icon-suggest',
+            title: ja ? `${ja}（${name}）` : name,
+            onclick: () => setMso(name),
+          }, src ? h('img', { src, alt: '' }) : null, h('span', null, name));
+        }))
+    : null;
+  const fluentRow = h('div', { class: 'icon-suggest-row', hidden: true }, h('span', { class: 'icon-suggest-kind' }, t('アイコン集')));
+  const fillFluent = (icons: FluentIcon[]) => {
+    const picks = suggestFluent(icons, label);
+    if (picks.length === 0) return;
+    fluentRow.hidden = false;
+    fluentRow.append(...picks.map((icon) => {
+      const markup = buildSvg(icon, 'regular', '#000000', 20);
+      return h('button', {
+        type: 'button',
+        class: 'icon-suggest fluent',
+        title: t('{name}（アイコン集）を加工して設定する', { name: fluentName(icon.name) }),
+        'aria-label': fluentName(icon.name),
+        onclick: () => openFluentCandidate(path, icon),
+      }, markup ? svg(markup.replace(/fill="#000000"/, 'fill="currentColor"')) : null);
+    }));
+  };
+  if (hasTerms) {
+    if (fluentIcons) fillFluent(fluentIcons);
+    else
+      void loadFluentIcons()
+        .then(({ icons }) => {
+          fluentIcons = icons;
+          if (fluentRow.isConnected) fillFluent(icons);
+        })
+        .catch(() => undefined);
+  }
+  if (!msoRow && !hasTerms) return null;
+  return h('div', { class: 'icon-suggest-box', 'aria-label': t('ラベルから選んだアイコンの候補') },
+    h('div', { class: 'icon-suggest-head muted' }, t('候補（ラベル「{label}」から）', { label })),
+    msoRow,
+    fluentRow);
+}
+
+/**
+ * アイコン集の候補を選んだとき。アイコン集のダイアログで選んだときと同じく、アイコンエディタに読み込んで PNG にしてから設定する
+ * （色や余白をそこで調えられるように）。色は既定（Excel の明るいリボンになじむ灰色）にする。
+ */
+function openFluentCandidate(path: Path, icon: FluentIcon): void {
+  const markup = buildSvg(icon, 'regular', DEFAULT_COLOR);
+  if (!markup) return;
+  openIconDialog(path, undefined, undefined, {
+    fluent: { blob: new Blob([markup], { type: 'image/svg+xml' }), fileName: `${icon.name}_regular.svg`, name: icon.name, variant: 'regular', color: DEFAULT_COLOR },
+  });
 }
 
 /** アイコンの行。組み込み（imageMso）、埋め込み画像（image）、VBA（getImage）を切り替える。 */
@@ -714,6 +817,8 @@ function iconRow(el: Element, key: string): HTMLElement {
     );
   } else if (mode === 'getImage') {
     detail = callbackEditor(el, 'getImage');
+  } else if (actual === '') {
+    detail = iconSuggestions(el, path, setMso);
   }
   const d = attributes.get('image')!;
   const rawName = mode === 'getImage' ? 'getImage' : mode === 'image' ? 'image' : 'imageMso';

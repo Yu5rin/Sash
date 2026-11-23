@@ -221,6 +221,38 @@ export interface HostApi {
   'vba.read': { req: { path: string }; res: { status: VbaReadStatus; modules: VbaModuleDto[] } };
   'vba.insert': { req: { path: string; module: string; code: string; documentModule: boolean }; res: boolean };
   'vba.replaceLine': { req: { path: string; module: string; line: number; expected: string; replacement: string }; res: boolean };
+  /** VBE を表示し、module の procedure の宣言行を選ぶ（仕様書 §18.5）。 */
+  'vba.reveal': { req: { path: string; module: string; procedure: string }; res: boolean };
+  /**
+   * Excel のウィンドウの幅を合わせる（仕様書 §18.1）。width は拡大率をかける前の画面の幅（物理 px。例：1920）、
+   * scale は Windows の拡大率（1.5 = 150%。10 以上なら % とみなすので 150 でもよい）。Application.Width には width / scale × 0.75（ポイント）を入れる。
+   * path を付けると、そのブックを開いている Excel を対象にする（省略時は UI が開いているファイル）。
+   * モニターの作業領域より広いときは、理由を添えて失敗する。
+   */
+  'excel.setWindowWidth': { req: { width: number; scale: number; path?: string }; res: WindowWidthResult };
+  /**
+   * 開いているブックのマクロを Application.Run で実行する（試しに押す。仕様書 §18.4）。引数のない Sub はそのまま、
+   * IRibbonControl を 1 つ受け取る Sub は control に Nothing を渡して実行し、ほかの形は理由を添えて失敗する。
+   * argument は VBA を読めないときの呼び方（XML のコールバックの形から UI が決める）。ブックは書き換えない。
+   * 実行中（MsgBox などで止まっている間も）は、Excel を使うほかの要求（反映・VBA・幅・imageMso の取得）をホストがすぐに断る。
+   */
+  'excel.runMacro': { req: { path: string; macro: string; controlId?: string; argument?: 'none' | 'control' }; res: boolean };
+}
+
+/** excel.setWindowWidth の応答。幅は論理 px。 */
+export interface WindowWidthResult {
+  /** Application.Width に入れた値（ポイント）。 */
+  points: number;
+  /** 合わせた幅（width / scale）。 */
+  logicalWidth: number;
+  /** Excel のある画面の作業領域の幅。 */
+  workAreaWidth: number;
+  /** 前に出したブックの名前（アドインのときは null）。 */
+  workbook: string | null;
+  /** 合わせた後に GetWindowRect で測ったウィンドウの幅（物理 px）。測れなかったときはない。 */
+  actualWidth?: number;
+  /** 狙った幅（物理 px。論理 px × モニターの dpi / 96）。 */
+  expectedWidth?: number;
 }
 
 /** ホストから届く通知。 */
@@ -399,10 +431,17 @@ function mockImageMso(names: string[], size: number): Record<string, string | nu
   return out;
 }
 
+/** モックの「マクロを実行中」（本物のホストの ExcelService.IsMacroRunning と同じ振る舞いを確かめるため）。 */
+let mockMacroRunning = false;
+const mockMacroBusy = () => `${t('Excel でマクロを実行中です（Excel 側でメッセージやエラーを閉じると戻ります）。')} ${t('終わってから、もう一度やり直してください。')}`;
+/** 実行中に断る要求（ホストの MessageRouter.ThrowIfMacroRunning を呼ぶもの）。 */
+const MOCK_REFUSED_WHILE_MACRO: ReadonlySet<string> = new Set(['excel.apply', 'vba.read', 'vba.insert', 'vba.replaceLine', 'vba.reveal', 'excel.setWindowWidth', 'icons.prefetchStart']);
+
 const mock = {
   settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '' } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
     const r = (v: unknown) => Promise.resolve(v as HostApi[K]['res']);
+    if (mockMacroRunning && MOCK_REFUSED_WHILE_MACRO.has(type)) return Promise.reject(new Error(mockMacroBusy()));
     switch (type) {
       case 'app.ready':
         return r({ initialFile: null });
@@ -471,6 +510,26 @@ const mock = {
         return r({ status: 'noExcel', modules: [] });
       case 'backup.restore':
         return r({ backup: null });
+      case 'excel.setWindowWidth': {
+        // 本物のホストと同じ換算と断り方を確かめられるよう、作業領域は 1920px（100%）とみなす
+        const p = payload as { width: number; scale: number };
+        const logical = p.width / (p.scale >= 10 ? p.scale / 100 : p.scale);
+        if (!mockExcel) return Promise.reject(new Error(t('Excel が見つからないため、ウィンドウの幅を合わせられません。')));
+        if (logical > 1920.5) return Promise.reject(new Error(t('幅 {width}px は、Excel のある画面の作業領域（{work}px）より広いため、Excel のウィンドウを合わせられません。', { width: p.width, work: 1920 })));
+        return r({ points: Math.round(logical * 0.75 * 100) / 100, logicalWidth: logical, workAreaWidth: 1920, workbook: '集計ツール.xlam', actualWidth: Math.round(logical), expectedWidth: Math.round(logical) });
+      }
+      case 'excel.runMacro': {
+        if (!mockExcel) return Promise.reject(new Error(t('Excel が見つからないため、マクロを実行できません。')));
+        if (mockMacroRunning) return Promise.reject(new Error(mockMacroBusy()));
+        // 本物のホストと同じく、実行中（MsgBox を閉じるまで）は Excel を使うほかの要求をすぐに断る
+        mockMacroRunning = true;
+        return mockDelay(2500).then(() => {
+          mockMacroRunning = false;
+          return r(true);
+        });
+      }
+      case 'vba.reveal':
+        return mockExcel ? r(true) : Promise.reject(new Error(t('Excelが見つからないため、VBAを読み書きできません。')));
       case 'backup.list': {
         // ブラウザ実行中の見た目の確認用。ホストは新しい順に返す
         const day = 24 * 60 * 60 * 1000;

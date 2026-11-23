@@ -25,6 +25,11 @@ export function openBackupDialog(): Promise<void> {
   return openOnce('backup', async () => {
     const s = app.session;
     if (!s) return;
+    // サンプル（パスが空）にはバックアップがない。メニューでも無効にしているが、コマンドから呼ばれたときのために断る
+    if (!s.path) {
+      toast({ kind: 'info', message: t('サンプルにはバックアップがありません') });
+      return;
+    }
     let list: BackupEntry[];
     try {
       list = await invoke('backup.list', { path: s.path });

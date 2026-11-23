@@ -64,6 +64,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "vba.read" => await ReadVbaAsync(Read<PathRequest>(body)),
                 "vba.insert" => await InsertVbaAsync(Read<VbaInsertRequest>(body)),
                 "vba.replaceLine" => await ReplaceLineAsync(Read<VbaReplaceRequest>(body)),
+                "vba.reveal" => await RevealVbaAsync(Read<VbaRevealRequest>(body)),
+                "excel.setWindowWidth" => await SetWindowWidthAsync(Read<WindowWidthRequest>(body)),
+                "excel.runMacro" => await RunMacroAsync(Read<RunMacroRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
                 "backup.list" => BackupList(Read<PathRequest>(body)),
                 "backup.restore" => BackupRestore(Read<BackupRestoreRequest>(body)),
@@ -508,6 +511,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private async Task<object> ApplyAsync(ApplyRequest req)
     {
+        RequirePath(req.Path);
+        ThrowIfMacroRunning();
         var path = CheckWritable(req.Path);
         var changes = ToChanges(req.Parts);
         var service = Backups();
@@ -550,13 +555,13 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     // Excel でブックを開いているときは戻さずに断る（開き直しはしない）。
 
     private object BackupList(PathRequest req) =>
-        Backups().ListEntries(Path.GetFullPath(req.Path))
+        Backups().ListEntries(Path.GetFullPath(RequirePath(req.Path)))
             .Select(e => new { path = e.Path, createdAt = e.CreatedAt, size = e.Size })
             .ToList();
 
     private object BackupRestore(BackupRestoreRequest req)
     {
-        var target = Path.GetFullPath(req.Path);
+        var target = Path.GetFullPath(RequirePath(req.Path));
         if (!RibbonPackage.IsSupported(target))
         {
             throw new UserFacingException(L(".xlsm / .xlam / .xltm / .xlsb のみ戻せます。", "Only .xlsm / .xlam / .xltm / .xlsb files can be restored."));
@@ -590,11 +595,13 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private async Task<object> ReadVbaAsync(PathRequest req)
     {
+        RequirePath(req.Path);
         if (!ExcelInstalled)
         {
             return new { status = "noExcel", modules = Array.Empty<object>() };
         }
 
+        ThrowIfMacroRunning();
         var r = await excel.Value.ReadVbaAsync(req.Path);
         return new
         {
@@ -610,10 +617,77 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     }
 
     private async Task<object> InsertVbaAsync(VbaInsertRequest req) =>
-        await RequireExcel().InsertVbaAsync(req.Path, req.Module, req.Code, req.DocumentModule);
+        await RequireVbaExcel(req.Path).InsertVbaAsync(req.Path, req.Module, req.Code, req.DocumentModule);
+
+    /// <summary>VBE で Sub の宣言行を表示する（仕様書 §18.5）。</summary>
+    private async Task<object> RevealVbaAsync(VbaRevealRequest req) =>
+        await RequireVbaExcel(req.Path).RevealVbaAsync(req.Path, req.Module, req.Procedure);
 
     private async Task<object> ReplaceLineAsync(VbaReplaceRequest req) =>
-        await RequireExcel().ReplaceVbaLineAsync(req.Path, req.Module, req.Line, req.Expected, req.Replacement);
+        await RequireVbaExcel(req.Path).ReplaceVbaLineAsync(req.Path, req.Module, req.Line, req.Expected, req.Replacement);
+
+    /// <summary>VBA を読み書きする要求の入り口：パスがあり、Excel があり、マクロを実行中でないこと。</summary>
+    private ExcelService RequireVbaExcel(string? path)
+    {
+        RequirePath(path);
+        var service = RequireExcel();
+        service.ThrowIfMacroRunning();
+        return service;
+    }
+
+    /// <summary>
+    /// ファイルのパスが空なら断る（サンプルなど、ファイルのないセッションから届いた要求）。
+    /// UI でも押せないようにしているが、空のパスでブックやバックアップを探させないよう、ホストでも確かめる。
+    /// </summary>
+    private static string RequirePath(string? path) =>
+        string.IsNullOrWhiteSpace(path)
+            ? throw new UserFacingException(L("このファイルは保存されていない（サンプルなど）ため、この操作はできません。名前を付けて保存したファイルで行ってください。",
+                "This file has not been saved (for example, the sample), so this action is not available. Use a saved file."))
+            : path;
+
+    /// <summary>Excel でマクロを実行中なら、Excel を使う要求をすぐに断る（COM のスレッドがふさがっているため）。</summary>
+    private void ThrowIfMacroRunning()
+    {
+        if (ExcelInstalled && excel.IsValueCreated)
+        {
+            excel.Value.ThrowIfMacroRunning();
+        }
+    }
+
+    /// <summary>Excel のウィンドウの幅を合わせる（仕様書 §18.1）。Excel がない PC では理由を返す。</summary>
+    private async Task<object> SetWindowWidthAsync(WindowWidthRequest req)
+    {
+        if (!ExcelInstalled)
+        {
+            throw new UserFacingException(L("Excel が見つからないため、ウィンドウの幅を合わせられません。", "Excel was not found, so the window width cannot be set."));
+        }
+
+        ThrowIfMacroRunning();
+        // 空のパスは「指定なし」とみなす（サンプルのときは起動中の最初の Excel を合わせる）
+        var path = string.IsNullOrWhiteSpace(req.Path) ? null : req.Path;
+        var r = await excel.Value.SetWindowWidthAsync(path, req.Width, req.Scale);
+        return new { points = r.Points, logicalWidth = r.LogicalWidth, workAreaWidth = r.WorkAreaWidth, workbook = r.Workbook, actualWidth = r.ActualWidth, expectedWidth = r.ExpectedWidth };
+    }
+
+    /// <summary>開いているブックのマクロを実行する（試しに押す。仕様書 §18.4）。</summary>
+    private async Task<object> RunMacroAsync(RunMacroRequest req)
+    {
+        if (!ExcelInstalled)
+        {
+            throw new UserFacingException(L("Excel が見つからないため、マクロを実行できません。", "Excel was not found, so the macro cannot be run."));
+        }
+
+        RequirePath(req.Path);
+        // argument は VBA を読めないときだけ使う呼び方（UI が XML のコールバックの形から決める）。読めるときはホストが宣言から決める
+        MacroCallShape? argument = req.Argument switch
+        {
+            "none" => MacroCallShape.NoArguments,
+            "control" => MacroCallShape.RibbonControl,
+            "unsupported" => MacroCallShape.Unsupported,
+            _ => null,
+        };
+        return await excel.Value.RunMacroAsync(req.Path, req.Macro, argument);
+    }
 
     private async Task<object> ImageMsoAsync(ImageMsoRequest req)
     {
@@ -658,6 +732,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         {
             throw new UserFacingException(L("Excel が見つからないため、アイコンを取り込めません。", "Excel was not found, so the icons cannot be imported."));
         }
+
+        // マクロの実行中は始めない（取り込みの Excel の起動と、マクロでふさがった COM のスレッドを取り合うため）
+        ThrowIfMacroRunning();
 
         // すでに実行中なら、そのまま進み具合を返す
         _prefetch.Start(req.Names ?? [], req.Sizes, req.Force ?? false, excel.Value.CreateBulkSource());
@@ -720,6 +797,14 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         bool Cancelled);
 
     private sealed record VbaInsertRequest(string Path, string Module, string Code, bool DocumentModule);
+
+    private sealed record VbaRevealRequest(string Path, string Module, string Procedure);
+
+    /// <summary>width は拡大率をかける前の画面の幅（物理 px）、scale は拡大率（1.5 = 150%）。Path があればそのブックの Excel を対象にする。</summary>
+    private sealed record WindowWidthRequest(int Width, double Scale, string? Path = null);
+
+    /// <summary>ControlId はどのコントロールから押したかの記録用（いまは使わない。将来、ログや IRibbonControl の代わりに使う余地を残す）。</summary>
+    private sealed record RunMacroRequest(string Path, string Macro, string? ControlId = null, string? Argument = null);
 
     private sealed record VbaReplaceRequest(string Path, string Module, int Line, string Expected, string Replacement);
 

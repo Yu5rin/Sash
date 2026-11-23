@@ -220,6 +220,79 @@ export const builtinRecipes: readonly Recipe[] = [
       'End Sub',
     ),
   },
+  {
+    // Excel が狭い画面でグループをどの順に畳むかを、実機で測るためのタブ（仕様書 §18.8）。
+    // ラベルの長さ（4・6・8・10 文字、空白入り）、大きさ、入力欄、autoScale の有無、グループの画像（畳んだときに出る）を
+    // 一通りそろえ、キャンバスの見積もり（views/ribbonFit.ts）と実機の差を見比べられるようにする。
+    // 10 文字の大きいボタンはわざと長くしてあるので、ラベルの長さの警告が出る
+    id: 'width-test',
+    title: '幅の試験用リボン',
+    description: 'Excel が狭い画面でグループを畳む順番を測るためのタブです。ラベルの長さ・大きさ・入力欄・自動調整（autoScale）の違うグループを7つ並べます。',
+    kind: 'tab',
+    xml: `<tab id="tabWidthTest" label="幅の試験" keytip="WT">
+  <group id="grpWtLarge" label="大きいボタン" imageMso="MacroPlay">
+    <button id="btnWtL4" label="集計する" size="large" imageMso="AutoSum" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtL6" label="データ集計表" size="large" imageMso="TableSelect" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtL8" label="月次データの集計" size="large" imageMso="ExportTextFile" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtL10" label="売上データの月別集計" size="large" imageMso="SheetInsert" onAction="Ribbon_WidthTest_onAction" />
+  </group>
+  <group id="grpWtSmall" label="小さいボタン" imageMso="Copy" autoScale="true">
+    <button id="btnWtS4" label="並べ替え" imageMso="AutoFilter" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtS6" label="シートの複製" imageMso="SheetInsert" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtS8" label="選択範囲をクリア" imageMso="Clear" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtS10" label="すべてのシートを保護" imageMso="ControlProperties" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtS4b" label="値の貼付" imageMso="PasteValues" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtS6b" label="空白行を削除" imageMso="Clear" onAction="Ribbon_WidthTest_onAction" />
+  </group>
+  <group id="grpWtSpace" label="空白入り" imageMso="Paste">
+    <button id="btnWtSp1" label="月次 集計" size="large" imageMso="AutoSum" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtSp2" label="シートを 新しく 作る" size="large" imageMso="SheetInsert" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtSp3" label="売上 一覧" imageMso="TableSelect" onAction="Ribbon_WidthTest_onAction" />
+  </group>
+  <group id="grpWtInput" label="入力" imageMso="ControlProperties">
+    <dropDown id="ddnWtTarget" label="出力先">
+      <item id="itmWtSheet" label="新しいシート" />
+      <item id="itmWtHere" label="このシート" />
+      <item id="itmWtCsv" label="CSVファイル" />
+    </dropDown>
+    <editBox id="edtWtCount" label="件数" sizeString="00000" />
+    <comboBox id="cboWtSheet" label="シート名" sizeString="WWWWWWWW">
+      <item id="itmWtS1" label="集計" />
+      <item id="itmWtS2" label="明細" />
+    </comboBox>
+  </group>
+  <group id="grpWtMixed" label="混在" imageMso="TableSelect" autoScale="true">
+    <button id="btnWtM1" label="範囲を処理" size="large" imageMso="TableSelect" onAction="Ribbon_WidthTest_onAction" />
+    <toggleButton id="tglWtM2" label="自動" imageMso="AutoFilter" onAction="Ribbon_WidthTest_onToggle" />
+    <checkBox id="chkWtM3" label="見出しを含める" onAction="Ribbon_WidthTest_onToggle" />
+    <separator id="sepWtM" />
+    <button id="btnWtM4" label="出力する" imageMso="ExportTextFile" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtM5" label="クリア" imageMso="Clear" onAction="Ribbon_WidthTest_onAction" />
+  </group>
+  <group id="grpWtIcon" label="アイコンだけ" imageMso="HappyFace">
+    <button id="btnWtI1" label="保存" showLabel="false" imageMso="FileSave" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtI2" label="更新" showLabel="false" imageMso="Refresh" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtI3" label="消去" showLabel="false" imageMso="Clear" onAction="Ribbon_WidthTest_onAction" />
+  </group>
+  <group id="grpWtAuto" label="自動調整" imageMso="Refresh" autoScale="true">
+    <button id="btnWtA1" label="請求書を作成する" size="large" imageMso="FileSave" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtA2" label="見積書をまとめて印刷" size="large" imageMso="ExportTextFile" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtA3" label="前月比を計算" imageMso="AutoSum" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtA4" label="グラフを更新する" imageMso="Refresh" onAction="Ribbon_WidthTest_onAction" />
+    <button id="btnWtA5" label="元に戻す" imageMso="Clear" onAction="Ribbon_WidthTest_onAction" />
+  </group>
+</tab>`,
+    vba: vb(
+      "' 幅の試験用。押したボタンの id を出すだけ（どのボタンが押せる状態かを確かめるため）",
+      'Public Sub Ribbon_WidthTest_onAction(control As IRibbonControl)',
+      '    MsgBox control.Id & " を押しました"',
+      'End Sub',
+      '',
+      'Public Sub Ribbon_WidthTest_onToggle(control As IRibbonControl, pressed As Boolean)',
+      '    MsgBox control.Id & IIf(pressed, " をオンにしました", " をオフにしました")',
+      'End Sub',
+    ),
+  },
 ];
 
 export interface Instance {
