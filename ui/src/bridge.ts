@@ -183,6 +183,7 @@ export interface HostApi {
   'app.ready': { req: undefined; res: { initialFile: string | null; updatedFrom?: string | null; version?: string } };
   'app.info': { req: undefined; res: AppInfo };
   'app.close': { req: undefined; res: null };
+  'app.titleBarTheme': { req: { dark: boolean }; res: null };
   /** ウィンドウの × で頼まれた終了を、利用者が取りやめた（未保存の確認でキャンセルなど）。ホストは次の × を受け付け直す。 */
   'app.closeCancelled': { req: undefined; res: null };
   'file.open': { req: { path?: string } | undefined; res: OpenedDocument | null };

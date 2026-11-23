@@ -33,6 +33,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             {
                 "app.info" => GetAppInfo(),
                 "app.close" => Close(),
+                "app.titleBarTheme" => SetTitleBarTheme(Read<TitleBarRequest>(body)),
                 "file.open" => OpenFile(body),
                 "file.save" => SaveFile(Read<SaveRequest>(body)),
                 "file.exportText" => ExportText(Read<ExportRequest>(body)),
@@ -750,7 +751,16 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     /// <summary>ウィンドウを閉じるときに、取り込みを止める。</summary>
     public void Shutdown() => _prefetch.Cancel();
 
+    /// <summary>タイトルバーの明暗を画面のテーマに合わせる（Windows が描く部分は WebView2 のテーマが届かないため）。</summary>
+    private object? SetTitleBarTheme(TitleBarRequest req)
+    {
+        TitleBarTheme.Apply(owner.Handle, req.Dark);
+        return null;
+    }
+
     // ---- 要求の型 ----
+
+    private sealed record TitleBarRequest(bool Dark);
 
     private sealed record PathRequest(string Path);
 
