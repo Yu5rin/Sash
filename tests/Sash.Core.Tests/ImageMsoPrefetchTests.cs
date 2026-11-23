@@ -278,6 +278,22 @@ public class ImageMsoPrefetchTests
     }
 
     [Fact]
+    public void 古い取り出し方で失敗した記録は当てはめず_もう一度自動で試せる()
+    {
+        using var dir = new TempDir();
+        var cache = new ImageMsoCache(dir.Path);
+
+        // 取り出し方を直す前の記録（Method のない JSON は 0 として読まれる）
+        cache.WriteFailure(new ImageMsoFailureRecord("16.0.19029", DateTimeOffset.Now, "打ち切り"));
+        Assert.Equal(0, cache.ReadFailure()!.Method);
+        Assert.Equal("none", new ImageMsoPrefetch(new ImageMsoCache(dir.Path), null, () => "16.0.19029").GetStatus().State);
+
+        // いまの取り出し方で失敗した記録なら、同じ版では自動で始めない
+        cache.WriteFailure(new ImageMsoFailureRecord("16.0.19029", DateTimeOffset.Now, "打ち切り", ImageMsoFailureRecord.CurrentMethod));
+        Assert.Equal("failed", new ImageMsoPrefetch(new ImageMsoCache(dir.Path), null, () => "16.0.19029").GetStatus().State);
+    }
+
+    [Fact]
     public async Task 打ち切りも記録に残り_手動で取り込めたら記録を消す()
     {
         using var dir = new TempDir();

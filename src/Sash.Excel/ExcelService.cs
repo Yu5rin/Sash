@@ -89,6 +89,12 @@ public sealed class ExcelService : IDisposable
     /// <summary>imageMso の一括の取り込みのために Sash が起動した、見えない Excel。取り込みが終わったら閉じる。</summary>
     private dynamic? _bulkApp;
 
+    /// <summary>取り込み用の Excel に開いた作業用のブック。ブックが 1 つもないと GetImageMso が E_UNEXPECTED を返すため。</summary>
+    private object? _bulkScratch;
+
+    /// <summary>取り込み専用の Excel で取れず、利用者が開いている Excel を借りているか（借りた Excel は終わらせない）。</summary>
+    private bool _bulkBorrowed;
+
     /// <summary>HBITMAP を直接読む方法が使えるか（1 = 使える、-1 = 使えない、0 = まだ分からない）。COM スレッドだけが触る。</summary>
     private int _handlePath;
 
@@ -1027,7 +1033,39 @@ public sealed class ExcelService : IDisposable
     {
         var app = _bulkApp;
         _bulkApp = null;
+        CloseBulkScratch();
+        if (_bulkBorrowed)
+        {
+            // 利用者の Excel は借りただけなので、終わらせたり表示を変えたりしない
+            _bulkBorrowed = false;
+            return;
+        }
+
         ReleaseOwnedApp(app);
+    }
+
+    /// <summary>作業用のブックを保存せずに閉じる。</summary>
+    private void CloseBulkScratch()
+    {
+        var wb = _bulkScratch;
+        _bulkScratch = null;
+        if (wb is null)
+        {
+            return;
+        }
+
+        try
+        {
+            ((dynamic)wb).Close(false);
+        }
+        catch (Exception ex) when (IsComFailure(ex))
+        {
+            // Excel が先に終わっていたなど。閉じられなくても取り込みには関係しない
+        }
+        finally
+        {
+            Release(wb);
+        }
     }
 
     private static void ReleaseOwnedApp(object? owned)
@@ -1208,7 +1246,63 @@ public sealed class ExcelService : IDisposable
         string? build = Safe(() => Convert.ToString((object)app.Build, System.Globalization.CultureInfo.InvariantCulture));
         var text = version is null ? null : build is null ? version : $"{version}.{build}";
         Log?.Invoke($"imageMso の取り込みのため見えない Excel を起動（版 {text ?? "不明"}、{(Environment.Is64BitProcess ? "Sash は 64bit" : "Sash は 32bit")}）");
+
+        // 起動したてでブックが 1 つもない Excel は、GetImageMso に E_UNEXPECTED を返す（実機のログで確認）。
+        // 作業用のブックを見えないまま開き、取れるようになるまで少し待ってから取り込みを始める
+        try
+        {
+            _bulkScratch = app.Workbooks.Add();
+        }
+        catch (Exception ex) when (IsComFailure(ex))
+        {
+            Log?.Invoke($"imageMso: 作業用のブックを開けなかった: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+        }
+
+        if (!WarmUp(app, "取り込み専用の Excel"))
+        {
+            // それでも取れなければ、利用者が開いている Excel を借りる（そちらはリボンの準備が済んでいるため）
+            var running = RunningExcel.Applications().FirstOrDefault();
+            if (running is not null && WarmUp(running, "開いている Excel"))
+            {
+                ReleaseBulkApp();
+                _bulkApp = running;
+                _bulkBorrowed = true;
+                Log?.Invoke("imageMso: 取り込み専用の Excel では取れないため、開いている Excel を借りて取り込む");
+            }
+        }
+
         return text;
+    }
+
+    /// <summary>
+    /// 確実にある imageMso を何度か取り出してみて、GetImageMso が使えるようになったかを確かめる。
+    /// 起動直後の Excel はリボンの準備が終わるまで E_UNEXPECTED を返すことがあるため、最大で約 5 秒待つ。
+    /// </summary>
+    private bool WarmUp(dynamic app, string which)
+    {
+        Exception? last = null;
+        for (var i = 0; i < 20; i++)
+        {
+            try
+            {
+                object? pic = app.CommandBars.GetImageMso("FileSave", 32, 32);
+                if (pic is not null)
+                {
+                    Release(pic);
+                    Log?.Invoke($"imageMso: {which}で取り出せることを確かめた（{i + 1} 回目）");
+                    return true;
+                }
+            }
+            catch (Exception ex) when (IsComFailure(ex) || ex is ArgumentException)
+            {
+                last = ex;
+            }
+
+            Thread.Sleep(250);
+        }
+
+        Log?.Invoke($"imageMso: {which}では GetImageMso が使えなかった: {(last is null ? "画像が返らない" : $"{last.GetType().Name} 0x{last.HResult:X8} {last.Message}")}");
+        return false;
     }
 
     /// <summary>一括の取り込みの 1 まとまり。COM スレッドで呼ぶ。</summary>
@@ -1228,7 +1322,9 @@ public sealed class ExcelService : IDisposable
             // ブックが入っていたらこの Excel は見えるようにして利用者に引き渡し（Quit しない）、新しい見えない Excel で続ける
             dynamic current = _bulkApp!;
             int? count = SafeValue(() => (int)current.Workbooks.Count);
-            if (count > 0)
+
+            // 作業用のブックは数に入れない。借りている利用者の Excel は、ブックがあって当然なので見ない
+            if (!_bulkBorrowed && count > (_bulkScratch is null ? 0 : 1))
             {
                 Log?.Invoke("imageMso の取り込み用の Excel でブックが開かれたため、その Excel を利用者に引き渡し、別の Excel で続ける");
                 StartBulkApp(); // 中で ReleaseBulkApp が、ブックの入った Excel を見えるようにして引き渡す
