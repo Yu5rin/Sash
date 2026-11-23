@@ -19,12 +19,14 @@ internal sealed class MainForm : Form
     private readonly MessageRouter _router;
     private readonly Lazy<ExcelService> _excel = new(() => new ExcelService(AppPaths.ImageMsoCache));
     private readonly string? _initialFile;
+    private readonly string? _updatedFrom;
     private bool _closeConfirmed;
     private bool _uiReady;
 
-    public MainForm(string? initialFile)
+    public MainForm(string? initialFile, string? updatedFrom = null)
     {
         _initialFile = initialFile;
+        _updatedFrom = updatedFrom;
         var settings = new SettingsStore(AppPaths.Settings);
         SettingsLanguage.Apply(settings.Load());
         _router = new MessageRouter(this, settings, new RecipeStore(AppPaths.Recipes), _excel, () => BeginInvoke(() =>
@@ -140,7 +142,7 @@ internal sealed class MainForm : Form
             case "app.ready":
                 // 起動時に引数で渡されたファイルがあれば、UI に開かせる
                 _uiReady = true;
-                PostEvent(new HostResponse(request.Id, true, new { initialFile = _initialFile }, null));
+                PostEvent(new HostResponse(request.Id, true, new { initialFile = _initialFile, updatedFrom = _updatedFrom, version = UpdateService.CurrentVersionText }, null));
                 return;
 
             case "file.drop":

@@ -1,0 +1,77 @@
+name: リリース
+
+# v で始まるタグ（例：v0.2.0）を push すると、テスト・発行をしてリリースを作る。
+# 配布物のファイル名は、アプリの更新処理（src/Sash.Core/Update/UpdateSource.cs の AssetFileName）と合わせること。
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: タグと版の確認
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          [xml]$props = Get-Content Directory.Build.props
+          $declared = ($props.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
+          if ($version -ne $declared) {
+            Write-Error "タグ（$tag）と Directory.Build.props の <Version>（$declared）が一致しません"
+            exit 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: UIのビルド
+        working-directory: ui
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: テスト
+        run: dotnet test Sash.slnx -c Release
+
+      - name: 単一exeの発行
+        run: dotnet publish src/Sash.App -p:PublishProfile=win-x64
+
+      - name: 配布物と照合値と latest.json を作る
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $name = "Sash-$v-win-x64.exe"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item artifacts/publish/win-x64/Sash.exe "dist/$name"
+          $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          # 照合値ファイル（sha256sum と同じ形式）
+          [IO.File]::WriteAllText("dist/$name.sha256", "$hash  $name`n")
+          # 社内の共有フォルダや Web サーバーに置くための latest.json
+          $manifest = [ordered]@{ version = $v; file = $name; sha256 = $hash; notes = "" } | ConvertTo-Json
+          [IO.File]::WriteAllText("dist/latest.json", $manifest)
+          Get-ChildItem dist
+
+      - name: リリースを作る
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          gh release create "${{ github.ref_name }}" dist/* --title "Sash $v" --generate-notes

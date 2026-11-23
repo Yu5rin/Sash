@@ -1,0 +1,27 @@
+// 英語の辞書（更新機能）。キーは日本語の文言そのもの。
+
+export const en: Readonly<Record<string, string>> = {
+  '新しい版 {version} があります': 'Version {version} is available',
+  '最新の版です（{version}）': 'You are up to date ({version})',
+  '更新を確認できませんでした': 'Could not check for updates',
+  'いまの版：{current}　新しい版：{latest}': 'Current: {current}   New: {latest}',
+  'ダウンロードして照合（SHA256）してから入れ替え、Sash を再起動します。設定やアイコンライブラリはそのまま残ります。': 'Sash will download the update, verify its SHA256 checksum, replace itself, and restart. Your settings and icon library are kept.',
+  '今すぐ更新': 'Update now',
+  '配布元を開く': 'Open download page',
+  'あとで': 'Later',
+  '新しい版があります': 'A new version is available',
+  '更新しています': 'Updating',
+  'ダウンロードと照合をしています。終わると Sash が再起動します…': 'Downloading and verifying. Sash will restart when finished…',
+  '更新できませんでした：{message}': 'Update failed: {message}',
+  '空欄で GitHub のリリース': 'Leave empty for GitHub releases',
+  '更新': 'Updates',
+  'いまの版': 'Current version',
+  '起動時に確認': 'Check on startup',
+  '確認先': 'Update source',
+  '確認先は管理者の設定（Sash.update.json）で決められています：{source}': 'The update source is set by your administrator (Sash.update.json): {source}',
+  '会社のネットワークからインターネットに出られない場合は、社内の共有フォルダ（例：\\\\server\\tools\\Sash）や、社内の Web サーバーの latest.json の URL を指定できます。': 'If your company network cannot reach the internet, you can specify a shared folder (e.g. \\\\server\\tools\\Sash) or the URL of latest.json on an internal web server.',
+  '今すぐ確認': 'Check now',
+  'ログのフォルダを開く': 'Open log folder',
+  'Sash を {from} から {to} に更新しました': 'Sash was updated from {from} to {to}',
+  '更新を確認': 'Check for updates',
+};

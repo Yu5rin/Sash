@@ -3,6 +3,7 @@ using System.Text.Json;
 using Sash.Core.CustomUI;
 using Sash.Core.Packaging;
 using Sash.Core.Settings;
+using Sash.Core.Update;
 using Sash.Excel;
 using static Sash.Core.Localization.Text;
 
@@ -13,6 +14,8 @@ namespace Sash.App;
 internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, RecipeStore recipes, Lazy<ExcelService> excel, Action closeWindow)
 {
     private static readonly bool ExcelInstalled = ExcelService.IsInstalled;
+    private readonly UpdateService _update = new(settings);
+    private UpdateRelease? _lastRelease;
 
     public async Task<HostResponse> HandleAsync(HostRequest request)
     {
@@ -33,6 +36,10 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.openWorkbooks" => ExcelInstalled ? await excel.Value.ListOpenWorkbooksAsync() : [],
                 "excel.apply" => await ApplyAsync(Read<ApplyRequest>(body)),
                 "excel.imageMso" => await ImageMsoAsync(Read<ImageMsoRequest>(body)),
+                "update.check" => await CheckUpdateAsync(),
+                "update.install" => await InstallUpdateAsync(),
+                "update.status" => UpdateStatus(),
+                "update.openPage" => OpenPage(Read<UrlRequest>(body)),
                 "library.list" => LibraryList(),
                 "library.get" => LibraryGet(Read<IdRequest>(body)),
                 "library.save" => LibrarySave(Read<LibrarySaveRequest>(body)),
@@ -211,6 +218,62 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         };
     }
 
+    // ---- 更新 ----
+
+    private object UpdateStatus()
+    {
+        var (source, policy) = SafeSource();
+        return new
+        {
+            current = UpdateService.CurrentVersionText,
+            checkOnStartup = _update.ShouldCheckOnStartup(),
+            source,
+            managedByAdmin = policy?.Source is not null || policy?.CheckOnStartup is not null || policy?.Disabled == true,
+            logPath = Path.Combine(AppPaths.Root, "logs", "update.log"),
+        };
+    }
+
+    private (string Source, UpdatePolicy? Policy) SafeSource()
+    {
+        try
+        {
+            var (s, p) = _update.ResolveSource();
+            return (s.Location, p);
+        }
+        catch (ArgumentException ex)
+        {
+            return (ex.Message, null);
+        }
+    }
+
+    private async Task<object> CheckUpdateAsync()
+    {
+        var (result, release) = await _update.CheckAsync();
+        _lastRelease = result.Status == "available" ? release : null;
+        return result;
+    }
+
+    private async Task<object?> InstallUpdateAsync()
+    {
+        var release = _lastRelease ?? throw new InvalidOperationException(L("先に更新を確認してください。", "Check for updates first."));
+        await _update.InstallAsync(release, closeWindow);
+        return null;
+    }
+
+    /// <summary>リリースのページや共有フォルダを開く。https の URL と、存在するフォルダだけを開く。</summary>
+    private static object? OpenPage(UrlRequest req)
+    {
+        var target = req.Url;
+        var ok = (Uri.TryCreate(target, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps) || Directory.Exists(target);
+        if (!ok)
+        {
+            throw new InvalidOperationException(L("開けない場所です。", "This location cannot be opened."));
+        }
+
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true });
+        return null;
+    }
+
     // ---- アイコンライブラリ（仕様書 §6.4） ----
 
     private Sash.Core.Library.IconLibrary Library()
@@ -327,7 +390,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     // ---- 設定 ----
 
     private static SettingsDto ToDto(AppSettings s) =>
-        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath);
+        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath, s.UpdateCheckOnStartup, s.UpdateSource);
 
     private SettingsDto SetSettings(SettingsDto patch) => ToDto(SettingsLanguage.Apply(settings.Update(s => s with
     {
@@ -340,6 +403,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         CallbackSharedPattern = string.IsNullOrWhiteSpace(patch.CallbackSharedPattern) ? s.CallbackSharedPattern : patch.CallbackSharedPattern,
         CallbackModule = string.IsNullOrWhiteSpace(patch.CallbackModule) ? s.CallbackModule : patch.CallbackModule,
         Language = patch.Language is "ja" or "en" ? patch.Language : s.Language,
+        UpdateCheckOnStartup = patch.UpdateCheckOnStartup ?? s.UpdateCheckOnStartup,
+        UpdateSource = patch.UpdateSource is null ? s.UpdateSource : ValidSource(patch.UpdateSource),
     })));
 
 
@@ -418,6 +483,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record IdRequest(string Id);
 
+    private sealed record UrlRequest(string Url);
+
     private sealed record LibrarySaveRequest(string Name, IReadOnlyList<string>? Tags, string Png, string? Source, string? SourceName, string? SourceContentType, JsonElement? Options);
 
     private sealed record LibraryUpdateRequest(string Id, string? Name, IReadOnlyList<string>? Tags);
@@ -450,5 +517,14 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         string? CallbackSharedPattern,
         string? CallbackModule,
         string? Language,
-        string? IconLibraryPath);
+        string? IconLibraryPath,
+        bool? UpdateCheckOnStartup,
+        string? UpdateSource);
+
+    /// <summary>更新の確認先として使えるかを確かめる（http などはここで断る）。</summary>
+    private static string ValidSource(string text)
+    {
+        Sash.Core.Update.UpdateSource.Parse(text);
+        return text.Trim();
+    }
 }

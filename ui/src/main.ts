@@ -4,6 +4,7 @@ import './styles.css';
 import { app } from './app';
 import { invoke, isHosted, onHostEvent, sendDroppedFiles, type PartToSave, type Settings } from './bridge';
 import { insertStubs, setupRibbonHolder, vba } from './callbacks';
+import { checkForUpdates, checkOnStartup, initUpdates, notifyUpdated, renderUpdateSettings } from './updates';
 import { openCatalog } from './dialogs/catalogDialog';
 import { openDiff } from './dialogs/diffDialog';
 import { exportSash, parseSash, partXml } from './sashJson';
@@ -282,8 +283,11 @@ async function changeLanguage(next: Lang): Promise<boolean> {
   return true;
 }
 
-function openSettings(): void {
+async function openSettings(): Promise<void> {
   const s = app.settings;
+  const updateSection = await renderUpdateSettings(async (patch) => {
+    app.settings = await invoke('settings.set', patch);
+  }, s);
   const update = async (patch: Partial<Settings>) => {
     app.settings = await invoke('settings.set', patch);
     applyTheme();
@@ -306,7 +310,7 @@ function openSettings(): void {
       h('option', { value: '32', selected: s.iconSize === 32 }, '32 × 32'),
       h('option', { value: '64', selected: s.iconSize === 64 }, t('64 × 64（高DPI）')))),
     h('h3', null, t('アイコンライブラリ')),
-    h('label', null, t('保存先'), h('div', { class: 'insp-inline' }, h('span', { class: 'muted path-text', title: s.iconLibraryPath }, s.iconLibraryPath), h('button', { type: 'button', class: 'small', onclick: async () => { const p = await invoke('library.chooseFolder'); if (p) { app.settings = await invoke('settings.get'); modal.close(); openSettings(); } } }, t('変更')))),
+    h('label', null, t('保存先'), h('div', { class: 'insp-inline' }, h('span', { class: 'muted path-text', title: s.iconLibraryPath }, s.iconLibraryPath), h('button', { type: 'button', class: 'small', onclick: async () => { const p = await invoke('library.chooseFolder'); if (p) { app.settings = await invoke('settings.get'); modal.close(); void openSettings(); } } }, t('変更')))),
     h('h3', null, t('コールバック')),
     h('label', null, t('名前の規則'), h('input', { type: 'text', value: s.callbackPattern, spellcheck: false, title: t('{id} と {attr} が置き換わります'), onchange: (e: Event) => void update({ callbackPattern: (e.target as HTMLInputElement).value.trim() }) })),
     h('label', null, t('Subの共有'), h('select', { onchange: (e: Event) => void update({ callbackShared: (e.target as HTMLSelectElement).value === 'shared' }) },
@@ -314,6 +318,7 @@ function openSettings(): void {
       h('option', { value: 'shared', selected: s.callbackShared }, t('1つのSubを共有し control.Id で振り分ける')))),
     h('label', null, t('共有するときの名前'), h('input', { type: 'text', value: s.callbackSharedPattern, spellcheck: false, title: t('{attr} が置き換わります'), onchange: (e: Event) => void update({ callbackSharedPattern: (e.target as HTMLInputElement).value.trim() }) })),
     h('label', null, t('挿入先のモジュール'), h('input', { type: 'text', value: s.callbackModule, spellcheck: false, onchange: (e: Event) => void update({ callbackModule: (e.target as HTMLInputElement).value.trim() }) })),
+    updateSection,
     h('p', { class: 'muted' }, t('Sash {version} ・ Excel {excel}', { version: app.info.version, excel: app.info.excelInstalled ? t('あり') : t('なし（ファイル編集のみ）') })),
   );
   const modal = openModal(t('設定'), content);
@@ -401,7 +406,8 @@ function buildCommands(): Command[] {
     { id: 'view.theme.dark', group: t('表示'), title: t('ダークテーマにする'), keywords: 'theme dark', run: () => setTheme('dark') },
     { id: 'view.theme.system', group: t('表示'), title: t('テーマをシステムに合わせる'), keywords: 'theme system', run: () => setTheme('system') },
     { id: 'view.layout', group: t('表示'), title: t('キャンバスとXMLの上下を入れ替える'), keywords: 'layout swap', run: () => void invoke('settings.set', { xmlOnTop: !app.settings.xmlOnTop }).then((st) => { app.settings = st; applyTheme(); }) },
-    { id: 'app.settings', group: t('設定'), title: t('設定を開く'), run: openSettings },
+    { id: 'app.settings', group: t('設定'), title: t('設定を開く'), run: () => void openSettings() },
+    { id: 'app.update', group: t('設定'), title: t('更新を確認'), keywords: 'update version', run: () => void checkForUpdates(true) },
     { id: 'app.language', group: t('設定'), title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
   ];
 }
@@ -458,7 +464,8 @@ $('btn-apply').addEventListener('click', () => void applyToExcel());
 $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
 $('btn-format').addEventListener('click', () => app.store?.format());
-$('btn-settings').addEventListener('click', openSettings);
+$('btn-settings').addEventListener('click', () => void openSettings());
+initUpdates({ confirmDiscard, toast });
 $('btn-recipes').addEventListener('click', () => void openRecipes(toast));
 $('btn-diff').addEventListener('click', openDiff);
 $('btn-command').addEventListener('click', () => openCommandPalette(buildCommands));
@@ -572,4 +579,7 @@ if (settings.language && settings.language !== lang && sessionGet(LANG_SYNC_KEY)
   const initialFile = reopen ?? ready.initialFile;
   if (initialFile) await open(initialFile);
   else if (!isHosted && new URLSearchParams(location.search).has('sample')) await open();
+  notifyUpdated(ready.updatedFrom, ready.version);
+  // 更新した直後の起動では確認しない（入れ替えたばかりのため）
+  if (!ready.updatedFrom) void checkOnStartup();
 }
