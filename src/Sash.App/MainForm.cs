@@ -182,7 +182,6 @@ internal sealed class MainForm : Form
         {
             var env = await CoreWebView2Environment.CreateAsync(userDataFolder: AppPaths.WebView2Data);
             await _webView.EnsureCoreWebView2Async(env);
-            ReportWebView2Version(env.BrowserVersionString);
         }
         catch (WebView2RuntimeNotFoundException)
         {
@@ -195,6 +194,16 @@ internal sealed class MainForm : Form
             AppLog.Write("WebView2 の初期化に失敗", ex);
             FailToStart(L($"画面を表示する部品（WebView2）を起動できませんでした：{ex.Message}", $"The display component (WebView2) could not be started: {ex.Message}"));
             return;
+        }
+
+        // 版の記録と通知は付随の処理なので、失敗しても起動は続ける（上の初期化の try には入れない）
+        try
+        {
+            ReportWebView2Version(_webView.CoreWebView2.Environment.BrowserVersionString);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("WebView2 の版の取得に失敗", ex);
         }
 
         var core = _webView.CoreWebView2;

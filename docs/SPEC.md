@@ -46,7 +46,7 @@ C#（.NET 10）をホストにし、UIはすべてWebView2（HTML / CSS / TypeSc
 **対応する WebView2 ランタイムの下限は Chromium 109**（Windows 7 / 8.1 向けの WebView2 の最終版で、企業で版が固定されがちなため）。
 
 - UI の色は `styles.css` の `:root` で `light-dark()` を使ってライト／ダークを 1 か所に書いている。`light-dark()` は Chromium 123 以降、`color-mix()` は 111 以降、CSS の入れ子は 120 以降でしか使えず、古い版では**宣言ごと無効になって背景色・枠線がすべて消える**（v0.1.0 で、版が固定された PC で画面が透明になった）。
-- そこで CSS はビルド時に lightningcss で変換する（`ui/vite.config.ts`。`css.transformer` と `build.cssMinify` を `lightningcss` にし、対象を `chrome >= 109` にする）。`light-dark()` は `--lightningcss-light` / `--lightningcss-dark` の変数による代替に、入れ子は展開した形に下がる。ビルド後の `wwwroot/assets/*.css` に `light-dark(`・`color-mix(` が残っていないことを確かめる。
+- そこで CSS はビルド時に lightningcss で変換する（`ui/vite.config.ts`。`css.transformer` と `build.cssMinify` を `lightningcss` にし、対象を `chrome >= 109` にする）。`light-dark()` は `--lightningcss-light` / `--lightningcss-dark` の変数による代替に、入れ子は展開した形に下がる。ビルド後の `wwwroot/assets/*.css` に `light-dark(`・`color-mix(` が残っていないことは、CI（`ci.yml`）とリリース（`release.yml`）の「CSS の互換性の検査」の段が grep で確かめ、残っていれば失敗させる。
 - `color-mix()` は `var()` を含むため変換できない。半透明の色は `--warning-tint-18` のような専用のトークンにし、ライト／ダークそれぞれの `rgba` を書く。
 - 新しく使う CSS / JS は Chromium 109 で動くものに限る。未対応でも壊れないもの（`field-sizing`、`scrollbar-width` など）は、使えなくても見た目が少し違うだけで済む使い方にする。JS は target `es2022` で、ES2023 以降の API（`toSorted`・`findLast`・`Object.groupBy`・Set の `union` など）は使わない。
 - ホストは起動時に WebView2 の版（`BrowserVersionString`）を `%AppData%\Sash\logs\app.log` に 1 行記録する。主版数が 109 未満なら、起動時に一度だけ「画面が正しく表示されないことがあります」と知らせる（ブロックしない）。版の判定は `Sash.Core.WebView2Runtime`。版は「バージョン情報」にも表示する。

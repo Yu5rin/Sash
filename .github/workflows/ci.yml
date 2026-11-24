@@ -34,6 +34,15 @@ jobs:
           npm test
           npm run build
 
+      # 古い WebView2（Chromium 109〜）で背景色が消えないよう、変換漏れの CSS が出力に残っていないことを確かめる（docs/SPEC.md §3）。
+      # Monaco の CSS も含め、wwwroot/assets の CSS すべてを対象にする。
+      - name: CSS の互換性の検査
+        run: |
+          if grep -nE 'light-dark\(|color-mix\(' src/Sash.App/wwwroot/assets/*.css; then
+            echo "::error::ビルド後の CSS に light-dark() / color-mix() が残っています（Chromium 109 で無効になります）"
+            exit 1
+          fi
+
       - name: .NET のビルド
         run: dotnet build Sash.slnx -c Release
 

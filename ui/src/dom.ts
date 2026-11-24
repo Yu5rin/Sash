@@ -48,3 +48,10 @@ export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: numb
     }, ms);
   };
 }
+
+/**
+ * checkVisibility() に渡す設定。visibility: hidden も「見えない」に数える指定は、Chromium 121 で visibilityProperty に
+ * 改名された（105〜120 は checkVisibilityCSS）。下限の Chromium 109 でも効くよう両方渡す。
+ * 変数に入れているのは、TS の型に無い古い名前を、直接書いた余計なプロパティの検査にかけずに渡すため。
+ */
+export const VISIBILITY_OPTIONS = { visibilityProperty: true, checkVisibilityCSS: true };
