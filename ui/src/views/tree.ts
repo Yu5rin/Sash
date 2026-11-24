@@ -4,7 +4,7 @@ import '../styles-views.css';
 import { app } from '../app';
 import { handleEditKey, moveSelected } from '../clipboard';
 import { canDropInto, canDropManyAt, drop, endDrag, startDrag } from '../dnd';
-import { debounce, h, svg } from '../dom';
+import { debounce, h, svg, VISIBILITY_OPTIONS } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
 import { allElements, displayName, elementAt, identifierOf, isSameElementAt, pathOf, samePath, snapshotOf, type Path } from '../model';
 import { defFor } from '../schema';
@@ -452,7 +452,7 @@ export function startRename(host: HTMLElement, path: Path): boolean {
   const labelNode = row?.querySelector<HTMLElement>('.tree-label');
   if (!row || !labelNode || renaming) return false;
   // 畳んだ枠の中（非表示）では入力欄にフォーカスが移らず、blur も来ないので、始めない
-  if (typeof row.checkVisibility === 'function' && !row.checkVisibility({ visibilityProperty: true })) return false;
+  if (typeof row.checkVisibility === 'function' && !row.checkVisibility(VISIBILITY_OPTIONS)) return false;
   const snap = snapshotOf(el);
   const original = el.getAttribute('label') ?? '';
   const input = h('input', { type: 'text', class: 'tree-rename', value: original, spellcheck: false, 'aria-label': t('ラベル') });

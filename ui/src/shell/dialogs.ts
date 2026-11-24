@@ -111,6 +111,7 @@ export function openAboutDialog(): void {
     h('dl', null,
       h('dt', null, t('バージョン')), h('dd', null, app.info.version || '-'),
       h('dt', null, 'Excel'), h('dd', null, app.info.excelInstalled ? t('見つかりました') : t('見つかりません（ファイルの編集のみ）')),
+      ...(app.info.webView2Version ? [h('dt', null, 'WebView2'), h('dd', null, app.info.webView2Version)] : []),
       h('dt', null, t('ライセンス')), h('dd', null, 'MIT License'),
       h('dt', null, t('配布元')), h('dd', null, link(REPO_URL, 'github.com/Yu5rin/Sash'))),
     h('p', { class: 'muted small' }, t('idMso / imageMso の一覧は、Microsoft の office-fluent-ui-command-identifiers（MIT License）を元にしています。')),

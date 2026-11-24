@@ -18,7 +18,8 @@
  *   影      --shadow-menu --shadow-modal --shadow-toast（--shadow は従来の名前で、--shadow-menu と同じ）
  *   互換    --text-muted（= --text-subtle） --select-soft（= --sel-bg） --accent-text（= --on-accent）
  *
- * ライト／ダークは light-dark() で 1 か所に書く（以前はダークの定義を 2 回書いていた）。
+ * ライト／ダークは light-dark() で 1 か所に書く。light-dark() は Chromium 123 未満では無効なので、
+ * ビルド時に lightningcss が古い版でも動く形（--lightningcss-light / --lightningcss-dark）に下げる（SPEC §3）。
  * :root の color-scheme で決まり、main.ts が data-theme="light" / "dark" を必ず付ける。
  * data-theme がない間（起動直後）は、システムの設定に従う。
  */
@@ -69,6 +70,15 @@
   --success-border: light-dark(#9fd89f, #335f35);
   --success-text: light-dark(#0e6b0e, #9fdc96);
   --on-success: light-dark(#ffffff, #0b1f0d);
+
+
+  /* color-mix() は Chromium 111 以降でしか使えず、var() を含むため変換もできない。
+     半透明の色は、ライト／ダークそれぞれの rgba をトークンにして書く（--warning / --error の値と揃える） */
+  --warning-tint-10: light-dark(rgba(157, 93, 0, 0.1), rgba(242, 197, 92, 0.1));
+  --warning-tint-18: light-dark(rgba(157, 93, 0, 0.18), rgba(242, 197, 92, 0.18));
+  --error-tint-10: light-dark(rgba(196, 43, 28, 0.1), rgba(255, 138, 128, 0.1));
+  --error-tint-15: light-dark(rgba(196, 43, 28, 0.15), rgba(255, 138, 128, 0.15));
+  --error-tint-18: light-dark(rgba(196, 43, 28, 0.18), rgba(255, 138, 128, 0.18));
 
   --ribbon-bg: light-dark(#f5f5f5, #2b2b2b);
   --ribbon-surface: light-dark(#ffffff, #333333);
@@ -763,8 +773,8 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 
 .cb-state { font-size: 11px; padding: 0 6px; border-radius: 8px; white-space: nowrap; background: var(--surface-3); color: var(--text-muted); }
 .cb-state.implemented { background: var(--accent-soft); color: var(--accent); }
-.cb-state.missing { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
-.cb-state.mismatch { background: color-mix(in srgb, var(--error) 18%, transparent); color: var(--error); }
+.cb-state.missing { background: var(--warning-tint-18); color: var(--warning); }
+.cb-state.mismatch { background: var(--error-tint-18); color: var(--error); }
 .insp-callback .cb-state { align-self: flex-start; }
 .panel-list .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .panel-list .small { font-size: 12px; }
@@ -836,8 +846,8 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .bs-columns { display: flex; gap: 24px; align-items: flex-start; }
 .bs-column { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 60px; min-width: 0; }
 .bs-group { border-top: 1px solid var(--border); padding: 8px 4px; cursor: default; }
-.bs-group.warning { background: color-mix(in srgb, var(--warning) 10%, transparent); }
-.bs-group.error { background: color-mix(in srgb, var(--error) 10%, transparent); }
+.bs-group.warning { background: var(--warning-tint-10); }
+.bs-group.error { background: var(--error-tint-10); }
 .bs-group.selected, .bs-category.selected { outline: 2px solid var(--select); outline-offset: 1px; }
 .bs-group-title { font-weight: 600; margin-bottom: 2px; }
 .bs-category-title { font-size: 12px; color: var(--text-muted); margin: 6px 0 2px; }
@@ -871,7 +881,7 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .diff { display: flex; flex-direction: column; height: 100%; gap: 8px; }
 .diff-bar { display: flex; align-items: center; gap: 8px; }
 .diff-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1; font-size: 12px; color: var(--text-muted); }
-.tag.removed { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error); }
+.tag.removed { background: var(--error-tint-15); color: var(--error); }
 .diff-editor { flex: 1; min-height: 0; border: 1px solid var(--border); }
 
 /* ---- アイコンライブラリ ---- */

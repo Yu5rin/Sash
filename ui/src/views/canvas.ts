@@ -7,7 +7,7 @@ import { app } from '../app';
 import { catalog, labels, onLabelsLoaded } from '../catalog/catalog';
 import { allowedIndex, handleEditKey, moveSelected, runEdit } from '../clipboard';
 import { canDropInto, canDropManyAt, drop, draggedTag, endDrag, startDrag, dragPayload } from '../dnd';
-import { h } from '../dom';
+import { h, VISIBILITY_OPTIONS } from '../dom';
 import {
   allElements, childElements, createElement, elementAt, ensureContextMenus, ensureTabs, isSameElementAt, pathOf, samePath, isAncestorPath, snapshotOf, type Path,
 } from '../model';
@@ -2275,7 +2275,7 @@ function startRename(host: HTMLElement, path: Path): boolean {
 /** 画面に出ているか（display: none や visibility: hidden の枠の中ではない）。 */
 function isShown(node: HTMLElement): boolean {
   // jsdom など checkVisibility のない環境は、見えるものとして扱う（getClientRects は jsdom で常に空になる）
-  return typeof node.checkVisibility === 'function' ? node.checkVisibility({ visibilityProperty: true }) : true;
+  return typeof node.checkVisibility === 'function' ? node.checkVisibility(VISIBILITY_OPTIONS) : true;
 }
 
 // ---- ドラッグ＆ドロップ ----

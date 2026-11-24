@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Sash.Core;
 using Sash.Core.Excel;
 using Sash.Core.Settings;
 using Sash.Excel;
@@ -156,6 +157,25 @@ internal sealed class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// WebView2 ランタイムの版を記録する。古い版（Chromium 109 未満）では CSS が効かず画面が崩れるので、一度だけ知らせる。
+    /// 起動を止めないよう、メッセージは画面の読み込みを始めたあとに出す。
+    /// </summary>
+    private void ReportWebView2Version(string? version)
+    {
+        AppLog.Write($"WebView2 ランタイムの版: {version ?? "(不明)"}");
+        MessageRouter.WebView2Version = version;
+        if (!WebView2Runtime.IsTooOld(version))
+        {
+            return;
+        }
+
+        BeginInvoke(() => MessageBox.Show(this,
+            L($"WebView2 ランタイムが古いため、画面が正しく表示されないことがあります（現在の版：{version}、必要な版：{WebView2Runtime.MinimumMajorVersion} 以上）。Microsoft Edge WebView2 ランタイムを更新してください。",
+              $"The WebView2 Runtime is out of date, so the screen may not display correctly (current version: {version}; required: {WebView2Runtime.MinimumMajorVersion} or later). Please update the Microsoft Edge WebView2 Runtime."),
+            "Sash", MessageBoxButtons.OK, MessageBoxIcon.Warning));
+    }
+
     private async Task InitializeWebViewAsync()
     {
         try
@@ -174,6 +194,16 @@ internal sealed class MainForm : Form
             AppLog.Write("WebView2 の初期化に失敗", ex);
             FailToStart(L($"画面を表示する部品（WebView2）を起動できませんでした：{ex.Message}", $"The display component (WebView2) could not be started: {ex.Message}"));
             return;
+        }
+
+        // 版の記録と通知は付随の処理なので、失敗しても起動は続ける（上の初期化の try には入れない）
+        try
+        {
+            ReportWebView2Version(_webView.CoreWebView2.Environment.BrowserVersionString);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("WebView2 の版の取得に失敗", ex);
         }
 
         var core = _webView.CoreWebView2;
