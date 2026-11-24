@@ -7,6 +7,8 @@ export type CustomUIVersion = 'office2007' | 'office2010';
 export interface AppInfo {
   version: string;
   excelInstalled: boolean;
+  /** WebView2 ランタイム（Chromium）の版。ブラウザで動かしているとき（ホストなし）は無い */
+  webView2Version?: string | null;
 }
 
 export interface ImageDto {

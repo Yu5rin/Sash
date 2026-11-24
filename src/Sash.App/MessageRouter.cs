@@ -128,7 +128,11 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     {
         version = typeof(MessageRouter).Assembly.GetName().Version?.ToString(3),
         excelInstalled = ExcelInstalled,
+        webView2Version = WebView2Version,
     };
+
+    /// <summary>実行中の WebView2 ランタイムの版（MainForm が環境を作ったあとに入れる。バージョン情報で見せる）。</summary>
+    internal static string? WebView2Version { get; set; }
 
     private object? Close()
     {
