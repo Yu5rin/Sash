@@ -109,7 +109,16 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const store = app.store;
   // 分割ボタンにはアイコンを付けられない（スキーマ違反になる）ので、中のボタンに付け替える。
   // どの入口から呼ばれても同じ結果になるよう、ここでも付け替える
-  if (store && target) target = iconTargetPath(store.doc, target) ?? target;
+  if (store && target) {
+    const resolved = iconTargetPath(store.doc, target);
+    // アイコンを付けられない要素（中が空の分割ボタン・tab など）には付けない。付けると、スキーマ違反の属性を作ってしまう
+    if (!resolved) {
+      notify({ kind: 'warning', message: tr('この要素にはアイコンを設定できません') });
+      dialogOpts.onClose?.(false);
+      return;
+    }
+    target = resolved;
+  }
   const el = store && target ? elementAt(store.doc, target) : null;
   if (!store || (target && !el)) {
     dialogOpts.onClose?.(false);
@@ -674,7 +683,11 @@ export function applyLibraryIcon(requested: Path, d: LibraryIconDetail): void {
   const store = app.store;
   if (!store) return;
   // 分割ボタンには付けられないので、中のボタンに付け替える
-  const target = iconTargetPath(store.doc, requested) ?? requested;
+  const target = iconTargetPath(store.doc, requested);
+  if (!target) {
+    notify({ kind: 'warning', message: tr('この要素にはアイコンを設定できません') });
+    return;
+  }
   const { png, source } = detailToBlobs(d);
   const ascii = d.name.match(/[A-Za-z0-9]+/g)?.join('_');
   const base = `img_${ascii ?? 'lib'}`;

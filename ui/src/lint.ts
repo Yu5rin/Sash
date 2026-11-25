@@ -1,7 +1,7 @@
 // 検証（Lint）。スキーマ定義に基づく構造チェックと、仕様書 §5.6 の独自ルールを行う。
 
 import { allElements, pathOf, type Path } from './model';
-import { attributes, defFor, isVbaIdentifier, isXmlId, NAMESPACES, slotIndex, type ElementDef } from './schema';
+import { attributes, defFor, inBackstage, isVbaIdentifier, isXmlId, NAMESPACES, slotIndex, type ElementDef } from './schema';
 import { t } from './i18n';
 
 export type Severity = 'error' | 'warning' | 'info';
@@ -112,7 +112,11 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
       if (!adef || !def.attrs.includes(name)) {
         // 分割ボタンのラベル・ヒント・アイコンは、中のボタンが持つ（スキーマでは分割ボタンに付けられない）。直し方を添える
         const hint = el.localName === 'splitButton' && SPLIT_INHERITED.has(name) ? ` ${t('分割ボタンのラベル・ヒント・アイコンは、中の button / toggleButton に付けます')}` : '';
-        add('error', el, `${t('<{tag}> に {attr} 属性は使えません', { tag: el.localName, attr: name })}${hint}`, name);
+        // Backstage の項目（dropDown・comboBox の item と radioButton）は image を持てない（以前の版は許していたので、古いファイルで出る）
+        const bsHint = inBackstage(el) && (el.localName === 'item' || el.localName === 'radioButton') && (name === 'image' || name === 'imageMso')
+          ? ` ${t('Backstage の項目はアイコンを持てません。XML エディタで image / imageMso を消してください')}`
+          : '';
+        add('error', el, `${t('<{tag}> に {attr} 属性は使えません', { tag: el.localName, attr: name })}${hint}${bsHint}`, name);
         continue;
       }
       if (adef.since2010 && ctx.version === 'office2007') add('error', el, t('{attr} は2010以降の形式でのみ使えます', { attr: name }), name);

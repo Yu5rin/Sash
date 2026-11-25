@@ -174,7 +174,7 @@
 .rb-icon.placeholder { border-radius: 3px; background: var(--placeholder-bg); color: var(--text-subtle); border: 1px solid var(--border); }
 
 .rb-menu-popup { border-radius: var(--radius-md); box-shadow: var(--shadow-menu); border-color: var(--border); padding: 4px; }
-.rb-menu-item { padding: 0 var(--sp-3); min-height: 26px; display: flex; align-items: center; border-radius: var(--radius-sm); cursor: pointer; }
+.rb-menu-item { padding: 0 var(--sp-3); min-height: 26px; display: flex; align-items: center; gap: 6px; border-radius: var(--radius-sm); cursor: pointer; }
 .rb-menu-item:hover { background: var(--hover-bg); }
 .rb-menu-item.selected { background: var(--sel-bg); outline: 1px solid var(--sel-border); outline-offset: -1px; }
 .rb-menu-item.hidden-ctl { opacity: 0.5; }

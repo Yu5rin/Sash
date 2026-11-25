@@ -10,10 +10,11 @@ import { canSetIcon, delegatesToInner, iconTargetOf, iconTargetPath, innerButton
 import { lint } from '../src/lint';
 import { displayName, elementAt, pathOf, parseXml } from '../src/model';
 import { defFor } from '../src/schema';
-import { mountCanvas } from '../src/views/canvas';
+import { mountCanvas, startRenameOf } from '../src/views/canvas';
 import { renderBackstage } from '../src/views/backstage';
 import { mountInspector } from '../src/views/inspector';
 import { setPreview } from '../src/views/ribbonPreview';
+
 
 const NS = 'http://schemas.microsoft.com/office/2009/07/customui';
 const XML = `<customUI xmlns="${NS}">
@@ -43,7 +44,7 @@ const XML = `<customUI xmlns="${NS}">
 
 let insp: HTMLElement;
 let canvas: HTMLElement;
-const dropped: number[][] = [];
+const dropped: { path: number[]; target: number[] }[] = [];
 const noop = () => undefined;
 
 beforeAll(() => {
@@ -54,7 +55,7 @@ beforeAll(() => {
   canvas = document.createElement('div');
   canvas.id = 'canvas';
   document.body.append(canvas);
-  mountCanvas(canvas, { onImageDrop: (_files, target) => dropped.push([...target]) });
+  mountCanvas(canvas, { onImageDrop: (_files, path, target) => dropped.push({ path: [...path], target: [...target] }) });
 });
 
 beforeEach(() => {
@@ -253,7 +254,8 @@ describe('ほかの入口', () => {
     const ev = new Event('drop', { bubbles: true, cancelable: true });
     Object.defineProperty(ev, 'dataTransfer', { value: { files: [new File(['x'], 'a.png')], types: ['Files'] } });
     node.dispatchEvent(ev);
-    expect(dropped).toEqual([pathOf(el('spb'))]);
+    // 選択に使う path はドロップされた分割ボタン、書き込み先は中のボタン（main.ts は選択を分割ボタンのままにする）
+    expect(dropped).toEqual([{ path: pathOf(el('sp')), target: pathOf(el('spb')) }]);
   });
 
   it('アイコンを付けられない要素（中が空の分割ボタン）への画像のドロップは受けない', () => {
@@ -262,6 +264,149 @@ describe('ほかの入口', () => {
     Object.defineProperty(ev, 'dataTransfer', { value: { files: [new File(['x'], 'a.png')], types: ['Files'] } });
     node.dispatchEvent(ev);
     expect(dropped).toEqual([]);
+  });
+});
+
+describe('見直しでの修正', () => {
+  const insertSplitBefore = (id: string) =>
+    app.store!.edit('other', (doc) => {
+      const sp = doc.querySelector(`[id="${id}"]`)!;
+      const add = doc.createElementNS(NS, 'splitButton');
+      add.setAttribute('id', 'spNew');
+      const b = doc.createElementNS(NS, 'button');
+      b.setAttribute('id', 'spNewB');
+      b.setAttribute('label', '差し込んだ');
+      add.append(b);
+      const m = doc.createElementNS(NS, 'menu');
+      m.setAttribute('id', 'spNewM');
+      add.append(m);
+      sp.parentElement!.insertBefore(add, sp);
+      return undefined;
+    });
+
+  it('1. 入力中に構造が変わっても、選んでいた分割ボタンの中のボタンに書く（別の要素に書かない）', () => {
+    select('sp');
+    const i = input('label');
+    insertSplitBefore('sp');
+    i.value = '入力した名前';
+    i.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el('spb').getAttribute('label')).toBe('入力した名前');
+    expect(el('spNewB').getAttribute('label')).toBe('差し込んだ');
+  });
+
+  it('1. 書き込み先が文書から外れていたら、何も書かない（履歴も増やさない）', () => {
+    select('sp');
+    const i = input('label');
+    const spb = el('spb');
+    app.store!.edit('other', () => {
+      spb.remove();
+      return undefined;
+    });
+    const before = xml();
+    i.value = '外れた後';
+    i.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(xml()).toBe(before);
+    expect(spb.getAttribute('label')).toBe('分割A');
+  });
+
+  it('1. アイコンの設定（種類 VBA）も、構造が変わったあとで正しい中のボタンに書く', () => {
+    select('sp');
+    const sel = insp.querySelector<HTMLSelectElement>('select[data-attr="icon-mode"]')!;
+    insertSplitBefore('sp');
+    sel.value = 'getImage';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(el('spb').hasAttribute('getImage')).toBe(true);
+    expect(el('spNewB').hasAttribute('getImage')).toBe(false);
+  });
+
+  it('3. ID の提案は、分割ボタンでは中のボタンのラベルから作る', () => {
+    select('sp');
+    insp.querySelector<HTMLButtonElement>('[data-fkey="id:suggest"]')!.click();
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((n) => n.textContent ?? '');
+    expect(items.some((x) => x.includes('ラベルから'))).toBe(true);
+    document.querySelectorAll('[role="menu"]').forEach((n) => n.remove());
+  });
+
+  it('4. リボンのメニューのポップアップは、アイコンとラベルの間をあける', async () => {
+    // vitest は CSS を空にするので、ファイルを直接読む（node の型は tsconfig に含めていない）
+    // @ts-expect-error node:fs の型がない
+    const { readFileSync } = (await import('node:fs')) as { readFileSync: (p: string, enc: string) => string };
+    const stylesViews = readFileSync('src/styles-views.css', 'utf8');
+    expect(stylesViews).toMatch(/\.rb-menu-item \{[^}]*gap: 6px/);
+  });
+
+  it('5. 分割ボタンの行は中の先頭のボタンを兼ね、その子の行を並べない（ポップアップ）', () => {
+    select('sp');
+    const rows = Array.from(canvas.querySelectorAll<HTMLElement>('.rb-menu-popup .rb-menu-item')).map((r) => r.dataset['path']);
+    expect(rows).not.toContain(pathOf(el('spb')).join('.'));
+    expect(rows).toContain(pathOf(el('spm')).join('.'));
+  });
+
+  it('5. 右クリックメニューでも、分割ボタンの行は 1 つ', () => {
+    const d = `<customUI xmlns="${NS}"><contextMenus><contextMenu idMso="ContextMenuCell"><splitButton id="cs"><button id="csb" label="右の分割" onAction="cb"/><menu id="csm"><button id="csi" label="q" onAction="cb"/></menu></splitButton></contextMenu></contextMenus></customUI>`;
+    app.open({ path: 'x.xlam', parts: [{ version: 'office2010', xml: d, images: [] }] });
+    app.store!.select(pathOf(el('cs')), 'canvas');
+    const labels = Array.from(canvas.querySelectorAll<HTMLElement>('.rb-menu-item .rb-label')).map((n) => n.textContent);
+    expect(labels.filter((x) => x === '右の分割')).toHaveLength(1);
+  });
+
+  it('6. アイコンを付けられない要素（中が空の分割ボタン・tab）には、エディタを開かず・ライブラリからも付けない', () => {
+    const closed: boolean[] = [];
+    const before = xml();
+    openIconDialog(pathOf(el('sp0')), undefined, undefined, { onClose: (a) => closed.push(a) });
+    openIconDialog(pathOf(el('t')), undefined, undefined, { onClose: (a) => closed.push(a) });
+    expect(closed).toEqual([false, false]);
+    const detail = { id: 'x', name: 'star', tags: [], png: 'iVBORw0KGgo=', source: null, sourceName: null, sourceContentType: null, options: null };
+    applyLibraryIcon(pathOf(el('sp0')), detail);
+    applyLibraryIcon(pathOf(el('t')), detail);
+    expect(xml()).toBe(before);
+    expect(app.store!.images.size).toBe(0);
+  });
+
+  it('8. 分割ボタンのアイコンを出すかは、中のボタンの showImage で決まる', () => {
+    app.store!.edit('other', () => {
+      el('spb').setAttribute('showImage', 'false');
+      return undefined;
+    });
+    const node = canvas.querySelector<HTMLElement>(`[data-sel][data-path="${pathOf(el('sp')).join('.')}"]`)!;
+    expect(node.querySelector('.rb-split-main .rb-icon')).toBeNull();
+  });
+
+  it('8. キャンバスでの名前の直接編集（F2）が、分割ボタンでは中のボタンの label に対して働く。元に戻すは 1 回', () => {
+    const before = xml();
+    expect(startRenameOf(pathOf(el('sp')))).toBe(true);
+    const box = canvas.querySelector<HTMLInputElement>('input.cv-rename')!;
+    expect(box.value).toBe('分割A');
+    box.value = '直接編集';
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(el('spb').getAttribute('label')).toBe('直接編集');
+    expect(el('sp').hasAttribute('label')).toBe(false);
+    app.store!.undo();
+    expect(xml()).toBe(before);
+  });
+
+  it('8. 分割ボタンの区画に、中のボタンのヒント（screentip / supertip）の行も出す', () => {
+    select('sp');
+    const box = insp.querySelector<HTMLElement>('[data-section="inner"]')!;
+    expect(box.querySelector('[data-attr="screentip"]')).not.toBeNull();
+    expect(box.querySelector('[data-attr="supertip"]')).not.toBeNull();
+    expect(insp.querySelectorAll('[data-attr="screentip"]').length).toBe(1);
+    type('screentip', 'ヒント');
+    expect(el('spb').getAttribute('screentip')).toBe('ヒント');
+    expect(el('sp').hasAttribute('screentip')).toBe(false);
+  });
+
+  it('8. 中のボタンについての Lint の指摘も、分割ボタンのインスペクタに出す', () => {
+    app.store!.edit('other', () => {
+      el('spb').setAttribute('image', 'missing');
+      return undefined;
+    });
+    app.runLint();
+    select('sp');
+    const list = insp.querySelector('[data-inner-problems]')!;
+    expect(list.textContent).toContain('missing');
+    // 分割ボタン自身の指摘は、これまでの場所（先頭の一覧）に出る。ここに重ねて出さない
+    expect(insp.querySelectorAll('[data-inner-problems]').length).toBe(1);
   });
 });
 
@@ -310,8 +455,10 @@ describe('表示名とキャンバス', () => {
     app.store!.select(pathOf(el('spm')), 'canvas');
     const popup = canvas.querySelector<HTMLElement>('.rb-menu-popup')!;
     const rows = Array.from(popup.querySelectorAll<HTMLElement>('.rb-menu-item'));
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows[0]!.querySelector('.rb-icon')).not.toBeNull();
+    const spi = rows.find((r) => r.dataset['path'] === pathOf(el('spi')).join('.'))!;
+    expect(spi.querySelector('.rb-icon')).not.toBeNull();
+    // アイコンのない項目（メニュー spm の行）は、同じ幅の空きを置く
+    expect(rows.find((r) => r.dataset['path'] === pathOf(el('spm')).join('.'))!.querySelector('.rb-icon-gap')).not.toBeNull();
   });
 });
 
@@ -342,7 +489,10 @@ describe('アイコンの総点検（スキーマ）', () => {
       + '<radioGroup id="r" label="R" onAction="cb"><radioButton id="rb" getLabel="gl"/></radioGroup>'
       + '</topItems></group></firstColumn></tab></backstage>');
     const msgs = errors(d);
-    expect(msgs).toEqual(['<item> に imageMso 属性は使えません']);
+    // 以前の版で作ったファイルの直し方を添える
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toContain('<item> に imageMso 属性は使えません');
+    expect(msgs[0]).toContain('Backstage の項目はアイコンを持てません。XML エディタで image / imageMso を消してください');
   });
 
   it('リボンの item（CT_Item）は image・imageMso を持てる', () => {

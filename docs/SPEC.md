@@ -117,7 +117,7 @@ UIの技術はWebView2で確定した（WPF、WinUI 3と比較のうえ決定）
 - 「label」と「getLabel」のような静的値と動的コールバックの組は、1行の切り替えスイッチにまとめる。これで排他の矛盾がそもそも起きない。
 - 属性名にホバーすると、日本語の説明と指定例を表示する。
 - idはラベルから自動で提案する（例：「集計する」→ btnSummary）。
-- **分割ボタン（splitButton）のラベルとアイコン**は、分割ボタンを選んだインスペクタの先頭の「ラベルとアイコン」の区画で直接編集できる。customUI のスキーマ（CT_SplitButtonRestricted）で、分割ボタン自身には label / screentip / supertip / image / imageMso / getImage / showImage を付けられず、中の先頭の button / toggleButton から受け継ぐ決まりのため、**書き込み先は中のボタン**にする（分割ボタンにスキーマ違反の属性は作らない）。区画の見出しの下に「中のボタン（btnXXX）に設定されます」と書き、「中のボタンを選ぶ」で移れる。中のボタンが無い（壊れた XML）ときは、その旨を出して入力欄は出さない。アイコン行・ラベルからのアイコンの候補・固定／VBA の切り替えは普通のボタンと同じ部品を使い、元に戻すは 1 操作 1 回。詳細は §21。
+- **分割ボタン（splitButton）のラベルとアイコン**は、分割ボタンを選んだインスペクタの先頭の「ラベル・アイコン・ヒント」の区画で直接編集できる。customUI のスキーマ（CT_SplitButtonRestricted）で、分割ボタン自身には label / screentip / supertip / image / imageMso / getImage / showImage を付けられず、中の先頭の button / toggleButton から受け継ぐ決まりのため、**書き込み先は中のボタン**にする（分割ボタンにスキーマ違反の属性は作らない）。区画の見出しの下に「中のボタン（btnXXX）に設定されます」と書き、「中のボタンを選ぶ」で移れる。中のボタンが無い（壊れた XML）ときは、その旨を出して入力欄は出さない。アイコン行・ラベルからのアイコンの候補・固定／VBA の切り替えは普通のボタンと同じ部品を使い、元に戻すは 1 操作 1 回。詳細は §21。
 
 ### 5.5 XMLエディタ
 
@@ -867,9 +867,11 @@ Vitest（`test/multiSelect.test.ts`・`test/multiSelectViews.test.ts`・`test/mu
 
 - スキーマ上、**分割ボタンには label / getLabel / screentip / supertip / image / imageMso / getImage / showImage / getShowImage を付けられない**（customUI14.xsd の CT_SplitButtonRestricted で prohibited。中の先頭の button / toggleButton から受け継ぐ）。分割ボタンが持つのは id 系・挿入位置・size・visible・enabled・showLabel・keytip だけ。以前から `schema.ts` は正しくこの形で、変えていない。
 - 利用者が分割ボタンを選んでアイコンやラベルを設定しようとしたときは、**中のボタンを対象にする**。`ui/src/iconTarget.ts` に「書き込み先の決め方」を 1 か所にまとめた（`iconTargetOf` / `iconTargetPath` / `canSetIcon` / `delegatesToInner`）。分割ボタンなら中の先頭の button / toggleButton、それ以外は自分自身。
-- 対象にした入口：インスペクタ（「ラベルとアイコン」の区画）、アイコンエディタ（`openIconDialog`。どの入口から渡された path でも、ここで付け替える）、ライブラリからの設定（`applyLibraryIcon`）、キャンバスへの画像ファイルのドロップ、コマンド「選択中のコントロールのアイコンを作る…」「imageMso カタログ…」、まとめて変更（`bulkEdit.ts` の `ownerOf`。分割ボタンと普通のボタンを一緒に選んだときも label・imageMso が共通の属性になり、分割ボタンには中のボタンに入る）。中のボタンが無い分割ボタンには設定できない（「中にボタンがないため」と知らせる）。
-- 分割ボタンのまま選択を動かさない（設定後も分割ボタンを選んだまま）。元に戻す／やり直しは 1 操作 1 回（`commit` が書き込み先の path を受け取り、1 回の編集にまとめる）。
-- 見た目：ツリーの行の名前（`displayName`）と、キャンバスのメニュー・右クリックメニューの中の分割ボタンの項目は、中のボタンのラベル・アイコンで出す。Lint は、分割ボタンに label / imageMso などを書いた XML に「中の button / toggleButton に付けます」と直し方を添える。
+- 対象にした入口：インスペクタ（「ラベル・アイコン・ヒント」の区画）、アイコンエディタ（`openIconDialog`。どの入口から渡された path でも、ここで付け替える）、ライブラリからの設定（`applyLibraryIcon`）、キャンバスへの画像ファイルのドロップ、コマンド「選択中のコントロールのアイコンを作る…」「imageMso カタログ…」、まとめて変更（`bulkEdit.ts` の `ownerOf`。分割ボタンと普通のボタンを一緒に選んだときも label・imageMso が共通の属性になり、分割ボタンには中のボタンに入る）。中のボタンが無い分割ボタンや、アイコンを持てない要素（tab など）には、アイコンエディタ・ライブラリのどちらからも設定できない（知らせて閉じる。スキーマ違反の属性を作らない）。
+- 分割ボタンのまま選択を動かさない（設定後も、画像のドロップ後も分割ボタンを選んだまま。`onImageDrop` はドロップされた要素の path と書き込み先の path を別々に渡す）。元に戻す／やり直しは 1 操作 1 回。
+- **書き込み先は path ではなく要素そのもので持つ。** インスペクタの `commit` は、入力中に構造が変わっても（前に要素が差し込まれても）別の要素に書かないよう、確定時に「その要素が文書にあり、いま選んでいる要素の書き込み先であること」を確かめる。確かめられなければ書かない（従来の「選択が変わっていたら書かない」と同じ守り）。ダイアログ（アイコンエディタ・ライブラリ・コールバック名の変更）を開くときの path も、押した時点で要素から作り直す。
+- 区画には、ラベル・アイコンのほか、中のボタンの screentip / supertip も出す（Lint の案内「ラベル・ヒント・アイコンは中のボタンに付けます」と同じ範囲）。中のボタン（書き込み先）についての Lint の指摘も、この区画に出す。ID の「提案」は、分割ボタンでは中のボタンのラベルから作る。キャンバスの名前の直接編集（F2）も中のボタンの label に対して行い、分割ボタンのアイコンを出すかは中のボタンの showImage で決める。
+- 見た目：ツリーの行の名前（`displayName`）と、キャンバスのメニュー・右クリックメニューの中の分割ボタンの項目は、中のボタンのラベル・アイコンで出す。分割ボタンの行は中の先頭のボタンを兼ねて表すので、その子の行は並べない（同じ見た目の行が 2 つ並ばない）。リボンのメニューのポップアップは、アイコンとラベルの間を 6px あける。Lint は、分割ボタンに label / imageMso などを書いた XML に「中の button / toggleButton に付けます」と直し方を添える。
 - **dialogBoxLauncher は同じ扱いにしない。** 中の button は Excel の画面ではアイコンが出ない（グループ右下の小さな矢印に決まっている）ので、dialogBoxLauncher を選んでも設定先にはならない。中の button を直接選べば、スキーマどおり image 系の属性は書ける。
 - `splitButton` の中の `menu` のアイコン・ラベルは Excel の画面に出ない見込みだが、実機で確かめていないので、配布前チェックの「アイコンのないボタン」の対象のまま（変えていない）。
 
@@ -879,7 +881,7 @@ Vitest（`test/multiSelect.test.ts`・`test/multiSelectViews.test.ts`・`test/mu
 
 | 場所 | 内容 |
 |---|---|
-| Backstage の `item`（dropDown・comboBox の中）と `radioButton` | XSD の CT_BackstageItem は id・label・getLabel だけ。誤って持たせていた image / imageMso を外し、不足していた getLabel を足した（リボンの `item` は CT_Item で image / imageMso / screentip / supertip を持てるので変えていない） |
+| Backstage の `item`（dropDown・comboBox の中）と `radioButton` | XSD の CT_BackstageItem は id・label・getLabel だけ。誤って持たせていた image / imageMso を外し、不足していた getLabel を足した（リボンの `item` は CT_Item で image / imageMso / screentip / supertip を持てるので変えていない）。**以前の版で image / imageMso を付けて作ったファイルは Lint のエラーになる**ので、メッセージに「Backstage の項目はアイコンを持てません。XML エディタで image / imageMso を消してください」と添える |
 | キャンバス：editBox・comboBox・dropDown | getImage（VBA で返すアイコン）の印が出ていなかった。ほかのコントロールと同じ「動的」の印を出す |
 | キャンバス：リボンのメニュー・ギャラリーなどのポップアップ | 項目のアイコンが描かれていなかった。右クリックメニューと同じく、アイコンを描く（無い項目は同じ幅の空き） |
 | キャンバス：右クリックメニュー・ポップアップの分割ボタンの項目 | id が出ていた。中のボタンのラベルとアイコンで出す |

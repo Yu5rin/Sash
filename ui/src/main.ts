@@ -703,8 +703,9 @@ const menubar = mountMenubar($('menubar'), MENUS, {
 });
 mountPalette($('palette'));
 mountTree($('tree'));
-mountCanvas($('canvas'), { onImageDrop: (files, target) => {
-  app.store?.select(target, 'canvas');
+mountCanvas($('canvas'), { onImageDrop: (files, path, target) => {
+  // 選択は、ドロップされた要素のまま（分割ボタンなら分割ボタン）。書き込み先だけが中のボタンになる
+  app.store?.select(path, 'canvas');
   openIconDialog(target, files);
 } });
 const xmlHandle = mountXmlEditor($('xml-editor'), $('xml-status'), { undo, redo });
@@ -719,8 +720,9 @@ mountInspector($('inspector'), {
   pickImageMso: (cur, apply) => openCatalog('imageMso', cur, apply),
   editImage: (existing) => openImageEditor(undefined, existing),
   pickFromLibrary: () => {
-    const sel = app.store?.selection;
-    if (sel) void openOnce('library', () => openLibrary((d) => applyLibraryIcon(sel, d), notify));
+    const store = app.store;
+    const target = store?.selection ? iconTargetPath(store.doc, store.selection) : null;
+    if (target) void openOnce('library', () => openLibrary((d) => applyLibraryIcon(target, d), notify));
   },
 });
 mountBottom($('bottom-tabs'), $('bottom-body'), notify, (existing) => {

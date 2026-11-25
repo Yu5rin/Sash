@@ -15,7 +15,7 @@ import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
 import { closeMenu, openElementMenu, openMenu } from './contextMenu';
 import { focusField } from './inspector';
-import { iconTargetOf, iconTargetPath } from '../iconTarget';
+import { iconTargetOf, iconTargetPath, innerButtonOf } from '../iconTarget';
 import { defFor, inBackstage, titleOf } from '../schema';
 import { lang, t as tr } from '../i18n';
 import { notify } from '../shell/toast';
@@ -84,7 +84,8 @@ let mode: CanvasMode = 'ribbon';
  */
 let activeTab: { kind: 'el'; id: string | null; path: Path } | { kind: 'builtin'; idMso: string } | null = null;
 
-let onImageDrop: ((files: FileList, target: Path) => void) | null = null;
+/** 画像のドロップ。path はドロップされた要素、target はアイコンの書き込み先（分割ボタンなら中のボタン）。 */
+let onImageDrop: ((files: FileList, path: Path, target: Path) => void) | null = null;
 let hostEl: HTMLElement | null = null;
 /** 直前の描画にあった要素。編集のあとで選択が新しい要素に移ったら、挿入したものとして目立たせる。 */
 let known = new WeakSet<Element>();
@@ -218,7 +219,7 @@ function revealNode(node: HTMLElement | null | undefined): void {
   else node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
-export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: FileList, target: Path) => void }): void {
+export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: FileList, path: Path, target: Path) => void }): void {
   onImageDrop = opts.onImageDrop;
   hostEl = host;
   // tabindex がないと Ctrl+1 で focus() しても移らない（不具合 23）
@@ -1598,7 +1599,8 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
       },
       c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [hasIconAttr(shownBy(c)) ? iconFor(shownBy(c), 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(shownBy(c)) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
     );
-    const kids = c.localName === 'menu' || c.localName === 'splitButton' ? childElements(c).flatMap((k) => item(k, depth + 1)) : [];
+    // 分割ボタンの行は中の先頭のボタンを兼ねて表すので、その子の行は並べない（同じ見た目の行が 2 つ並ぶのを避ける）
+    const kids = c.localName === 'menu' || c.localName === 'splitButton' ? childElements(c).filter((k) => !(c.localName === 'splitButton' && k === innerButtonOf(c))).flatMap((k) => item(k, depth + 1)) : [];
     return [row, ...kids];
   };
   const cards = menus.map((m) => {
@@ -1893,7 +1895,8 @@ function renderControlBody(el: Element, size: Size, errorPaths: Set<string>): HT
       // 分割ボタンは「押す部分」と「メニューを開く部分」を線で分ける（本物と同じ見た目）
       const main = childElements(el).find((c) => c.localName === 'button' || c.localName === 'toggleButton');
       const mainLabel = main ? labelOf(main) : label;
-      const icon = el.getAttribute('showImage') === 'false' ? null : main ? iconFor(main, size) : iconFor(el, size);
+      // アイコンを出すかは、中のボタンの showImage で決まる（分割ボタン自身には showImage を付けられない）
+      const icon = (main ?? el).getAttribute('showImage') === 'false' ? null : main ? iconFor(main, size) : iconFor(el, size);
       return size === 'large'
         ? h('div', common, h('span', { class: 'rb-split-main' }, icon), h('span', { class: 'rb-split-drop' }, showLabel ? labelEl(mainLabel) : null, arrow()), menuPopup(el))
         : h('div', common, h('span', { class: 'rb-split-main' }, icon, showLabel ? labelEl(mainLabel) : null), h('span', { class: 'rb-split-drop' }, arrow()), menuPopup(el));
@@ -2013,6 +2016,8 @@ function menuPopup(el: Element): HTMLElement | null {
   const items: HTMLElement[] = [];
   const walk = (parent: Element, depth: number) => {
     for (const c of childElements(parent)) {
+      // 分割ボタンの行が中の先頭のボタンを兼ねて表す
+      if (parent.localName === 'splitButton' && c === innerButtonOf(parent)) continue;
       const cp = pathOf(c);
       items.push(
         h(
@@ -2220,10 +2225,13 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
 }
 
 /** F2：ラベルをその場で書き換える。ラベルを持てない要素や、VBA で返すラベルなら false。 */
-function startRename(host: HTMLElement, path: Path): boolean {
+function startRename(host: HTMLElement, nodePath: Path): boolean {
   const store = app.store;
-  const el = store ? elementAt(store.doc, path) : null;
-  const node = nodeOf(host, path);
+  const picked = store ? elementAt(store.doc, nodePath) : null;
+  // 分割ボタンは label を持てないので、名前の直接編集は中のボタンの label に対して行う（描かれているラベルも中のボタンのもの）
+  const el = picked ? iconTargetOf(picked) : null;
+  const path = el ? pathOf(el) : nodePath;
+  const node = nodeOf(host, nodePath);
   if (!store || !el || !node || el.hasAttribute('getLabel') || !defFor(el)?.attrs.includes('label')) return false;
   const labelNode = node.querySelector<HTMLElement>(':scope > .rb-label, :scope > .rb-group-label > .rb-label, :scope > .rb-split-main > .rb-label, :scope > .rb-split-drop > .rb-label, :scope > span:not([class])') ?? (inBackstage(el) ? node : null);
   if (!labelNode) return false;
@@ -2480,12 +2488,14 @@ function hideIndicator(host: HTMLElement): void {
   highlighted = null;
 }
 
-function imageTarget(e: DragEvent): Path | null {
+/** 画像のドロップ先。path はドロップされた要素（選択はここに置く）、target はアイコンの書き込み先。 */
+function imageTarget(e: DragEvent): { path: Path; target: Path } | null {
   const node = (e.target as HTMLElement).closest<HTMLElement>('.rb-ctl[data-path], .rb-group[data-path]');
   const path = parsePath(node?.dataset['path']);
   const el = path && app.store ? elementAt(app.store.doc, path) : null;
   // 分割ボタンに落としたときは、中のボタンに設定する（分割ボタン自身には image を付けられない）
-  return path && el ? iconTargetPath(app.store!.doc, path) : null;
+  const target = path && el ? iconTargetPath(app.store!.doc, path) : null;
+  return path && target ? { path, target } : null;
 }
 
 function onDragOver(e: DragEvent, host: HTMLElement): void {
@@ -2515,7 +2525,7 @@ function onDrop(e: DragEvent, host: HTMLElement): void {
     const target = imageTarget(e);
     if (target) {
       e.preventDefault();
-      onImageDrop?.(e.dataTransfer.files, target);
+      onImageDrop?.(e.dataTransfer.files, target.path, target.target);
     }
     return;
   }

@@ -10,7 +10,7 @@ import { openLibrary } from '../dialogs/libraryDialog';
 import { h, svg } from '../dom';
 import { applyLibraryIcon, openFluentIcons, openIconDialog } from '../icon/iconDialog';
 import { kindIcon, uiIcons } from '../icons';
-import { elementAt, identifierOf, pathOf, samePath, setAttr, suggestId, suggestIdFromLabel, usedIds, type Path } from '../model';
+import { identifierOf, pathOf, samePath, setAttr, suggestId, suggestIdFromLabel, usedIds, type Path } from '../model';
 import type { ImageEntry } from '../store';
 import { iconTargetOf, delegatesToInner, innerButtonOf } from '../iconTarget';
 import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, type AttrDef } from '../schema';
@@ -199,30 +199,46 @@ function elementKey(el: Element, path: Path): string {
 }
 
 /**
- * 属性を変更する。値が同じなら何もしない。
- * at を渡すと、選んでいる要素ではなくその path の要素に書く（分割ボタンを選んで、中のボタンの属性を直すとき）。
+ * いま el に書いてよいか。el が文書の中にあり、選んでいる要素自身か、選んでいる要素の書き込み先（分割ボタンなら中のボタン）であること。
+ * 入力中に構造が変わっても（前に要素が差し込まれても）、描画時の path ではなく要素そのもので確かめるので、別の要素には書かない。
  */
-function commit(name: string, value: string | null, also: Record<string, string | null> = {}, label?: string, at?: Path): boolean {
+function writable(el: Element): boolean {
   const store = app.store;
-  const path = at ?? store?.selection;
-  const el = store && path ? elementAt(store.doc, path) : null;
-  if (!store || !el || !path) return false;
+  const sel = store?.selectedElement;
+  return !!store && !!sel && store.doc.contains(el) && (sel === el || iconTargetOf(sel) === el);
+}
+
+/** el の「いまの」path。書いてよくなければ null（ダイアログなどを開く直前に作り直す）。 */
+function livePath(el: Element): Path | null {
+  return writable(el) ? pathOf(el) : null;
+}
+
+/**
+ * 属性を変更する。値が同じなら何もしない。
+ * at を渡すと、選んでいる要素ではなくその要素に書く（分割ボタンを選んで、中のボタンの属性を直すとき）。
+ * at が文書から外れた・もう書き込み先でないときは、何も書かない。
+ */
+function commit(name: string, value: string | null, also: Record<string, string | null> = {}, label?: string, at?: Element): boolean {
+  const store = app.store;
+  const el = at ?? store?.selectedElement;
+  if (!store || !el || !store.selection) return false;
+  if (at && !writable(at)) return false;
   const changes: Record<string, string | null> = { [name]: value, ...also };
   const same = Object.entries(changes).every(([k, v]) => (el.getAttribute(k) ?? null) === (v === '' ? null : v));
   if (same) return false;
-  return runEdit('inspector', (doc) => {
-    const target = elementAt(doc, path);
+  const path = store.selection;
+  return runEdit('inspector', () => {
     // 選択が変わっていたら（描き直しの前に別の要素へ移ったとき）、別の要素に書かない
-    if (!target || (at === undefined && !samePath(store.selection, path))) return undefined;
+    const target = at ? (writable(at) ? at : null) : samePath(store.selection, path) ? store.selectedElement : null;
+    if (!target) return undefined;
     for (const [k, v] of Object.entries(changes)) setAttr(target, k, v);
     return undefined;
   }, label ?? (value === null || value === '' ? t('{attr} を削除', { attr: name }) : t('{attr} を「{value}」に変更', { attr: name, value })));
 }
 
-/** el が選んでいる要素でなければ（分割ボタンを選んで中のボタンを直すとき）、その path。選んでいる要素自身なら undefined。 */
-function atOf(el: Element): Path | undefined {
-  const p = pathOf(el);
-  return samePath(app.store?.selection ?? null, p) ? undefined : p;
+/** el が選んでいる要素でなければ（分割ボタンを選んで中のボタンを直すとき）el そのもの。選んでいる要素自身なら undefined。 */
+function atOf(el: Element): Element | undefined {
+  return app.store?.selectedElement === el ? undefined : el;
 }
 
 /** コールバック名を新しく付けたときに、VBA への追加（できなければ雛形のコピー）を案内する。 */
@@ -385,7 +401,7 @@ function sectionBox(key: string, title: string, rows: HTMLElement[], intro: HTML
 function innerSection(split: Element, iconKey: string): HTMLElement {
   const inner = innerButtonOf(split);
   if (!inner) {
-    return sectionBox(INNER_SECTION, t('ラベルとアイコン'), [], h('div', { class: 'insp-inner-note error', role: 'alert', dataset: { innerMissing: '1' } },
+    return sectionBox(INNER_SECTION, t('ラベル・アイコン・ヒント'), [], h('div', { class: 'insp-inner-note error', role: 'alert', dataset: { innerMissing: '1' } },
       t('分割ボタンの中に button か toggleButton がありません。ラベルとアイコンは中のボタンに設定するので、XML を直してください')));
   }
   const ident = inner.getAttribute('id') ?? inner.getAttribute('idQ') ?? inner.getAttribute('idMso') ?? inner.localName;
@@ -397,8 +413,20 @@ function innerSection(split: Element, iconKey: string): HTMLElement {
       dataset: { fkey: 'inner:goto' },
       onclick: () => app.store?.select(pathOf(inner), 'inspector'),
     }, t('中のボタンを選ぶ')));
-  const rows = [row(inner, attributes.get('label')!, iconKey), iconRow(inner, iconKey)];
-  return sectionBox(INNER_SECTION, t('ラベルとアイコン'), rows, intro);
+  // ラベル・アイコン・ヒント（Lint の案内「ラベル・ヒント・アイコンは中のボタンに付けます」と同じ範囲）
+  const rows = [
+    row(inner, attributes.get('label')!, iconKey),
+    iconRow(inner, iconKey),
+    row(inner, attributes.get('screentip')!, iconKey),
+    row(inner, attributes.get('supertip')!, iconKey),
+  ];
+  // 中のボタンについての Lint の指摘も、ここで見えるようにする（分割ボタンを選んだままでも、書き込み先の問題に気づけるように）
+  const innerPath = pathOf(inner);
+  const problems = app.problems.filter((p) => samePath(p.path, innerPath));
+  const list = problems.length
+    ? h('ul', { class: 'insp-problems', dataset: { innerProblems: '1' } }, problems.map((p) => h('li', { class: p.severity }, svg(uiIcons[p.severity]), h('span', null, p.message))))
+    : null;
+  return sectionBox(INNER_SECTION, t('ラベル・アイコン・ヒント'), rows, h('div', null, intro, list));
 }
 
 const INNER_SECTION = 'inner';
@@ -426,7 +454,7 @@ interface TextOpts {
    */
   apply?: (v: string) => boolean | Promise<boolean>;
   /** 確定の書き込み先（選んでいる要素以外に書くとき）。 */
-  at?: Path;
+  at?: Element;
 }
 
 /** 1行の入力欄。確定は change（フォーカスを外したとき）と Enter、Esc で元の値に戻す。 */
@@ -517,7 +545,8 @@ export function idSuggestions(tag: string, label: string | null, used: ReadonlyS
 function suggestIdMenu(el: Element, current: string, input: HTMLInputElement, opener: HTMLElement): void {
   const used = usedIds(el.ownerDocument);
   used.delete(current);
-  const label = el.getAttribute('label');
+  // 分割ボタンは label を持てないので、中のボタンのラベルから提案する
+  const label = el.getAttribute('label') ?? (labelForSuggest(el) || null);
   const options = idSuggestions(el.localName, label, used);
   const apply = (next: string) => {
     const before = input.value;
@@ -645,15 +674,19 @@ function callbackError(v: string): string | null {
 
 function callbackEditor(el: Element, attr: string): HTMLElement {
   const value = el.getAttribute(attr) ?? '';
-  const path = pathOf(el);
   const at = atOf(el);
+  const path = pathOf(el);
   const { wrap } = textInput(attr, value, {
     at,
     placeholder: defaultCallbackName(el, attr),
     validate: callbackError,
     apply: (v) => {
       // 名前を変えたときは、VBA 側の Sub 名も変えるかを確認する（キャンセルしたら false が返り、欄は元に戻る）
-      if (value && v) return renameCallback(path, attr, value, v);
+      if (value && v) {
+        // path は押した時点で作り直す（入力中に構造が変わっていたら別の要素の名前を変えないよう、書いてよいか確かめる）
+        const now = livePath(el);
+        return now ? renameCallback(now, attr, value, v) : false;
+      }
       const ok = commit(attr, v || null, {}, undefined, at);
       if (ok && v) offerStub(v);
       return ok;
@@ -756,7 +789,7 @@ function labelForSuggest(el: Element): string {
  * アイコン集のデータは大きいので、候補を出すときに初めて読み込み、読み込めたら同じ欄に足す（インスペクタ全体は描き直さない。
  * 入力中の欄のフォーカスを動かさないため）。読み込めなければ組み込みアイコンの候補だけにする。
  */
-function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean): HTMLElement | null {
+function iconSuggestions(el: Element, nowPath: () => Path | null, setMso: (v: string) => boolean): HTMLElement | null {
   const label = labelForSuggest(el);
   if (!label) return null;
   msoNames ??= imageMsoNames();
@@ -794,7 +827,10 @@ function iconSuggestions(el: Element, path: Path, setMso: (v: string) => boolean
         class: 'icon-suggest fluent',
         title: t('{name}（アイコン集）を加工して設定する', { name: fluentName(icon.name) }),
         'aria-label': fluentName(icon.name),
-        onclick: () => openFluentCandidate(path, icon),
+        onclick: () => {
+          const path = nowPath();
+          if (path) openFluentCandidate(path, icon);
+        },
       }, markup ? svg(markup) : null);
     }));
   };
@@ -836,8 +872,9 @@ function iconPreview(name: string): HTMLElement {
 function iconRow(el: Element, key: string): HTMLElement {
   const store = app.store!;
   // el は書き込み先の要素（分割ボタンを選んでいるときは中のボタン）。選んでいる要素と違うときだけ at を渡す
-  const path = pathOf(el);
   const at = atOf(el);
+  // ダイアログなどを開く直前に path を作り直す（描画時の path は、構造が変わると別の要素を指す）
+  const nowPath = (): Path | null => livePath(el);
   const actual = el.hasAttribute('getImage') ? 'getImage' : el.hasAttribute('image') ? 'image' : el.hasAttribute('imageMso') ? 'imageMso' : '';
   // 種類だけ選んで値がまだないときは、その種類の入力欄を出す（値が決まるまで XML は変えない。不具合 29）
   const mode = pendingIcon && pendingIcon.key === key ? pendingIcon.mode : actual;
@@ -854,13 +891,16 @@ function iconRow(el: Element, key: string): HTMLElement {
     pendingIcon = null;
     return commit('imageMso', v, { ...clear, imageMso: v }, t('アイコンを {name} に変更', { name: v }), at);
   };
-  const openEditor = (existing?: ImageEntry) =>
+  const openEditor = (existing?: ImageEntry) => {
+    const path = nowPath();
+    if (!path) return;
     openIconDialog(path, undefined, existing, {
       onClose: (applied) => {
         // 取り消したら、種類の選択も元に戻す
         if (!applied) cancelPending();
       },
     });
+  };
 
   const sel = h(
     'select',
@@ -942,13 +982,16 @@ function iconRow(el: Element, key: string): HTMLElement {
           title: t('同梱のアイコン集（Fluent・Tabler、約 8,000 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます'),
           onclick: () =>
             openFluentIcons(
-              (pick) =>
+              (pick) => {
+                const path = nowPath();
+                if (!path) return;
                 openIconDialog(path, undefined, undefined, {
                   fluent: pick,
                   onClose: (applied) => {
                     if (!applied) cancelPending();
                   },
-                }),
+                });
+              },
               (picked) => !picked && cancelPending(),
             ),
         }, t('アイコン集')),
@@ -959,7 +1002,8 @@ function iconRow(el: Element, key: string): HTMLElement {
           onclick: () =>
             void openLibrary((d) => {
               pendingIcon = null;
-              applyLibraryIcon(path, d);
+              const path = nowPath();
+              if (path) applyLibraryIcon(path, d);
             }, (m, k) => notify({ kind: k ?? 'info', message: m }), { onClose: (picked) => !picked && cancelPending() }),
         }, t('ライブラリ')),
       ),
@@ -967,7 +1011,7 @@ function iconRow(el: Element, key: string): HTMLElement {
   } else if (mode === 'getImage') {
     detail = callbackEditor(el, 'getImage');
   } else if (actual === '') {
-    detail = iconSuggestions(el, path, setMso);
+    detail = iconSuggestions(el, nowPath, setMso);
   }
   const d = attributes.get('image')!;
   const rawName = mode === 'getImage' ? 'getImage' : mode === 'image' ? 'image' : 'imageMso';
