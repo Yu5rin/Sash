@@ -1582,7 +1582,7 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
     const row = h(
       'div',
       {
-        class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}${errorPaths.has(cp.join('.')) ? ' has-error' : ''}${c.getAttribute('visible') === 'false' ? ' hidden-ctl' : ''}`,
+        class: `rb-menu-item${rowSelected(sel, c) ? ' selected' : ''}${rowHasError(errorPaths, c) ? ' has-error' : ''}${c.getAttribute('visible') === 'false' ? ' hidden-ctl' : ''}`,
         style: `padding-left:${8 + depth * 14}px`,
         dataset: { path: cp.join('.'), sel: '1' },
         draggable: true,
@@ -1805,6 +1805,18 @@ function layoutControls(items: Element[], host: HTMLElement, errorPaths: Set<str
   }
 }
 
+/** メニューの行の「選択中」。分割ボタンの行は、中の先頭のボタンを兼ねるので、中のボタンを選んでいるときも選択中にする。 */
+function rowSelected(sel: Path | null, c: Element): boolean {
+  const inner = c.localName === 'splitButton' ? innerButtonOf(c) : null;
+  return samePath(sel, pathOf(c)) || (inner !== null && samePath(sel, pathOf(inner)));
+}
+
+/** メニューの行のエラーの印。分割ボタンの行は、中の先頭のボタンのエラーも表す。 */
+function rowHasError(errorPaths: Set<string>, c: Element): boolean {
+  const inner = c.localName === 'splitButton' ? innerButtonOf(c) : null;
+  return errorPaths.has(pathOf(c).join('.')) || (inner !== null && errorPaths.has(pathOf(inner).join('.')));
+}
+
 /** アイコン（image / imageMso / getImage）を持っているか。getImage は VBA で返すので、中身は描けず印だけを出す。 */
 function hasIconAttr(el: Element): boolean {
   return el.hasAttribute('image') || el.hasAttribute('imageMso') || el.hasAttribute('getImage') || (el.localName === 'control' && el.hasAttribute('idMso'));
@@ -2014,6 +2026,7 @@ function menuPopup(el: Element): HTMLElement | null {
   if (!sel || !(samePath(sel, path) || isAncestorPath(path, sel))) return null;
   if (dismissedPopup !== null && dismissedPopup === path.join('.')) return null;
   const items: HTMLElement[] = [];
+  const popupErrors = new Set(app.problems.filter((p) => p.severity === 'error').map((p) => p.path.join('.')));
   const walk = (parent: Element, depth: number) => {
     for (const c of childElements(parent)) {
       // 分割ボタンの行が中の先頭のボタンを兼ねて表す
@@ -2023,7 +2036,7 @@ function menuPopup(el: Element): HTMLElement | null {
         h(
           'div',
           {
-            class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}`,
+            class: `rb-menu-item${rowSelected(sel, c) ? ' selected' : ''}${rowHasError(popupErrors, c) ? ' has-error' : ''}`,
             style: `padding-left:${8 + depth * 12}px`,
             dataset: { path: cp.join('.'), sel: '1' },
             draggable: true,

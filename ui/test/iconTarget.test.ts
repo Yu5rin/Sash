@@ -350,6 +350,23 @@ describe('見直しでの修正', () => {
     expect(labels.filter((x) => x === '右の分割')).toHaveLength(1);
   });
 
+  it('a. 入れ子の分割ボタン：中のボタンを選ぶと行が選択中、エラーなら has-error（ポップアップ・右クリックメニュー）', () => {
+    const d = `<customUI xmlns="${NS}"><ribbon><tabs><tab id="t" label="T"><group id="g" label="G"><menu id="m" label="M">
+      <splitButton id="ms"><button id="msb" label="入れ子" image="missing" onAction="cb"/><menu id="msm"><button id="msi" label="i" onAction="cb"/></menu></splitButton>
+    </menu></group></tab></tabs></ribbon>
+    <contextMenus><contextMenu idMso="ContextMenuCell"><splitButton id="cs"><button id="csb" label="右" image="missing" onAction="cb"/><menu id="csm"><button id="csi" label="q" onAction="cb"/></menu></splitButton></contextMenu></contextMenus></customUI>`;
+    app.open({ path: 'x.xlam', parts: [{ version: 'office2010', xml: d, images: [] }] });
+    app.runLint();
+    app.store!.select(pathOf(el('msb')), 'tree');
+    const pop = canvas.querySelector<HTMLElement>(`.rb-menu-popup .rb-menu-item[data-path="${pathOf(el('ms')).join('.')}"]`)!;
+    expect(pop.classList.contains('selected')).toBe(true);
+    expect(pop.classList.contains('has-error')).toBe(true);
+    app.store!.select(pathOf(el('csb')), 'tree');
+    const ctx = canvas.querySelector<HTMLElement>(`.rb-menu-item[data-path="${pathOf(el('cs')).join('.')}"]`)!;
+    expect(ctx.classList.contains('selected')).toBe(true);
+    expect(ctx.classList.contains('has-error')).toBe(true);
+  });
+
   it('6. アイコンを付けられない要素（中が空の分割ボタン・tab）には、エディタを開かず・ライブラリからも付けない', () => {
     const closed: boolean[] = [];
     const before = xml();
