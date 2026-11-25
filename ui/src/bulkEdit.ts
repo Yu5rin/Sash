@@ -1,7 +1,8 @@
 // 複数の要素の属性をまとめて変える（インスペクタのまとめて変更。仕様書 §19）。
 // ビューに依存しない部分（共通の属性・値のまとめ・書き込み）をここに置き、テストしやすくする。
 
-import { attrsOfEl, defFor, titleOf, type AttrDef } from './schema';
+import { delegatesToInner, innerButtonOf } from './iconTarget';
+import { attributes, attrsOfEl, defFor, titleOf, type AttrDef } from './schema';
 import { lang, t } from './i18n';
 
 /**
@@ -11,14 +12,37 @@ import { lang, t } from './i18n';
 const EXCLUDED = new Set(['id', 'idMso', 'idQ', 'image', 'getImage']);
 
 /**
+ * 分割ボタンが中のボタンに委ねる属性（スキーマで分割ボタン自身には付けられない。iconTarget.ts）。
+ * まとめて変更でも、分割ボタンに対しては中のボタンに書く。
+ */
+const DELEGATED = new Set(['label', 'imageMso']);
+
+/** その属性を実際に持つ（書き込み先の）要素。分割ボタンの label / imageMso は中のボタン。持てなければ null。 */
+export function ownerOf(e: Element, name: string): Element | null {
+  if (attrsOfEl(e).some((d) => d.name === name)) return e;
+  if (DELEGATED.has(name) && delegatesToInner(e)) {
+    const inner = innerButtonOf(e);
+    if (inner && attrsOfEl(inner).some((d) => d.name === name)) return inner;
+  }
+  return null;
+}
+
+/**
  * 選んだ要素のすべてで使える属性（1つ目の要素での並び順）。どれかが属性を編集できない要素（opaque）なら空。
  * 静的な値と組になる get 系のコールバック（getLabel など）は出さない。静的な値を入れると外す（下の applyBulkAttr）。
  */
 export function commonAttrDefs(els: readonly Element[]): AttrDef[] {
   if (els.length === 0 || els.some((e) => !defFor(e) || defFor(e)!.opaque)) return [];
-  const [first, ...rest] = els;
-  const others = rest.map((e) => new Set(attrsOfEl(e).map((d) => d.name)));
-  return attrsOfEl(first!).filter((d) => !EXCLUDED.has(d.name) && !d.staticOf && others.every((s) => s.has(d.name)));
+  const [first] = els;
+  // 1つ目の要素の属性（分割ボタンなら、中のボタンに委ねる属性も足す）を、全員が持てるものに絞る
+  const candidates = [...attrsOfEl(first!)];
+  if (delegatesToInner(first!)) {
+    for (const name of DELEGATED) {
+      const d = attributes.get(name);
+      if (d && !candidates.some((c) => c.name === name) && ownerOf(first!, name)) candidates.push(d);
+    }
+  }
+  return candidates.filter((d) => !EXCLUDED.has(d.name) && !d.staticOf && els.every((e) => ownerOf(e, d.name) !== null));
 }
 
 /** 値を入れるときに一緒に外す属性。アイコンは image・imageMso・getImage のどれか1つだけにする（インスペクタと同じ決まり）。 */
@@ -39,7 +63,7 @@ export type BulkValue =
 
 /** 選んだ要素の、その属性の値をまとめる。 */
 export function bulkValue(els: readonly Element[], d: AttrDef): BulkValue {
-  const values = [...new Set(els.map((e) => normalize(d, e.getAttribute(d.name))))];
+  const values = [...new Set(els.map((e) => normalize(d, (ownerOf(e, d.name) ?? e).getAttribute(d.name))))];
   return values.length === 1 ? { mixed: false, value: values[0]! } : { mixed: true, values };
 }
 
@@ -50,8 +74,10 @@ export function bulkValue(els: readonly Element[], d: AttrDef): BulkValue {
  */
 export function applyBulkAttr(els: readonly Element[], d: AttrDef, value: string | null): number {
   let changed = 0;
-  for (const e of els) {
-    if (!attrsOfEl(e).some((x) => x.name === d.name)) continue;
+  for (const el of els) {
+    // 分割ボタンの label / imageMso は、中のボタンに書く
+    const e = ownerOf(el, d.name);
+    if (!e) continue;
     const before = e.getAttribute(d.name);
     // 一緒に外す属性：組になる get 系のコールバックと、imageMso なら別の種類のアイコン（image・getImage）
     const clear = value ? [...(d.dynamic ? [d.dynamic] : []), ...(ALSO_CLEAR[d.name] ?? [])].filter((n) => e.hasAttribute(n)) : [];

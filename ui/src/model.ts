@@ -98,6 +98,12 @@ export function allElements(doc: Document): Element[] {
 }
 
 export function displayName(el: Element): string {
+  // 分割ボタンは label を持てず、中の先頭のボタンが持つ。ツリーなどで id だけが並ばないよう、中のボタンのラベルを出す
+  if (el.localName === 'splitButton' && !el.hasAttribute('label')) {
+    const inner = Array.from(el.children).find((c) => c.localName === 'button' || c.localName === 'toggleButton');
+    const innerLabel = inner?.getAttribute('label');
+    if (innerLabel) return innerLabel;
+  }
   return el.getAttribute('label') ?? el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.getAttribute('idQ') ?? '';
 }
 

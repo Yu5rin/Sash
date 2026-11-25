@@ -68,13 +68,20 @@ function labelOf(el: Element): string {
   return g ? `{${g}}` : el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName;
 }
 
+/** アイコン（image / imageMso / getImage）を持っているか。 */
+function hasIcon(el: Element): boolean {
+  return el.hasAttribute('image') || el.hasAttribute('imageMso') || el.hasAttribute('getImage');
+}
+
 function icon(el: Element, px: number): HTMLElement {
   const store = app.store!;
   const image = el.getAttribute('image');
   const mso = el.getAttribute('imageMso');
   const src = image ? store.images.get(image)?.dataUrl : mso ? msoIcon(mso) : null;
   if (src) return h('img', { class: 'rb-icon', src, width: px, height: px, alt: '' });
-  return h('span', { class: `rb-icon placeholder${image || mso ? '' : ' none'}`, style: `width:${px}px;height:${px}px` }, mso ? mso.slice(0, 1) : '');
+  // getImage は VBA が返すので中身は描けない。リボンのキャンバスと同じ「動的」の印を出す
+  const cls = el.hasAttribute('getImage') ? ' dynamic' : image || mso ? '' : ' none';
+  return h('span', { class: `rb-icon placeholder${cls}`, style: `width:${px}px;height:${px}px`, title: mso ?? image ?? el.getAttribute('getImage') ?? '' }, mso ? mso.slice(0, 1) : '');
 }
 
 function list(parent: Element | undefined, cls: string, ctx: Ctx, empty: string): HTMLElement | null {
@@ -89,7 +96,7 @@ function item(el: Element, ctx: Ctx): HTMLElement {
   switch (el.localName) {
     case 'button':
     case 'toggleButton':
-      return h('div', c(el.getAttribute('style') === 'large' ? 'bs-button large' : 'bs-button'), el.hasAttribute('image') || el.hasAttribute('imageMso') ? icon(el, el.getAttribute('style') === 'large' ? 32 : 16) : null, h('span', null, label));
+      return h('div', c(el.getAttribute('style') === 'large' ? 'bs-button large' : 'bs-button'), hasIcon(el) ? icon(el, el.getAttribute('style') === 'large' ? 32 : 16) : null, h('span', null, label));
     case 'menu':
       return h('div', c('bs-button'), icon(el, 16), h('span', null, label), h('span', { class: 'rb-arrow' }));
     case 'checkBox':
@@ -101,7 +108,7 @@ function item(el: Element, ctx: Ctx): HTMLElement {
     case 'radioGroup':
       return h('div', c('bs-radio'), h('span', null, label), h('div', { class: 'bs-radios' }, childElements(el).map((r) => h('span', null, h('span', { class: 'bs-radio-dot' }), labelOf(r)))));
     case 'hyperlink':
-      return h('div', c('bs-link'), h('span', null, label));
+      return h('div', c('bs-link'), hasIcon(el) ? icon(el, 16) : null, h('span', null, label));
     case 'labelControl':
       return h('div', c('bs-label'), label);
     case 'imageControl':
@@ -171,7 +178,7 @@ export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement
     childElements(bs).map((c) =>
       c.localName === 'tab'
         ? h('div', { ...common(c, `bs-nav-item bs-item${c === tab ? ' active' : ''}`, ctx), onclick: (e: MouseEvent) => { e.stopPropagation(); remember(c); app.store?.select(pathOf(c), 'canvas'); } }, labelOf(c))
-        : h('div', common(c, 'bs-nav-item bs-item command', ctx), c.hasAttribute('image') || c.hasAttribute('imageMso') ? icon(c, 16) : null, labelOf(c)),
+        : h('div', common(c, 'bs-nav-item bs-item command', ctx), hasIcon(c) ? icon(c, 16) : null, labelOf(c)),
     ),
   );
 

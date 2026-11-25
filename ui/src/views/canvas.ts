@@ -15,6 +15,7 @@ import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
 import { closeMenu, openElementMenu, openMenu } from './contextMenu';
 import { focusField } from './inspector';
+import { iconTargetOf, iconTargetPath, innerButtonOf } from '../iconTarget';
 import { defFor, inBackstage, titleOf } from '../schema';
 import { lang, t as tr } from '../i18n';
 import { notify } from '../shell/toast';
@@ -83,7 +84,8 @@ let mode: CanvasMode = 'ribbon';
  */
 let activeTab: { kind: 'el'; id: string | null; path: Path } | { kind: 'builtin'; idMso: string } | null = null;
 
-let onImageDrop: ((files: FileList, target: Path) => void) | null = null;
+/** 画像のドロップ。path はドロップされた要素、target はアイコンの書き込み先（分割ボタンなら中のボタン）。 */
+let onImageDrop: ((files: FileList, path: Path, target: Path) => void) | null = null;
 let hostEl: HTMLElement | null = null;
 /** 直前の描画にあった要素。編集のあとで選択が新しい要素に移ったら、挿入したものとして目立たせる。 */
 let known = new WeakSet<Element>();
@@ -217,7 +219,7 @@ function revealNode(node: HTMLElement | null | undefined): void {
   else node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
-export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: FileList, target: Path) => void }): void {
+export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: FileList, path: Path, target: Path) => void }): void {
   onImageDrop = opts.onImageDrop;
   hostEl = host;
   // tabindex がないと Ctrl+1 で focus() しても移らない（不具合 23）
@@ -1580,7 +1582,7 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
     const row = h(
       'div',
       {
-        class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}${errorPaths.has(cp.join('.')) ? ' has-error' : ''}${c.getAttribute('visible') === 'false' ? ' hidden-ctl' : ''}`,
+        class: `rb-menu-item${rowSelected(sel, c) ? ' selected' : ''}${rowHasError(errorPaths, c) ? ' has-error' : ''}${c.getAttribute('visible') === 'false' ? ' hidden-ctl' : ''}`,
         style: `padding-left:${8 + depth * 14}px`,
         dataset: { path: cp.join('.'), sel: '1' },
         draggable: true,
@@ -1595,9 +1597,10 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
         },
         ondragend: () => endDrag(),
       },
-      c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [c.hasAttribute('image') || c.hasAttribute('imageMso') ? iconFor(c, 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(c) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
+      c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [hasIconAttr(shownBy(c)) ? iconFor(shownBy(c), 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(shownBy(c)) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
     );
-    const kids = c.localName === 'menu' || c.localName === 'splitButton' ? childElements(c).flatMap((k) => item(k, depth + 1)) : [];
+    // 分割ボタンの行は中の先頭のボタンを兼ねて表すので、その子の行は並べない（同じ見た目の行が 2 つ並ぶのを避ける）
+    const kids = c.localName === 'menu' || c.localName === 'splitButton' ? childElements(c).filter((k) => !(c.localName === 'splitButton' && k === innerButtonOf(c))).flatMap((k) => item(k, depth + 1)) : [];
     return [row, ...kids];
   };
   const cards = menus.map((m) => {
@@ -1802,6 +1805,28 @@ function layoutControls(items: Element[], host: HTMLElement, errorPaths: Set<str
   }
 }
 
+/** メニューの行の「選択中」。分割ボタンの行は、中の先頭のボタンを兼ねるので、中のボタンを選んでいるときも選択中にする。 */
+function rowSelected(sel: Path | null, c: Element): boolean {
+  const inner = c.localName === 'splitButton' ? innerButtonOf(c) : null;
+  return samePath(sel, pathOf(c)) || (inner !== null && samePath(sel, pathOf(inner)));
+}
+
+/** メニューの行のエラーの印。分割ボタンの行は、中の先頭のボタンのエラーも表す。 */
+function rowHasError(errorPaths: Set<string>, c: Element): boolean {
+  const inner = c.localName === 'splitButton' ? innerButtonOf(c) : null;
+  return errorPaths.has(pathOf(c).join('.')) || (inner !== null && errorPaths.has(pathOf(inner).join('.')));
+}
+
+/** アイコン（image / imageMso / getImage）を持っているか。getImage は VBA で返すので、中身は描けず印だけを出す。 */
+function hasIconAttr(el: Element): boolean {
+  return el.hasAttribute('image') || el.hasAttribute('imageMso') || el.hasAttribute('getImage') || (el.localName === 'control' && el.hasAttribute('idMso'));
+}
+
+/** 見た目（ラベルとアイコン）を持つ要素。分割ボタンは中のボタン（なければ自分）。 */
+function shownBy(el: Element): Element {
+  return iconTargetOf(el) ?? el;
+}
+
 function iconFor(el: Element, size: Size): HTMLElement {
   const store = app.store!;
   const px = size === 'large' ? 32 : 16;
@@ -1861,7 +1886,7 @@ function renderControlBody(el: Element, size: Size, errorPaths: Set<string>): HT
       return h(
         'div',
         common,
-        el.hasAttribute('image') || el.hasAttribute('imageMso') ? iconFor(el, 'small') : null,
+        hasIconAttr(el) ? iconFor(el, 'small') : null,
         showLabel && label ? labelEl(label) : null,
         h('span', { class: 'rb-field' }, tag === 'editBox' ? null : h('span', { class: 'rb-field-drop' }, arrow())),
         menuPopup(el),
@@ -1882,7 +1907,8 @@ function renderControlBody(el: Element, size: Size, errorPaths: Set<string>): HT
       // 分割ボタンは「押す部分」と「メニューを開く部分」を線で分ける（本物と同じ見た目）
       const main = childElements(el).find((c) => c.localName === 'button' || c.localName === 'toggleButton');
       const mainLabel = main ? labelOf(main) : label;
-      const icon = el.getAttribute('showImage') === 'false' ? null : main ? iconFor(main, size) : iconFor(el, size);
+      // アイコンを出すかは、中のボタンの showImage で決まる（分割ボタン自身には showImage を付けられない）
+      const icon = (main ?? el).getAttribute('showImage') === 'false' ? null : main ? iconFor(main, size) : iconFor(el, size);
       return size === 'large'
         ? h('div', common, h('span', { class: 'rb-split-main' }, icon), h('span', { class: 'rb-split-drop' }, showLabel ? labelEl(mainLabel) : null, arrow()), menuPopup(el))
         : h('div', common, h('span', { class: 'rb-split-main' }, icon, showLabel ? labelEl(mainLabel) : null), h('span', { class: 'rb-split-drop' }, arrow()), menuPopup(el));
@@ -2000,14 +2026,17 @@ function menuPopup(el: Element): HTMLElement | null {
   if (!sel || !(samePath(sel, path) || isAncestorPath(path, sel))) return null;
   if (dismissedPopup !== null && dismissedPopup === path.join('.')) return null;
   const items: HTMLElement[] = [];
+  const popupErrors = new Set(app.problems.filter((p) => p.severity === 'error').map((p) => p.path.join('.')));
   const walk = (parent: Element, depth: number) => {
     for (const c of childElements(parent)) {
+      // 分割ボタンの行が中の先頭のボタンを兼ねて表す
+      if (parent.localName === 'splitButton' && c === innerButtonOf(parent)) continue;
       const cp = pathOf(c);
       items.push(
         h(
           'div',
           {
-            class: `rb-menu-item${samePath(sel, cp) ? ' selected' : ''}`,
+            class: `rb-menu-item${rowSelected(sel, c) ? ' selected' : ''}${rowHasError(popupErrors, c) ? ' has-error' : ''}`,
             style: `padding-left:${8 + depth * 12}px`,
             dataset: { path: cp.join('.'), sel: '1' },
             draggable: true,
@@ -2021,7 +2050,11 @@ function menuPopup(el: Element): HTMLElement | null {
             },
             ondragend: () => endDrag(),
           },
-          c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : h('span', { class: 'rb-label' }, labelOf(c) || c.localName),
+          c.localName === 'menuSeparator'
+            ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '')
+            // メニューの項目はアイコンも描く（Excel と同じく、アイコンがない項目は同じ幅の空きを置いて文字をそろえる）。
+            // 分割ボタンは、ラベルもアイコンも中のボタンのものを出す
+            : [hasIconAttr(shownBy(c)) ? iconFor(shownBy(c), 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(shownBy(c)) || c.localName)],
         ),
       );
       if (c.localName === 'menu' || c.localName === 'splitButton') walk(c, depth + 1);
@@ -2205,10 +2238,13 @@ function onKey(e: KeyboardEvent, host: HTMLElement): void {
 }
 
 /** F2：ラベルをその場で書き換える。ラベルを持てない要素や、VBA で返すラベルなら false。 */
-function startRename(host: HTMLElement, path: Path): boolean {
+function startRename(host: HTMLElement, nodePath: Path): boolean {
   const store = app.store;
-  const el = store ? elementAt(store.doc, path) : null;
-  const node = nodeOf(host, path);
+  const picked = store ? elementAt(store.doc, nodePath) : null;
+  // 分割ボタンは label を持てないので、名前の直接編集は中のボタンの label に対して行う（描かれているラベルも中のボタンのもの）
+  const el = picked ? iconTargetOf(picked) : null;
+  const path = el ? pathOf(el) : nodePath;
+  const node = nodeOf(host, nodePath);
   if (!store || !el || !node || el.hasAttribute('getLabel') || !defFor(el)?.attrs.includes('label')) return false;
   const labelNode = node.querySelector<HTMLElement>(':scope > .rb-label, :scope > .rb-group-label > .rb-label, :scope > .rb-split-main > .rb-label, :scope > .rb-split-drop > .rb-label, :scope > span:not([class])') ?? (inBackstage(el) ? node : null);
   if (!labelNode) return false;
@@ -2465,11 +2501,14 @@ function hideIndicator(host: HTMLElement): void {
   highlighted = null;
 }
 
-function imageTarget(e: DragEvent): Path | null {
+/** 画像のドロップ先。path はドロップされた要素（選択はここに置く）、target はアイコンの書き込み先。 */
+function imageTarget(e: DragEvent): { path: Path; target: Path } | null {
   const node = (e.target as HTMLElement).closest<HTMLElement>('.rb-ctl[data-path], .rb-group[data-path]');
   const path = parsePath(node?.dataset['path']);
   const el = path && app.store ? elementAt(app.store.doc, path) : null;
-  return el && defFor(el)?.attrs.includes('image') ? path : null;
+  // 分割ボタンに落としたときは、中のボタンに設定する（分割ボタン自身には image を付けられない）
+  const target = path && el ? iconTargetPath(app.store!.doc, path) : null;
+  return path && target ? { path, target } : null;
 }
 
 function onDragOver(e: DragEvent, host: HTMLElement): void {
@@ -2499,7 +2538,7 @@ function onDrop(e: DragEvent, host: HTMLElement): void {
     const target = imageTarget(e);
     if (target) {
       e.preventDefault();
-      onImageDrop?.(e.dataTransfer.files, target);
+      onImageDrop?.(e.dataTransfer.files, target.path, target.target);
     }
     return;
   }

@@ -10,7 +10,8 @@ import type { LibraryIconDetail } from '../bridge';
 import { openModal } from '../dialogs/modal';
 import { notify } from '../clipboard';
 import { h } from '../dom';
-import { elementAt, pathOf, setAttr, type Path } from '../model';
+import { elementAt, pathOf, samePath, setAttr, type Path } from '../model';
+import { iconTargetPath } from '../iconTarget';
 import { ID_PATTERN } from '../schema';
 import { t as tr } from '../i18n';
 import type { FluentPick } from '../fluent/fluentDialog';
@@ -106,6 +107,18 @@ export function openFluentIcons(onPick: (pick: FluentPick) => void, onClose?: (p
  */
 export function openIconDialog(target: Path | null, files?: FileList | File[], existing?: ImageEntry, dialogOpts: IconDialogOptions = {}): void {
   const store = app.store;
+  // 分割ボタンにはアイコンを付けられない（スキーマ違反になる）ので、中のボタンに付け替える。
+  // どの入口から呼ばれても同じ結果になるよう、ここでも付け替える
+  if (store && target) {
+    const resolved = iconTargetPath(store.doc, target);
+    // アイコンを付けられない要素（中が空の分割ボタン・tab など）には付けない。付けると、スキーマ違反の属性を作ってしまう
+    if (!resolved) {
+      notify({ kind: 'warning', message: tr('この要素にはアイコンを設定できません') });
+      dialogOpts.onClose?.(false);
+      return;
+    }
+    target = resolved;
+  }
   const el = store && target ? elementAt(store.doc, target) : null;
   if (!store || (target && !el)) {
     dialogOpts.onClose?.(false);
@@ -485,7 +498,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
         setAttr(t, 'imageMso', null);
         setAttr(t, 'getImage', null);
         setAttr(t, 'image', name);
-        return pathOf(t);
+        // 分割ボタンを選んだまま中のボタンに設定したときは、選択を動かさない
+        return samePath(store!.selection, target) ? pathOf(t) : undefined;
       });
       // 断られたとき（XML の構文エラー中など）は、作った画像を捨てないようダイアログを開いたままにする。
       // ライブラリにも保存しない（ブックには入っていないのに、入ったように見えてしまうため）
@@ -665,9 +679,15 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /** ライブラリのアイコンを、そのままコントロールに設定する。 */
-export function applyLibraryIcon(target: Path, d: LibraryIconDetail): void {
+export function applyLibraryIcon(requested: Path, d: LibraryIconDetail): void {
   const store = app.store;
   if (!store) return;
+  // 分割ボタンには付けられないので、中のボタンに付け替える
+  const target = iconTargetPath(store.doc, requested);
+  if (!target) {
+    notify({ kind: 'warning', message: tr('この要素にはアイコンを設定できません') });
+    return;
+  }
   const { png, source } = detailToBlobs(d);
   const ascii = d.name.match(/[A-Za-z0-9]+/g)?.join('_');
   const base = `img_${ascii ?? 'lib'}`;
@@ -680,6 +700,6 @@ export function applyLibraryIcon(target: Path, d: LibraryIconDetail): void {
     setAttr(t, 'imageMso', null);
     setAttr(t, 'getImage', null);
     setAttr(t, 'image', id);
-    return pathOf(t);
+    return samePath(store.selection, target) ? pathOf(t) : undefined;
   });
 }

@@ -57,4 +57,13 @@ export const en: Readonly<Record<string, string>> = {
   'id・idMso・画像（image）は要素ごとに違うため、ここでは変えられません': 'id, idMso and image differ per element and cannot be changed here',
   '{n} 個': '{n} sel.',
   '全体': 'Whole',
+  // 分割ボタンのラベル・アイコンは中のボタンに設定する（iconTarget.ts）
+  'ラベル・アイコン・ヒント': 'Label, icon and screentip',
+  '中のボタン（{id}）に設定されます': 'Applied to the inner button ({id})',
+  '中のボタンを選ぶ': 'Select the inner button',
+  '分割ボタンの中に button か toggleButton がありません。ラベルとアイコンは中のボタンに設定するので、XML を直してください': 'The split button has no button or toggleButton inside. The label and icon are set on the inner button, so fix the XML.',
+  '分割ボタンの中にボタンがないため、アイコンを設定できません': 'The split button has no inner button, so an icon cannot be set',
+  '分割ボタンのラベル（label）とアイコン（imageMso）は、中のボタンに入ります': 'The label and icon (imageMso) of a split button go to its inner button',
+  'Backstage の項目はアイコンを持てません。XML エディタで image / imageMso を消してください': 'Backstage items cannot have icons. Remove image / imageMso in the XML editor.',
+  '分割ボタンのラベル・ヒント・アイコンは、中の button / toggleButton に付けます': 'Set the label, screentip and icon on the inner button / toggleButton of a split button.',
 };
