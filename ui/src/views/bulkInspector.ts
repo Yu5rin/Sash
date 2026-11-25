@@ -10,6 +10,7 @@ import {
 } from '../clipboard';
 import { h, svg } from '../dom';
 import { kindIcon, uiIcons } from '../icons';
+import { delegatesToInner } from '../iconTarget';
 import { elementAt } from '../model';
 import { ABORT } from '../store';
 import type { AttrDef } from '../schema';
@@ -201,5 +202,10 @@ export function renderBulkInspector(els: readonly Element[], hooks: BulkHooks): 
       h('div', { class: 'insp-section-head', role: 'heading', 'aria-level': '3' }, svg(uiIcons.chevron), h('span', null, sectionName(sec)), h('span', { class: 'insp-count' }, String(rows.length))),
       h('div', { class: 'insp-rows' }, rows));
   }).filter((x): x is HTMLElement => x !== null);
-  return [header, quickActions(), ...sections, h('div', { class: 'insp-multi-note' }, t('id・idMso・画像（image）は要素ごとに違うため、ここでは変えられません'))];
+  return [
+    header, quickActions(), ...sections,
+    h('div', { class: 'insp-multi-note' }, t('id・idMso・画像（image）は要素ごとに違うため、ここでは変えられません')),
+    // 分割ボタンのラベル・アイコンは中のボタンに入る。書き込み先が選んだ要素と違うことを伝える
+    els.some(delegatesToInner) ? h('div', { class: 'insp-multi-note', dataset: { innerNote: '1' } }, t('分割ボタンのラベル（label）とアイコン（imageMso）は、中のボタンに入ります')) : null,
+  ].filter((x): x is HTMLElement => x !== null);
 }

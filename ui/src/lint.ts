@@ -56,6 +56,9 @@ export function labelWidth(text: string): number {
   return w;
 }
 
+/** 分割ボタンが中のボタンから受け継ぐ属性（XSD の CT_SplitButtonRestricted で prohibited）。 */
+const SPLIT_INHERITED: ReadonlySet<string> = new Set(['label', 'getLabel', 'screentip', 'getScreentip', 'supertip', 'getSupertip', 'image', 'imageMso', 'getImage', 'showImage', 'getShowImage']);
+
 export function lint(doc: Document, ctx: LintContext): Problem[] {
   const problems: Problem[] = [];
   const add = (severity: Severity, el: Element, message: string, attr?: string) =>
@@ -107,7 +110,9 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
       if (name === 'xmlns' || name.startsWith('xmlns:')) continue;
       const adef = attributes.get(name);
       if (!adef || !def.attrs.includes(name)) {
-        add('error', el, t('<{tag}> に {attr} 属性は使えません', { tag: el.localName, attr: name }), name);
+        // 分割ボタンのラベル・ヒント・アイコンは、中のボタンが持つ（スキーマでは分割ボタンに付けられない）。直し方を添える
+        const hint = el.localName === 'splitButton' && SPLIT_INHERITED.has(name) ? ` ${t('分割ボタンのラベル・ヒント・アイコンは、中の button / toggleButton に付けます')}` : '';
+        add('error', el, `${t('<{tag}> に {attr} 属性は使えません', { tag: el.localName, attr: name })}${hint}`, name);
         continue;
       }
       if (adef.since2010 && ctx.version === 'office2007') add('error', el, t('{attr} は2010以降の形式でのみ使えます', { attr: name }), name);

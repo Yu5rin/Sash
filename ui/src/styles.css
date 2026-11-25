@@ -862,7 +862,7 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .bs-item.selected { outline: 2px solid var(--select); outline-offset: -1px; background: var(--select-soft); }
 .bs-item.has-error, .bs-group.has-error { box-shadow: inset 2px 0 0 var(--error); }
 .bs-button.large, .primary .bs-button { flex-direction: column; border-color: var(--border); padding: 8px 6px; text-align: center; }
-.bs-link span { color: var(--select); text-decoration: underline; }
+.bs-link span:not(.rb-icon) { color: var(--select); text-decoration: underline; }
 .bs-radios { display: flex; flex-direction: column; gap: 2px; margin-left: 8px; }
 .bs-radio-dot { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--border-strong); border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
 .bs-groupbox { flex-direction: column; align-items: stretch; border-color: var(--border); }

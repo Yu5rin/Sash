@@ -117,6 +117,7 @@ UIの技術はWebView2で確定した（WPF、WinUI 3と比較のうえ決定）
 - 「label」と「getLabel」のような静的値と動的コールバックの組は、1行の切り替えスイッチにまとめる。これで排他の矛盾がそもそも起きない。
 - 属性名にホバーすると、日本語の説明と指定例を表示する。
 - idはラベルから自動で提案する（例：「集計する」→ btnSummary）。
+- **分割ボタン（splitButton）のラベルとアイコン**は、分割ボタンを選んだインスペクタの先頭の「ラベルとアイコン」の区画で直接編集できる。customUI のスキーマ（CT_SplitButtonRestricted）で、分割ボタン自身には label / screentip / supertip / image / imageMso / getImage / showImage を付けられず、中の先頭の button / toggleButton から受け継ぐ決まりのため、**書き込み先は中のボタン**にする（分割ボタンにスキーマ違反の属性は作らない）。区画の見出しの下に「中のボタン（btnXXX）に設定されます」と書き、「中のボタンを選ぶ」で移れる。中のボタンが無い（壊れた XML）ときは、その旨を出して入力欄は出さない。アイコン行・ラベルからのアイコンの候補・固定／VBA の切り替えは普通のボタンと同じ部品を使い、元に戻すは 1 操作 1 回。詳細は §21。
 
 ### 5.5 XMLエディタ
 
@@ -173,7 +174,7 @@ XSDによる検証に加え、次の独自ルールを入力中に常時チェ�
 - 出力は32×32の透過PNGを既定にする。高DPI向けに64×64も選べる。Excelが表示サイズに合わせて縮小する前提だが、実際の見え方は実機で検証する。
 - 保存先は `customUI/images/<名前>.png`。`customUI/_rels/customUI14.xml.rels` に画像リレーションを登録し、そのIdを image 属性に設定する。
 - 画像名はコントロールのidから自動で付ける（例：`img_btnSummary`）。あとから変更もできる。
-- キャンバス上のボタンに画像ファイルを直接ドロップすると、アイコンエディタが開き、確定でそのボタンに設定される。
+- キャンバス上のボタンに画像ファイルを直接ドロップすると、アイコンエディタが開き、確定でそのボタンに設定される。分割ボタンにドロップしたときは、中のボタンに設定する（§21）。アイコンを設定する入口（インスペクタ・ドロップ・コマンド「選択中のコントロールのアイコンを作る」・imageMso カタログ・ライブラリ）は、すべて同じ「書き込み先の決め方」（`iconTarget.ts`）を通る。
 - どのコントロールからも参照されていない画像は「未使用」と表示し、一括で削除できる。
 - フォルダをドロップすると、中の画像を同じ加工設定で一括して取り込む。
 
@@ -859,3 +860,36 @@ Vitest（`test/multiSelect.test.ts`・`test/multiSelectViews.test.ts`・`test/mu
 - 列の最小幅を 240px にし、長い名前は 2 行まで折り返す。注目している項目（フォーカス・マウス・選択中）の名前の全文をフッターに出す。
 
 **実機（WebView2）で確かめていないこと**：zoom・sticky・container-type・line-clamp の見え方、実際の Excel から取ったアイコンの見本とグループの日本語名、日本語 IME での実入力。
+
+## 21. 分割ボタンのアイコン・ラベルと、アイコンの総点検（0.1.2 追加）
+
+### 21.1 分割ボタンは中のボタンに書く
+
+- スキーマ上、**分割ボタンには label / getLabel / screentip / supertip / image / imageMso / getImage / showImage / getShowImage を付けられない**（customUI14.xsd の CT_SplitButtonRestricted で prohibited。中の先頭の button / toggleButton から受け継ぐ）。分割ボタンが持つのは id 系・挿入位置・size・visible・enabled・showLabel・keytip だけ。以前から `schema.ts` は正しくこの形で、変えていない。
+- 利用者が分割ボタンを選んでアイコンやラベルを設定しようとしたときは、**中のボタンを対象にする**。`ui/src/iconTarget.ts` に「書き込み先の決め方」を 1 か所にまとめた（`iconTargetOf` / `iconTargetPath` / `canSetIcon` / `delegatesToInner`）。分割ボタンなら中の先頭の button / toggleButton、それ以外は自分自身。
+- 対象にした入口：インスペクタ（「ラベルとアイコン」の区画）、アイコンエディタ（`openIconDialog`。どの入口から渡された path でも、ここで付け替える）、ライブラリからの設定（`applyLibraryIcon`）、キャンバスへの画像ファイルのドロップ、コマンド「選択中のコントロールのアイコンを作る…」「imageMso カタログ…」、まとめて変更（`bulkEdit.ts` の `ownerOf`。分割ボタンと普通のボタンを一緒に選んだときも label・imageMso が共通の属性になり、分割ボタンには中のボタンに入る）。中のボタンが無い分割ボタンには設定できない（「中にボタンがないため」と知らせる）。
+- 分割ボタンのまま選択を動かさない（設定後も分割ボタンを選んだまま）。元に戻す／やり直しは 1 操作 1 回（`commit` が書き込み先の path を受け取り、1 回の編集にまとめる）。
+- 見た目：ツリーの行の名前（`displayName`）と、キャンバスのメニュー・右クリックメニューの中の分割ボタンの項目は、中のボタンのラベル・アイコンで出す。Lint は、分割ボタンに label / imageMso などを書いた XML に「中の button / toggleButton に付けます」と直し方を添える。
+- **dialogBoxLauncher は同じ扱いにしない。** 中の button は Excel の画面ではアイコンが出ない（グループ右下の小さな矢印に決まっている）ので、dialogBoxLauncher を選んでも設定先にはならない。中の button を直接選べば、スキーマどおり image 系の属性は書ける。
+- `splitButton` の中の `menu` のアイコン・ラベルは Excel の画面に出ない見込みだが、実機で確かめていないので、配布前チェックの「アイコンのないボタン」の対象のまま（変えていない）。
+
+### 21.2 総点検の結果（customUI14.xsd との突き合わせ）
+
+リボンのコントロール・Backstage・コンテキストメニュー・QAT の全要素について、`image` / `imageMso` / `getImage` / `label` / `getLabel`（と showImage / showLabel）を持てるかを XSD と照合した。**リボン側は、スキーマの定義に不足も誤りもなかった**（tab は label だけ、group は label と image 系、checkBox・labelControl・box・buttonGroup・separator・dialogBoxLauncher は image 系なし、など XSD どおり）。直したのは次のとおり。
+
+| 場所 | 内容 |
+|---|---|
+| Backstage の `item`（dropDown・comboBox の中）と `radioButton` | XSD の CT_BackstageItem は id・label・getLabel だけ。誤って持たせていた image / imageMso を外し、不足していた getLabel を足した（リボンの `item` は CT_Item で image / imageMso / screentip / supertip を持てるので変えていない） |
+| キャンバス：editBox・comboBox・dropDown | getImage（VBA で返すアイコン）の印が出ていなかった。ほかのコントロールと同じ「動的」の印を出す |
+| キャンバス：リボンのメニュー・ギャラリーなどのポップアップ | 項目のアイコンが描かれていなかった。右クリックメニューと同じく、アイコンを描く（無い項目は同じ幅の空き） |
+| キャンバス：右クリックメニュー・ポップアップの分割ボタンの項目 | id が出ていた。中のボタンのラベルとアイコンで出す |
+| キャンバス：Backstage | getImage のボタン・タスクに「動的」の印が出ていなかった。hyperlink のアイコンが描かれていなかった |
+| ツリー | 分割ボタンの行が id だけだった。中のボタンのラベルを出す |
+
+点検で「定義上は持てない」と分かったが直していないもの（アイコン・ラベルとは別の属性なので範囲外）：Backstage の一部のコントロールが持つ idMso / insertAfter・insertBefore 系・screentip / supertip などは、XSD にない／あるの食い違いがある（例：taskFormGroup の task の onAction・isDefinitive は XSD にない）。次の版で別に点検する。
+
+### 21.3 実機（Windows・Excel）で確かめていないこと
+
+- 実際の Excel のリボンで、分割ボタンの中のボタンに付けたアイコンとラベルがそのとおり表示されること（スキーマには適合している）。
+- 分割ボタンの中の `menu` に付けた label・image が、Excel の画面に出ないこと。
+- Backstage の hyperlink・task にアイコンが出る表示の細部。

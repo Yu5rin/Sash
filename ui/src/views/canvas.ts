@@ -15,6 +15,7 @@ import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
 import { closeMenu, openElementMenu, openMenu } from './contextMenu';
 import { focusField } from './inspector';
+import { iconTargetOf, iconTargetPath } from '../iconTarget';
 import { defFor, inBackstage, titleOf } from '../schema';
 import { lang, t as tr } from '../i18n';
 import { notify } from '../shell/toast';
@@ -1595,7 +1596,7 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
         },
         ondragend: () => endDrag(),
       },
-      c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [c.hasAttribute('image') || c.hasAttribute('imageMso') ? iconFor(c, 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(c) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
+      c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : [hasIconAttr(shownBy(c)) ? iconFor(shownBy(c), 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(shownBy(c)) || c.localName), c.localName === 'menu' || c.localName === 'splitButton' || c.localName === 'dynamicMenu' ? h('span', { class: 'rb-submenu' }, '›') : null],
     );
     const kids = c.localName === 'menu' || c.localName === 'splitButton' ? childElements(c).flatMap((k) => item(k, depth + 1)) : [];
     return [row, ...kids];
@@ -1802,6 +1803,16 @@ function layoutControls(items: Element[], host: HTMLElement, errorPaths: Set<str
   }
 }
 
+/** アイコン（image / imageMso / getImage）を持っているか。getImage は VBA で返すので、中身は描けず印だけを出す。 */
+function hasIconAttr(el: Element): boolean {
+  return el.hasAttribute('image') || el.hasAttribute('imageMso') || el.hasAttribute('getImage') || (el.localName === 'control' && el.hasAttribute('idMso'));
+}
+
+/** 見た目（ラベルとアイコン）を持つ要素。分割ボタンは中のボタン（なければ自分）。 */
+function shownBy(el: Element): Element {
+  return iconTargetOf(el) ?? el;
+}
+
 function iconFor(el: Element, size: Size): HTMLElement {
   const store = app.store!;
   const px = size === 'large' ? 32 : 16;
@@ -1861,7 +1872,7 @@ function renderControlBody(el: Element, size: Size, errorPaths: Set<string>): HT
       return h(
         'div',
         common,
-        el.hasAttribute('image') || el.hasAttribute('imageMso') ? iconFor(el, 'small') : null,
+        hasIconAttr(el) ? iconFor(el, 'small') : null,
         showLabel && label ? labelEl(label) : null,
         h('span', { class: 'rb-field' }, tag === 'editBox' ? null : h('span', { class: 'rb-field-drop' }, arrow())),
         menuPopup(el),
@@ -2021,7 +2032,11 @@ function menuPopup(el: Element): HTMLElement | null {
             },
             ondragend: () => endDrag(),
           },
-          c.localName === 'menuSeparator' ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '') : h('span', { class: 'rb-label' }, labelOf(c) || c.localName),
+          c.localName === 'menuSeparator'
+            ? h('span', { class: 'rb-menu-sep' }, c.getAttribute('title') ?? '')
+            // メニューの項目はアイコンも描く（Excel と同じく、アイコンがない項目は同じ幅の空きを置いて文字をそろえる）。
+            // 分割ボタンは、ラベルもアイコンも中のボタンのものを出す
+            : [hasIconAttr(shownBy(c)) ? iconFor(shownBy(c), 'small') : h('span', { class: 'rb-icon-gap' }), h('span', { class: 'rb-label' }, labelOf(shownBy(c)) || c.localName)],
         ),
       );
       if (c.localName === 'menu' || c.localName === 'splitButton') walk(c, depth + 1);
@@ -2469,7 +2484,8 @@ function imageTarget(e: DragEvent): Path | null {
   const node = (e.target as HTMLElement).closest<HTMLElement>('.rb-ctl[data-path], .rb-group[data-path]');
   const path = parsePath(node?.dataset['path']);
   const el = path && app.store ? elementAt(app.store.doc, path) : null;
-  return el && defFor(el)?.attrs.includes('image') ? path : null;
+  // 分割ボタンに落としたときは、中のボタンに設定する（分割ボタン自身には image を付けられない）
+  return path && el ? iconTargetPath(app.store!.doc, path) : null;
 }
 
 function onDragOver(e: DragEvent, host: HTMLElement): void {

@@ -220,6 +220,8 @@ const elementList: ElementDef[] = [
   e({ tag: 'button', title: 'ボタン', attrs: [...BUTTONLIKE, 'onAction'], children: [], idRequired: true, isControl: true }),
   e({ tag: 'toggleButton', title: 'トグルボタン', attrs: [...BUTTONLIKE, 'getPressed', 'onAction'], children: [], idRequired: true, isControl: true }),
   e({ tag: 'checkBox', title: 'チェックボックス', attrs: [...ID, ...INSERT, ...LABEL, ...VIS, ...EN, ...TIPS, ...KEYTIP, ...DESC, 'getPressed', 'onAction'], children: [], idRequired: true, isControl: true }),
+  // 分割ボタン自身は label / screentip / supertip / image / imageMso / getImage / showImage を持てない（XSD の CT_SplitButtonRestricted で
+  // prohibited）。これらは中の先頭の button / toggleButton から受け継ぐので、インスペクタなどは中のボタンに書く（iconTarget.ts）
   e({ tag: 'splitButton', title: '分割ボタン', attrs: [...ID, ...INSERT, ...SIZE, ...VIS, ...EN, ...SHOWLABEL, ...KEYTIP], children: ['button', 'toggleButton', 'menu'], idRequired: true, isControl: true,
     // 先頭に button か toggleButton をちょうど1つ、その後ろに menu をちょうど1つ
     childOrder: [{ tags: ['button', 'toggleButton'], min: 1, max: 1 }, { tags: ['menu'], min: 1, max: 1 }] }),
@@ -270,8 +272,10 @@ const backstageList: ElementDef[] = [
   e({ tag: 'dropDown', title: 'ドロップダウン', attrs: [...BS_COMMON, ...TIPS, 'sizeString', ...ITEMS, 'getSelectedItemIndex', 'onAction'], children: ['item'], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'comboBox', title: 'コンボボックス', attrs: [...BS_COMMON, ...TIPS, 'sizeString', 'maxLength', ...ITEMS, 'getText', 'onChange'], children: ['item'], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'radioGroup', title: 'ラジオボタン', attrs: [...BS_COMMON, ...TIPS, ...ITEMS, 'getSelectedItemIndex', 'onAction'], children: ['radioButton'], idRequired: true, isControl: true, ...BS }),
-  e({ tag: 'radioButton', title: 'ラジオボタンの選択肢', attrs: ['id', 'label'], children: [], idRequired: true, ...BS }),
-  e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'image', 'imageMso'], children: [], ...BS }),
+  // Backstage の radioButton・dropDown / comboBox の item は、どちらも XSD では CT_BackstageItem（id・label・getLabel だけ）。
+  // リボンの item（CT_Item）と違い、image / imageMso / screentip / supertip は持てない
+  e({ tag: 'radioButton', title: 'ラジオボタンの選択肢', attrs: ['id', 'label', 'getLabel'], children: [], idRequired: true, ...BS }),
+  e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'getLabel'], children: [], ...BS }),
   e({ tag: 'hyperlink', title: 'リンク', attrs: [...BS_COMMON, ...IMG, ...TIPS, 'target', 'getTarget', 'onAction'], children: [], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'labelControl', title: 'ラベル', attrs: [...BS_COMMON, 'noWrap'], children: [], idRequired: true, isControl: true, ...BS }),
   e({ tag: 'imageControl', title: '画像', attrs: [...ID, ...INSERT, ...VIS, ...EN, ...IMG, 'altText', 'getAltText'], children: [], idRequired: true, isControl: true, ...BS }),

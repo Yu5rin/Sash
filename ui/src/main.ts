@@ -18,10 +18,11 @@ import { applyLibraryIcon, openIconDialog } from './icon/iconDialog';
 import { openLibrary } from './dialogs/libraryDialog';
 import { uiIcons } from './icons';
 import { mountLayout } from './layout';
+import { delegatesToInner, iconTargetPath } from './iconTarget';
 import { elementAt } from './model';
 import { initMsoIcons } from './msoIcons';
 import type { ImageEntry } from './store';
-import { defFor, titleOf } from './schema';
+import { titleOf } from './schema';
 import { builtinRecipes } from './recipes';
 import { mountBottom, showBottomTab } from './views/bottom';
 import { getCanvasMode, mountCanvas, setCanvasGrowHandler, setCanvasMode, startRenameOf, type CanvasMode } from './views/canvas';
@@ -81,11 +82,16 @@ function openImageEditor(files?: FileList | File[], existing?: ImageEntry): void
     return;
   }
   const el = store.selectedElement;
-  if (!el || !defFor(el)?.attrs.includes('image')) {
-    toast({ kind: 'warning', message: t('この要素にはアイコンを設定できません') });
+  // 分割ボタンを選んでいるときは、中のボタンにアイコンを設定する（分割ボタン自身には付けられない）
+  const target = iconTargetPath(store.doc, store.selection);
+  if (!el || !target) {
+    toast({
+      kind: 'warning',
+      message: el && delegatesToInner(el) ? t('分割ボタンの中にボタンがないため、アイコンを設定できません') : t('この要素にはアイコンを設定できません'),
+    });
     return;
   }
-  openIconDialog(store.selection, files, existing);
+  openIconDialog(target, files, existing);
 }
 
 function copyToClipboard(value: string): void {
@@ -95,15 +101,18 @@ function copyToClipboard(value: string): void {
 }
 
 function openImageMsoCatalog(): void {
-  const el = app.store?.selectedElement;
-  const canIcon = el && defFor(el)?.attrs.includes('imageMso');
+  const store = app.store;
+  // 分割ボタンを選んでいるときは、中のボタンの imageMso を直す
+  const targetPath = store?.selection ? iconTargetPath(store.doc, store.selection) : null;
+  const el = store && targetPath ? elementAt(store.doc, targetPath) : null;
+  const canIcon = el !== null;
   openCatalog('imageMso', el?.getAttribute('imageMso') ?? '', (v) => {
-    if (!canIcon || !app.store) {
+    if (!canIcon || !app.store || !targetPath) {
       copyToClipboard(v);
       return;
     }
     app.store.edit('inspector', (doc) => {
-      const target = elementAt(doc, app.store!.selection!)!;
+      const target = elementAt(doc, targetPath)!;
       target.removeAttribute('image');
       target.removeAttribute('getImage');
       target.setAttribute('imageMso', v);
