@@ -49,7 +49,7 @@ const LIST = {
   System: `briefcase-business calendar-range calendar-sync calendar-days list-todo list-checks list-clock timer-reset alarm-clock-check search-check
     graduation-cap university building-complex hotel map-pin-house signpost footprints fingerprint-pattern key-round lock-keyhole monitor-check monitor-cloud laptop-minimal-check`,
   Communication2: `id-card-lanyard id-card contact-round user-round-check user-round-clock user-round-search user-round-star user-round-key user-round-cog user-round-pen users-round user-group`,
-  Development: `bot brain-circuit code-xml bug-play database-backup server-nas hard-drive lightbulb square-terminal file-braces swatch-book spline pen-tool`,
+  Development: `heater hand-helping bot brain-circuit code-xml bug-play database-backup server-nas hard-drive lightbulb square-terminal file-braces swatch-book spline pen-tool`,
 };
 // Communication2 は人まわり（カテゴリは Communication と同じ読み替え）。見やすさのために分けて書いただけ
 const CATEGORY_OF = (key) => (key === 'Communication2' ? 'Communication' : key);
