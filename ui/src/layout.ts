@@ -24,7 +24,79 @@ interface Sizes {
 /** 比べるために一時的に広げるとき、XML エディタに残す最低限の高さ（px）。 */
 export const MIN_XML_HEIGHT = 120;
 
-export const DEFAULT_SIZES: Readonly<Sizes> = { left: 248, right: 300, top: 260, bottom: 140 };
+export const DEFAULT_SIZES: Readonly<Sizes> = { left: 248, right: 320, top: 260, bottom: 140 };
+
+// ---- 窓に合わせた大きさの丸め（仕様書 §4。総点検 G-1・I-1） ----
+
+/** 中央の列の最小の幅（#app の grid と同じ値）。 */
+export const MIN_CENTER_WIDTH = 320;
+/** 中央の行の最小の高さ（キャンバスと XML エディタを足したもの）。 */
+export const MIN_CENTER_HEIGHT = 200;
+/** メニューバー + ツールバーの高さ（#app の grid と同じ値）。 */
+export const CHROME_HEIGHT = 76;
+/** 開いているペインの下限。これより狭く引いたら、畳むところまで止まる。 */
+export const PANE_MIN: Readonly<Sizes> = { left: 200, right: 260, top: 60, bottom: 96 };
+/** 畳んだ帯の太さ（styles.css の --sl など）。 */
+const COLLAPSED_BAND = 14;
+
+export interface Viewport {
+  width: number;
+  height: number;
+}
+
+/** 仕切りの太さ。開いていれば 1px、畳んでいれば帯の太さ。 */
+function sepOf(size: number): number {
+  return size > 0 ? 1 : COLLAPSED_BAND;
+}
+
+/**
+ * 保存してある大きさを、窓に収まる「表示する大きさ」に丸める（保存値は書き換えない。窓を戻せば元の大きさに戻る）。
+ * 0（畳んでいる）はそのまま。prefer に指定したペインは、できるだけ縮めない（いま動かしている側）。
+ * 下限（PANE_MIN）まで縮めても収まらない小さな窓では、下限で止めてはみ出すのを許す（窓の最小サイズで防ぐ）。
+ */
+export function fitSizes(sizes: Readonly<Sizes>, vp: Viewport, prefer?: PaneKey): Sizes {
+  const out: Sizes = { ...sizes };
+  // 横：左 + 右 ≤ 窓の幅 − 中央の最小 − 仕切り
+  const room = vp.width - MIN_CENTER_WIDTH - sepOf(out.left) - sepOf(out.right);
+  let over = out.left + out.right - room;
+  if (over > 0) {
+    // 動かしていない側から縮める。指定がなければ右（インスペクタ）から
+    const order: ('left' | 'right')[] = prefer === 'right' ? ['left', 'right'] : ['right', 'left'];
+    for (const k of order) {
+      if (over <= 0 || out[k] === 0) continue;
+      const cut = Math.min(over, Math.max(0, out[k] - PANE_MIN[k]));
+      out[k] -= cut;
+      over -= cut;
+    }
+  }
+  // 縦：下部パネル ≤ 窓の高さ − メニューとツールバー − 仕切り − 中央の最小
+  if (out.bottom > 0) {
+    const maxBottom = vp.height - CHROME_HEIGHT - sepOf(out.bottom) - MIN_CENTER_HEIGHT;
+    out.bottom = Math.max(Math.min(PANE_MIN.bottom, out.bottom), Math.min(out.bottom, maxBottom));
+  }
+  // キャンバス ≤ 中央の行 − 仕切り − XML エディタの最小
+  if (out.top > 0) {
+    const center = vp.height - CHROME_HEIGHT - sepOf(out.bottom) - out.bottom;
+    const maxTop = center - sepOf(out.top) - MIN_XML_HEIGHT;
+    out.top = Math.max(Math.min(PANE_MIN.top, out.top), Math.min(out.top, maxTop));
+  }
+  return out;
+}
+
+/**
+ * ドラッグ・キー操作で、そのペインを広げられる上限。ほかのペインは下限まで縮められるものとして計算する
+ * （広げた分は fitSizes がほかのペインから縮めて収める）。
+ */
+export function maxSizeFor(key: PaneKey, sizes: Readonly<Sizes>, vp: Viewport): number {
+  if (key === 'left' || key === 'right') {
+    const other = key === 'left' ? 'right' : 'left';
+    const otherMin = sizes[other] > 0 ? PANE_MIN[other] : 0;
+    return Math.max(PANE_MIN[key], vp.width - MIN_CENTER_WIDTH - 1 - sepOf(sizes[other]) - otherMin);
+  }
+  if (key === 'bottom') return Math.max(PANE_MIN.bottom, vp.height - CHROME_HEIGHT - 1 - MIN_CENTER_HEIGHT);
+  const bottomShown = fitSizes(sizes, vp).bottom;
+  return Math.max(PANE_MIN.top, vp.height - CHROME_HEIGHT - sepOf(bottomShown) - bottomShown - 1 - MIN_XML_HEIGHT);
+}
 
 /** これより小さくしたら畳んだものとみなす。 */
 const COLLAPSE_BELOW = 48;
@@ -156,7 +228,10 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
     }
   };
 
-  const max = (key: PaneKey) => ((key === 'left' || key === 'right' ? window.innerWidth : window.innerHeight) * 0.7);
+  const viewport = (): Viewport => ({ width: window.innerWidth, height: window.innerHeight });
+  const max = (key: PaneKey) => maxSizeFor(key, sizes, viewport());
+  /** いま動かしているペイン（その側は縮めずに、ほかを縮めて収める）。 */
+  let dragging: PaneKey | undefined;
 
   const openLabels: Readonly<Record<PaneKey, string>> = {
     left: 'パレットとツリーを開く',
@@ -187,9 +262,11 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
   };
 
   const apply = () => {
+    // 保存値（sizes）は窓に関係なく持ち、画面に出す値だけを窓に収まるよう丸める
+    const fitted = fitSizes({ ...sizes, top: sizes.top > 0 ? sizes.top + bonus.top : 0 }, viewport(), dragging);
     for (const key of Object.keys(DEFAULT_SIZES) as PaneKey[]) {
       const collapsed = sizes[key] === 0;
-      const shown = collapsed || key !== 'top' ? sizes[key] : sizes[key] + bonus.top;
+      const shown = fitted[key];
       root.style.setProperty(`--${key}`, `${shown}px`);
       root.classList.toggle(`collapsed-${key}`, collapsed);
       const sp = splitters.get(key);
@@ -220,7 +297,8 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
   };
 
   const setSize = (key: PaneKey, value: number, save: boolean) => {
-    sizes[key] = Math.max(0, Math.min(value, max(key)));
+    // 開いているペインは下限を割らない（畳むかどうかは呼び出し側が 0 で決める）
+    sizes[key] = value <= 0 ? 0 : Math.max(Math.min(value, max(key)), Math.min(PANE_MIN[key], max(key)));
     if (sizes[key] >= COLLAPSE_BELOW) last[key] = sizes[key];
     apply();
     if (save) persist();
@@ -334,6 +412,7 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
       e.preventDefault();
       sp.setPointerCapture(e.pointerId);
       root.classList.add('resizing');
+      dragging = key;
       const start = vertical ? e.clientX : e.clientY;
       const startSize = sizes[key];
       let frame = 0;
@@ -345,7 +424,7 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
           frame = 0;
           // テスト環境の破棄後に遅れて発火しても DOM を触らない
           if (typeof window === 'undefined') return;
-          setSize(key, pending < COLLAPSE_BELOW / 2 ? 0 : pending, false);
+          setSize(key, pending < COLLAPSE_BELOW ? 0 : pending, false);
         });
       };
       const up = () => {
@@ -355,7 +434,9 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
         if (frame) cancelAnimationFrame(frame);
         frame = 0;
         root.classList.remove('resizing');
-        setSize(key, pending < COLLAPSE_BELOW / 2 ? 0 : pending, true);
+        setSize(key, pending < COLLAPSE_BELOW ? 0 : pending, true);
+        dragging = undefined;
+        apply();
       };
       sp.addEventListener('pointermove', move);
       sp.addEventListener('pointerup', up);
@@ -367,13 +448,25 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
       const grow = vertical ? (key === 'left' ? 'ArrowRight' : 'ArrowLeft') : key === 'top' ? 'ArrowDown' : 'ArrowUp';
       const shrink = vertical ? (key === 'left' ? 'ArrowLeft' : 'ArrowRight') : key === 'top' ? 'ArrowUp' : 'ArrowDown';
       if (e.key === grow) setSize(key, (sizes[key] || 0) + 16, true);
-      else if (e.key === shrink) setSize(key, sizes[key] - 16 < COLLAPSE_BELOW / 2 ? 0 : sizes[key] - 16, true);
+      // 下限まで縮めたあと、さらに縮めると畳む（2 段）
+      else if (e.key === shrink) setSize(key, sizes[key] <= PANE_MIN[key] ? 0 : sizes[key] - 16, true);
       else if (e.key === 'Enter' || e.key === ' ') toggle(key);
       else return;
       e.preventDefault();
     });
   }
   apply();
+
+  // 窓の大きさが変わったら、表示する大きさを丸め直す（1 フレームに 1 回）
+  let resizeFrame = 0;
+  window.addEventListener('resize', () => {
+    if (resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      if (typeof window === 'undefined') return;
+      apply();
+    });
+  });
 
   return {
     toggle,
@@ -407,7 +500,7 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
       const column = center?.clientHeight ?? 0;
       const splitterH = splitters.get('top')?.offsetHeight ?? 0;
       const limit = column > 0 ? column - MIN_XML_HEIGHT - Math.max(1, splitterH) : window.innerHeight * 0.85;
-      const room = Math.max(0, limit - sizes.top - bonus.top);
+      const room = Math.max(0, limit - Math.min(sizes.top, maxSizeFor('top', sizes, viewport())) - bonus.top);
       const added = sizes.top === 0 ? 0 : Math.max(0, Math.min(px, room));
       bonus.top += added;
       apply();

@@ -28,7 +28,7 @@ export interface CheckItem {
   severity?: Severity;
 }
 
-export type CheckSectionId = 'problems' | 'callbacks' | 'fit' | 'keytips' | 'longLabels' | 'unusedImages' | 'noScreentip' | 'noIcon' | 'dynamicText';
+export type CheckSectionId = 'errors' | 'warnings' | 'callbacks' | 'fit' | 'keytips' | 'longLabels' | 'unusedImages' | 'noScreentip' | 'noIcon' | 'dynamicText';
 
 export interface CheckSection {
   id: CheckSectionId;
@@ -141,7 +141,9 @@ export function collectChecks(input: CheckInput): CheckSection[] {
   const problemItem = (p: Problem, level: CheckLevel): CheckItem => ({ level, text: p.message, detail: detailOf(p.path), path: p.path, target: 'element', severity: p.severity });
 
   const sections: CheckSection[] = [];
-  sections.push({ id: 'problems', title: t('エラーと警告'), items: restProblems.map((p) => problemItem(p, 'must')) });
+  // エラー（id の重複・id のないボタン・使えない属性・ない画像など）は、Excel でリボンが出なくなる。警告と分けて先頭に置く
+  sections.push({ id: 'errors', title: t('エラー'), items: restProblems.filter((p) => p.severity === 'error').map((p) => problemItem(p, 'must')) });
+  sections.push({ id: 'warnings', title: t('警告'), items: restProblems.filter((p) => p.severity !== 'error').map((p) => problemItem(p, 'must')) });
 
   // 2. VBA にないコールバック・引数の合わないコールバック。
   // 照合できていないのにコールバックがあるなら「配ってよい」とは言えない（押すと「マクロが見つかりません」になりうる）ので、
@@ -247,6 +249,19 @@ export function attentionCount(sections: readonly CheckSection[]): number {
   return sections.reduce((n, s) => n + s.items.filter((i) => i.level === 'must').length, 0);
 }
 
+/** エラー（Excel でリボンが出なくなるもの）の件数。must のうち severity が error のもの。 */
+export function errorCount(sections: readonly CheckSection[]): number {
+  return sections.reduce((n, s) => n + s.items.filter((i) => i.level === 'must' && i.severity === 'error').length, 0);
+}
+
+/** 見出しの深刻さ。エラーがあれば error、要確認があれば attention、なければ ok。 */
+export type SummaryLevel = 'error' | 'attention' | 'ok';
+
+export function summaryLevel(sections: readonly CheckSection[]): SummaryLevel {
+  if (errorCount(sections) > 0) return 'error';
+  return readyToDistribute(sections) ? 'ok' : 'attention';
+}
+
 /** 見直すとよいものの件数（should）。 */
 export function suggestionCount(sections: readonly CheckSection[]): number {
   return sections.reduce((n, s) => n + s.items.filter((i) => i.level === 'should').length, 0);
@@ -264,6 +279,9 @@ export function readyToDistribute(sections: readonly CheckSection[]): boolean {
 
 /** 見出しの文言。コールバックを照合できていなければ、ほかに何もなくても「配ってよい」とは言わない。 */
 export function summaryText(sections: readonly CheckSection[]): string {
+  // エラーがあれば、ほかより先にそれを伝える（配ってはいけない状態だと分かるように）
+  const e = errorCount(sections);
+  if (e > 0) return t('このまま配ると、Excel でリボンが表示されません（エラー {n} 件）', { n: e });
   const n = attentionCount(sections);
   const u = unverifiedCallbacks(sections);
   if (u > 0) {

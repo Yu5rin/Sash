@@ -34,9 +34,11 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "app.info" => GetAppInfo(),
                 "app.close" => Close(),
                 "app.titleBarTheme" => SetTitleBarTheme(Read<TitleBarRequest>(body)),
-                "file.open" => OpenFile(body),
-                "file.save" => SaveFile(Read<SaveRequest>(body)),
-                "file.exportText" => ExportText(Read<ExportRequest>(body)),
+                "app.log" => WriteUiLog(Read<UiLogRequest>(body)),
+                "file.open" => await OpenFileAsync(body),
+                // 読み書きは UI スレッドから外す。共有フォルダや大きいブックで、ウィンドウの枠が「応答なし」にならないように
+                "file.save" => await RunOffUiAsync(Read<SaveRequest>(body), SaveFile),
+                "file.exportText" => await ExportTextAsync(Read<ExportRequest>(body)),
                 "file.recent" => RecentFiles(),
                 "file.removeRecent" => RemoveRecent(Read<PathRequest>(body)),
                 "settings.get" => ToDto(settings.Load()),
@@ -48,11 +50,11 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "update.install" => await InstallUpdateAsync(),
                 "update.status" => UpdateStatus(),
                 "update.openPage" => OpenPage(Read<UrlRequest>(body)),
-                "library.list" => LibraryList(),
-                "library.get" => LibraryGet(Read<IdRequest>(body)),
-                "library.save" => LibrarySave(Read<LibrarySaveRequest>(body)),
-                "library.update" => LibraryUpdate(Read<LibraryUpdateRequest>(body)),
-                "library.delete" => LibraryDelete(Read<IdRequest>(body)),
+                "library.list" => await Task.Run(LibraryList),
+                "library.get" => await RunOffUiAsync(Read<IdRequest>(body), LibraryGet),
+                "library.save" => await RunOffUiAsync(Read<LibrarySaveRequest>(body), LibrarySave),
+                "library.update" => await RunOffUiAsync(Read<LibraryUpdateRequest>(body), LibraryUpdate),
+                "library.delete" => await RunOffUiAsync(Read<IdRequest>(body), LibraryDelete),
                 "library.chooseFolder" => ChooseLibraryFolder(),
                 "library.toggleFavorite" => ToggleFavorite(Read<IdRequest>(body)),
                 "icons.fromExecutable" => IconsFromExecutable(),
@@ -70,7 +72,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.runMacro" => await RunMacroAsync(Read<RunMacroRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
                 "backup.list" => BackupList(Read<PathRequest>(body)),
-                "backup.restore" => BackupRestore(Read<BackupRestoreRequest>(body)),
+                "backup.restore" => await RunOffUiAsync(Read<BackupRestoreRequest>(body), BackupRestore),
                 _ => throw new InvalidOperationException(L($"不明な要求です：{request.Type}", $"Unknown request: {request.Type}")),
             };
             return new HostResponse(request.Id, true, payload, null);
@@ -79,6 +81,17 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         {
             return new HostResponse(request.Id, false, null, DescribeError(ex));
         }
+    }
+
+    /// <summary>ダイアログを出さない読み書きを、UI スレッドの外で動かす（要求の読み取りは UI スレッドで済ませてから渡す）。</summary>
+    private static Task<object?> RunOffUiAsync<TReq>(TReq req, Func<TReq, object?> work) => Task.Run(() => work(req));
+
+    /// <summary>UI の想定外の例外（window の error / unhandledrejection）をログに残す。製品版は開発者ツールが使えないため。</summary>
+    private static object? WriteUiLog(UiLogRequest req)
+    {
+        var text = $"[UI {req.Level ?? "error"}] {req.Message}";
+        AppLog.Write(string.IsNullOrWhiteSpace(req.Stack) ? text : $"{text}{Environment.NewLine}{req.Stack}");
+        return null;
     }
 
     /// <summary>
@@ -91,6 +104,12 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         {
             if (e is UserFacingException)
             {
+                // 利用者には分かる言葉だけを見せ、元の例外はログに残す
+                if (e.InnerException is not null)
+                {
+                    AppLog.Write("失敗の詳細", e.InnerException);
+                }
+
                 return e.Message;
             }
         }
@@ -114,7 +133,15 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             return L($"ファイルにアクセスする権限がありません：{ex.Message}", $"Access to the file was denied: {ex.Message}");
         }
 
-        return ex.Message;
+        // 利用者向けに書いた文言を持つ例外（と、OS が利用者の言語で返す入出力の文言）だけをそのまま見せる。
+        // それ以外（.NET の英語や内部の言い回しの文）は見せず、ログに残して案内する
+        if (ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException or PathTooLongException or IOException or OperationCanceledException)
+        {
+            return ex.Message;
+        }
+
+        AppLog.Write("想定外の失敗", ex);
+        return L($"予期しないエラーが起きました（詳しくはログ：{AppLog.FilePath}）", $"An unexpected error occurred (see the log for details: {AppLog.FilePath})");
     }
 
     /// <summary>共有違反（ERROR_SHARING_VIOLATION = 32）かロック違反（ERROR_LOCK_VIOLATION = 33）か。</summary>
@@ -143,7 +170,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     // ---- ファイル ----
 
     /// <summary>パスが渡されなければファイルダイアログを出す。キャンセル時は null を返す。</summary>
-    private object? OpenFile(JsonElement? body)
+    private async Task<object?> OpenFileAsync(JsonElement? body)
     {
         var path = body?.TryGetProperty("path", out var p) == true ? p.GetString() : null;
         if (string.IsNullOrEmpty(path))
@@ -161,7 +188,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             path = dialog.FileName;
         }
 
-        return Open(path);
+        // 読み込み（zip の展開）は UI スレッドの外で行う
+        var target = path;
+        return await Task.Run(() => Open(target));
     }
 
     public object Open(string path)
@@ -260,7 +289,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     }
 
     /// <summary>保存ダイアログを出してテキストを書き出す（.sash.json）。キャンセル時は null。</summary>
-    private object? ExportText(ExportRequest req)
+    private async Task<object?> ExportTextAsync(ExportRequest req)
     {
         using var dialog = new SaveFileDialog
         {
@@ -273,8 +302,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
             return null;
         }
 
-        File.WriteAllText(dialog.FileName, req.Content, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        return dialog.FileName;
+        var fileName = dialog.FileName;
+        await Task.Run(() => File.WriteAllText(fileName, req.Content, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false)));
+        return fileName;
     }
 
     private object RecentFiles() =>
@@ -529,8 +559,11 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
         if (!ExcelInstalled)
         {
-            Backup();
-            Write();
+            await Task.Run(() =>
+            {
+                Backup();
+                Write();
+            });
             return new { status = "written", message = L("Excelが見つからないため、ファイルに書き込みました", "Excel was not found, so the changes were written to the file"), backup };
         }
 
@@ -767,6 +800,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     private sealed record TitleBarRequest(bool Dark);
 
     private sealed record PathRequest(string Path);
+
+    private sealed record UiLogRequest(string? Level, string Message, string? Stack);
 
     private sealed record IdRequest(string Id);
 

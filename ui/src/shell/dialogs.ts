@@ -100,7 +100,7 @@ export function openShortcutsDialog(commands: readonly Command[]): void {
   }
   const content = h('div', { class: 'shortcut-groups' }, [...groups].map(([g, list]) =>
     h('section', null, h('h3', null, g), h('dl', { class: 'shortcut-list' }, list.flatMap((r) => [h('dt', null, r.title), h('dd', null, h('kbd', null, r.keys))])))));
-  const m = openModal(t('キーボードショートカット'), content, { size: 'lg', key: 'shortcuts', footer: [h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))] });
+  const m = openModal(t('キーボードショートカット'), content, { size: 'lg', key: 'shortcuts', footer: [h('button', { type: 'button', 'data-initial-focus': '', onclick: () => m.close() }, t('閉じる'))] });
 }
 
 /** バージョン情報。 */
@@ -117,7 +117,7 @@ export function openAboutDialog(): void {
     h('p', { class: 'muted small' }, t('idMso / imageMso の一覧は、Microsoft の office-fluent-ui-command-identifiers（MIT License）を元にしています。')),
     h('p', { class: 'muted small' }, t('アイコン集は、Microsoft の Fluent UI System Icons と Tabler Icons（MIT License）を元にしています。')),
     h('p', null, h('button', { type: 'button', class: 'link', onclick: () => void openLicensesDialog() }, t('サードパーティのライセンス'))));
-  const m = openModal(t('バージョン情報'), content, { size: 'sm', key: 'about', footer: [link(RELEASES_URL, t('リリースノート'), 'left'), h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))] });
+  const m = openModal(t('バージョン情報'), content, { size: 'sm', key: 'about', footer: [link(RELEASES_URL, t('リリースノート'), 'footer-start'), h('button', { type: 'button', 'data-initial-focus': '', onclick: () => m.close() }, t('閉じる'))] });
 }
 
 /**
@@ -137,5 +137,5 @@ export async function openLicensesDialog(): Promise<void> {
     list.map((l) => h('section', { class: 'license-entry' },
       h('h3', null, l.name, h('span', { class: 'muted small' }, ` — ${t(l.usage)}`)),
       h('pre', { class: 'license-text', tabindex: 0 }, l.text.trim()))));
-  const m = openModal(t('サードパーティのライセンス'), content, { size: 'lg', key: 'licenses', footer: [h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))] });
+  const m = openModal(t('サードパーティのライセンス'), content, { size: 'lg', key: 'licenses', footer: [h('button', { type: 'button', 'data-initial-focus': '', onclick: () => m.close() }, t('閉じる'))] });
 }

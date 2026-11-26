@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionCount, collectChecks, readyToDistribute, suggestionCount, summaryText, unverifiedCallbacks, type CheckInput, type CheckSection } from '../src/distributionCheck';
+import { attentionCount, collectChecks, errorCount, readyToDistribute, suggestionCount, summaryLevel, summaryText, unverifiedCallbacks, type CheckInput, type CheckSection } from '../src/distributionCheck';
 import { lint, type Problem } from '../src/lint';
 import { parseXml } from '../src/model';
 import { matchCallbacks } from '../src/vba';
@@ -57,12 +57,15 @@ describe('配布前チェック', () => {
     const s = collectChecks(input(d));
     expect(section(s, 'keytips').items).toHaveLength(2);
     expect(section(s, 'longLabels').items).toHaveLength(1);
-    const problems = section(s, 'problems').items;
+    const problems = [...section(s, 'errors').items, ...section(s, 'warnings').items];
     // id の重複（エラー）は問題の分類に。キーヒントと長いラベルは二重に数えない
     expect(problems.some((i) => i.severity === 'error')).toBe(true);
     expect(problems.some((i) => i.text.includes('keytip'))).toBe(false);
     expect(attentionCount(s)).toBe(problems.length + 2);
-    expect(summaryText(s)).toBe(`${problems.length + 2} 件の確認が必要です`);
+    // エラーがあるときは「確認が必要」ではなく、配ってはいけないと伝える
+    expect(summaryLevel(s)).toBe('error');
+    expect(errorCount(s)).toBeGreaterThan(0);
+    expect(summaryText(s)).toBe(`このまま配ると、Excel でリボンが表示されません（エラー ${errorCount(s)} 件）`);
     // must を含む分類が上に来る
     expect(s[0]!.items.some((i) => i.level === 'must')).toBe(true);
   });
@@ -83,10 +86,11 @@ describe('配布前チェック', () => {
     expect(readyToDistribute(s)).toBe(false);
     expect(summaryText(s)).toBe('VBA と照合できていません（コールバック 2 件は未確認）');
     expect(s[0]!.id).toBe('callbacks');
-    // ほかにも確認が必要なものがあれば添える
+    // エラー（id の重複）があれば、照合の未確認より先にそれを伝える（配ってはいけない状態）
     const d2 = doc('<tab id="t" label="T"><group id="g" label="G"><button id="a" label="A" imageMso="X" screentip="s" onAction="Run" /><button id="a" label="B" imageMso="X" screentip="s" /></group></tab>');
     const s2 = collectChecks(input(d2, { vbaChecked: false }));
-    expect(summaryText(s2)).toMatch(/^VBA と照合できていません（コールバック 1 件は未確認）。ほかに \d+ 件の確認が必要です$/);
+    expect(summaryText(s2)).toMatch(/^このまま配ると、Excel でリボンが表示されません（エラー \d+ 件）$/);
+    expect(unverifiedCallbacks(s2)).toBe(1);
   });
 
   it('VBA にないコールバックは must で、Lint の同じ警告は問題の分類から除く', () => {
@@ -97,8 +101,20 @@ describe('配布前チェック', () => {
     const problems: Problem[] = [...base.problems, { severity: 'warning', message: 'コールバック Ribbon_b_onAction がVBAにありません', path: [0, 0, 0, 0, 0], attr: 'onAction' }];
     const s = collectChecks({ ...base, problems, statuses, vbaChecked: true });
     expect(section(s, 'callbacks').items.map((i) => [i.level, i.target])).toEqual([['must', 'callbacks']]);
-    expect(section(s, 'problems').items).toEqual([]);
+    expect(section(s, 'errors').items).toEqual([]);
+    expect(section(s, 'warnings').items).toEqual([]);
     expect(attentionCount(s)).toBe(1);
+    // 警告だけ（エラーなし）なら、赤ではなく「要確認」の段
+    expect(summaryLevel(s)).toBe('attention');
+  });
+
+  it('エラーと警告は別の節に分け、エラーの節が先頭に来る（総点検 D-1）', () => {
+    const d = doc('<tab id="t" label="T"><group id="g" label="G"><button id="a" label="A" imageMso="X" screentip="s" /><button id="a" label="B" imageMso="X" screentip="s" /></group></tab>');
+    const s = collectChecks(input(d));
+    expect(section(s, 'errors').items.every((i) => i.severity === 'error' && i.level === 'must')).toBe(true);
+    expect(section(s, 'errors').items.length).toBeGreaterThan(0);
+    expect(section(s, 'warnings').items.every((i) => i.severity !== 'error')).toBe(true);
+    expect(s[0]!.id).toBe('errors');
   });
 
   it('使っていない画像を挙げる', () => {

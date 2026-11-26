@@ -24,6 +24,7 @@ internal sealed class MainForm : Form
     private readonly Lazy<ExcelService> _excel;
     private readonly string? _initialFile;
     private readonly string? _updatedFrom;
+    private readonly SettingsStore _settings;
     private bool _closeConfirmed;
     private bool _uiReady;
     private bool _closePending;
@@ -58,15 +59,16 @@ internal sealed class MainForm : Form
 
         Text = "Sash";
         Icon = LoadAppIcon();
-        ClientSize = new Size(1440, 900);
         MinimumSize = new Size(960, 600);
-        StartPosition = FormStartPosition.CenterScreen;
+        _settings = settings;
+        RestoreWindowPlacement(settings.Load().Window);
         Controls.Add(_webView);
 
         Load += async (_, _) => await InitializeWebViewAsync();
         FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
         {
+            SaveWindowPlacement();
             // 取り込みの途中なら止める（取り込み用の Excel は ExcelService の Dispose で閉じる）
             _router.Shutdown();
             if (_excel.IsValueCreated)
@@ -74,6 +76,40 @@ internal sealed class MainForm : Form
                 _excel.Value.Dispose();
             }
         };
+    }
+
+    /// <summary>
+    /// 前回の位置と大きさで開く。保存がない、または今の画面から外れているときは既定（作業領域の 90%、小さな画面は最大化）にする。
+    /// 実際の画面（作業領域）に依存するので、判断そのものは WindowPlacement（テストあり）に任せる。
+    /// </summary>
+    private void RestoreWindowPlacement(WindowBounds? saved)
+    {
+        var areas = Screen.AllScreens.Select(s => ToArea(s.WorkingArea)).ToList();
+        var b = WindowPlacement.Resolve(saved, areas, ToArea(Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1040)));
+        StartPosition = FormStartPosition.Manual;
+        Bounds = new Rectangle(b.X, b.Y, b.Width, b.Height);
+        if (b.Maximized)
+        {
+            WindowState = FormWindowState.Maximized;
+        }
+    }
+
+    private static ScreenArea ToArea(Rectangle r) => new(r.X, r.Y, r.Width, r.Height);
+
+    /// <summary>閉じるときに位置と大きさを覚える。最大化中・最小化中は、戻したときの値（RestoreBounds）を保存する。</summary>
+    private void SaveWindowPlacement()
+    {
+        try
+        {
+            var maximized = WindowState == FormWindowState.Maximized;
+            var r = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            _settings.Update(s => s with { Window = new WindowBounds { X = r.X, Y = r.Y, Width = r.Width, Height = r.Height, Maximized = maximized } });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UserFacingException)
+        {
+            // 覚えられなくても、閉じることは続ける
+            AppLog.Write("ウィンドウの位置の保存に失敗", ex);
+        }
     }
 
     /// <summary>未保存の変更があるかは UI が知っているので、閉じる前に UI に確認させる。</summary>
@@ -211,6 +247,12 @@ internal sealed class MainForm : Form
         core.Settings.AreDevToolsEnabled = IsDevelopment(devUrl);
         core.Settings.AreDefaultContextMenusEnabled = IsDevelopment(devUrl);
         core.Settings.IsStatusBarEnabled = false;
+        // Ctrl+ホイールとピンチでの拡大・縮小を止める。Ctrl+0 などのブラウザのキーも切っているので、一度拡大されると戻せなくなる（総点検 W-2）
+        core.Settings.IsZoomControlEnabled = false;
+        core.Settings.IsPinchZoomEnabled = false;
+        // 英字の識別子の入力欄に、前に入れた値の候補やパスワード保存の案内が出ないようにする（総点検 D-13）
+        core.Settings.IsGeneralAutofillEnabled = false;
+        core.Settings.IsPasswordAutosaveEnabled = false;
         core.Settings.AreBrowserAcceleratorKeysEnabled = false; // F5 の再読み込みなどを無効にし、アプリのショートカットに使う
         core.WebMessageReceived += OnWebMessageReceived;
         core.NewWindowRequested += (_, e) => e.Handled = true;

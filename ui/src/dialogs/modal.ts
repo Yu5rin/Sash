@@ -24,7 +24,7 @@ export interface ModalOptions {
   closable?: boolean;
   /** 同じダイアログを二重に開かないための名前。開いていれば、そのダイアログを前に出して返す。 */
   key?: string;
-  /** 最初にフォーカスする要素。省略時は最初の入力欄、なければ主ボタン。 */
+  /** 最初にフォーカスする要素。省略時は最初の入力欄、なければ［閉じる］（data-initial-focus）、主ボタンの順。 */
   initialFocus?: HTMLElement;
 }
 
@@ -60,6 +60,8 @@ function updateInert(): void {
   const app = document.getElementById('app');
   if (app) app.inert = layers.length > 0;
   layers.forEach((l, i) => (l.element.inert = i !== layers.length - 1));
+  // 通知をダイアログの右下のボタンに重ねないための目印（styles.css の .modal-open .toasts）
+  document.body.classList.toggle('modal-open', layers.length > 0);
 }
 
 function onDocumentKey(e: KeyboardEvent): void {
@@ -145,6 +147,9 @@ function initialFocusTarget(dialog: HTMLElement): HTMLElement {
   const body = dialog.querySelector<HTMLElement>('.modal-body');
   const field = body && focusables(body).find((el) => el.matches('input, select, textarea, [contenteditable="true"]'));
   if (field) return field;
+  // 閉じるだけのダイアログの［閉じる］は主ボタン（緑）にせず、この印で最初のフォーカスを置く（総点検 D-9）
+  const closeOnly = dialog.querySelector<HTMLElement>('footer button[data-initial-focus]:not(:disabled)');
+  if (closeOnly) return closeOnly;
   const primary = dialog.querySelector<HTMLElement>('footer button.primary:not(:disabled)');
   if (primary) return primary;
   const other = body && focusables(body)[0];
@@ -229,11 +234,11 @@ function isCancelButton(el: HTMLElement): boolean {
 /**
  * 足もとのボタンを Windows の並びにする：肯定（主ボタン）を先に、キャンセルを右端に置く。
  * Excel の「保存しますか？」も［保存］［保存しない］［キャンセル］の順で、キャンセルが真ん中や左に来ると
- * 押し慣れた位置と違って押し間違えやすいため。class="left" のもの（リンクなど）は左端に残す。
+ * 押し慣れた位置と違って押し間違えやすいため。class="footer-start" のもの（リンクなど）は左端に残す。
  */
 export function orderFooter(items: HTMLElement[]): HTMLElement[] {
-  const left = items.filter((b) => b.classList.contains('left'));
-  const rest = items.filter((b) => !b.classList.contains('left'));
+  const left = items.filter((b) => b.classList.contains('footer-start'));
+  const rest = items.filter((b) => !b.classList.contains('footer-start'));
   const cancel = rest.filter(isCancelButton);
   const others = rest.filter((b) => !isCancelButton(b));
   const primary = others.filter((b) => b.classList.contains('primary'));

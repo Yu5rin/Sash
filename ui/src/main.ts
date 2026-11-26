@@ -46,6 +46,7 @@ import { openSettings } from './shell/settingsDialog';
 import { matchShortcut, splitPath } from './shell/text';
 import { applyTheme, setEditorThemeHandler, updateSettings } from './shell/theme';
 import { notify, toast } from './shell/toast';
+import { installErrorReporting, reportUnexpected } from './shell/errorReport';
 import { changePreview, currentPreview, fitExcelToPreview, SCALE_CHOICES, WIDTH_CHOICES, widthChoiceLabel } from './shell/previewCommands';
 import { openDistributionCheck } from './dialogs/distributionDialog';
 import { openHistoryDialog } from './dialogs/historyDialog';
@@ -54,6 +55,9 @@ import { controlRows, toCsv, toTsv } from './controlList';
 import { clipCount, copyText, moveDisabledReason, moveSelected, moveToNewGroupSelected, newGroupDisabledReason, setSizeSelected, sizeTargets } from './clipboard';
 import { canRevealInVbe, revealInVbe, runMacroDisabledReason, runMacroFor, runSelectedMacro } from './vbaReveal';
 import { callbacksAt } from './vba';
+
+// 想定外の例外を握りつぶさない（製品版は開発者ツールが使えない）。ほかの初期化より先に登録する
+installErrorReporting();
 
 // ---- 文言 ----
 
@@ -369,12 +373,12 @@ async function recentItems(): Promise<MenuItemDef[]> {
     {
       label: t('一覧から消す'),
       // ホームの「最近使ったファイル」にも同じ一覧が出ているので、消したら取り直す
-      items: () => recent.map((r): MenuItemDef => ({ label: splitPath(r.path).name, hint: r.path, run: () => void invoke('file.removeRecent', { path: r.path }).then(() => home.refresh()) })),
+      items: () => recent.map((r): MenuItemDef => ({ label: splitPath(r.path).name, hint: r.path, run: () => void invoke('file.removeRecent', { path: r.path }).then(() => home.refresh()).catch((e: unknown) => reportUnexpected(e, 'file.removeRecent')) })),
     },
     {
       label: t('見つからないファイルを一覧から消す'),
       enabled: missing.length > 0,
-      run: () => void Promise.all(missing.map((r) => invoke('file.removeRecent', { path: r.path }))).then(() => {
+      run: () => void Promise.all(missing.map((r) => invoke('file.removeRecent', { path: r.path }))).catch((e: unknown) => reportUnexpected(e, 'file.removeRecent')).then(() => {
         home.refresh();
         toast({ kind: 'success', message: t('{n} 件を一覧から消しました', { n: missing.length }) });
       }),
@@ -870,7 +874,12 @@ onHostEvent((e) => {
 
 // ---- 起動 ----
 
-const [ready, info, settings] = await Promise.all([invoke('app.ready'), invoke('app.info'), invoke('settings.get')]);
+// ホストとの最初のやり取りが失敗しても、画面は既定の設定で動かして原因を知らせる（無言で止まらないように）
+const [ready, info, settings] = await Promise.all([invoke('app.ready'), invoke('app.info'), invoke('settings.get')]).catch((e: unknown) => {
+  reportUnexpected(e, 'startup');
+  const noReady: { initialFile: string | null; updatedFrom?: string | null; version?: string } = { initialFile: null };
+  return [noReady, app.info, app.settings] as const;
+});
 app.info = info;
 app.settings = settings;
 if (settings.language && settings.language !== lang && sessionGet(LANG_SYNC_KEY) === null) {

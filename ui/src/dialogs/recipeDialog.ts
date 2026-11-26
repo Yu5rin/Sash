@@ -149,7 +149,7 @@ export async function openRecipes(toast: Toast): Promise<void> {
     wide: true,
     key: 'recipes',
     footer: [
-      h('button', { type: 'button', onclick: () => void remove(), class: 'left', disabled: !all.some((r) => r.custom) }, t('削除')),
+      h('button', { type: 'button', onclick: () => void remove(), class: 'footer-start', disabled: !all.some((r) => r.custom) }, t('削除')),
       h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')),
       h('button', { type: 'button', class: 'primary', onclick: () => void apply() }, t('挿入')),
     ],
@@ -253,7 +253,7 @@ export async function saveAsRecipe(toast: Toast): Promise<void> {
 /** ThisWorkbook の既存のイベント処理に足してほしい行を、挿入のあとに示す。 */
 function showConflicts(inst: Instance): void {
   const m = openModal(t('既存のイベントに次の行を追加してください'), h('div', { class: 'recipe-preview' }, ...conflictNotes(inst)), {
-    footer: [h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, t('閉じる'))],
+    footer: [h('button', { type: 'button', 'data-initial-focus': '', onclick: () => m.close() }, t('閉じる'))],
   });
 }
 

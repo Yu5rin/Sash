@@ -48,6 +48,9 @@ public sealed record AppSettings
     /// <summary>更新の確認先。空なら GitHub のリリース。社内の共有フォルダや https の latest.json も指定できる。</summary>
     public string UpdateSource { get; init; } = "";
 
+    /// <summary>前回終了時のウィンドウの位置と大きさ。null なら既定（WindowPlacement）。UI の設定画面からは変えない。</summary>
+    public WindowBounds? Window { get; init; }
+
     /// <summary>最近使ったファイル（新しい順）。</summary>
     public IReadOnlyList<string> RecentFiles { get; init; } = [];
 }
@@ -140,6 +143,8 @@ public sealed class SettingsStore(string path)
             CallbackSharedPattern = string.IsNullOrWhiteSpace(s.CallbackSharedPattern) ? d.CallbackSharedPattern : s.CallbackSharedPattern,
             CallbackModule = string.IsNullOrWhiteSpace(s.CallbackModule) ? d.CallbackModule : s.CallbackModule,
             UpdateSource = s.UpdateSource ?? d.UpdateSource,
+            // 手で書き換えて壊れた値（0 や負の大きさ）は捨てて、既定の置き方にする
+            Window = s.Window is { Width: > 0, Height: > 0 } ? s.Window : null,
             IconFavorites = s.IconFavorites?.OfType<string>().ToList() ?? [],
             RecentFiles = s.RecentFiles?.OfType<string>().Where(p => p.Length > 0).ToList() ?? [],
         };

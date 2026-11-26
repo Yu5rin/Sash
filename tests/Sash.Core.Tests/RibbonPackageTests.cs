@@ -154,6 +154,22 @@ public class RibbonPackageTests
         Assert.Throws<UserFacingException>(() => RibbonPackage.SaveCustomUI(book.Path, CustomUIVersion.Office2010, "<customUI/>"));
     }
 
+    [Theory]
+    [InlineData("これは zip ではありません")]
+    [InlineData("PK\u0003\u0004途中で切れた zip")]
+    [InlineData("")]
+    public void zipとして読めないファイルは_dotnetの文言ではなくわかる言葉で断る(string content)
+    {
+        using var book = new TestWorkbook();
+        File.WriteAllText(book.Path, content);
+
+        var ex = Assert.Throws<UserFacingException>(() => RibbonPackage.Load(book.Path));
+
+        Assert.Contains("Excel のブックとして読めません", ex.Message);
+        // 元の例外はログに残すために持たせておく
+        Assert.NotNull(ex.InnerException);
+    }
+
     [Fact]
     public void 読み取り専用のファイルには書き込まず一時ファイルも残さない()
     {
