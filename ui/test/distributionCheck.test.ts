@@ -98,7 +98,7 @@ describe('配布前チェック', () => {
     const statuses = matchCallbacks(d, [{ name: 'Module1', type: 1, code: 'Sub Other()\r\nEnd Sub\r\n' }]);
     const base = input(d);
     // callbacks.ts の problemProviders と同じ形の警告を足す
-    const problems: Problem[] = [...base.problems, { severity: 'warning', message: 'コールバック Ribbon_b_onAction がVBAにありません', path: [0, 0, 0, 0, 0], attr: 'onAction' }];
+    const problems: Problem[] = [...base.problems, { severity: 'warning', message: 'コールバック Ribbon_b_onAction が VBA にありません', path: [0, 0, 0, 0, 0], attr: 'onAction' }];
     const s = collectChecks({ ...base, problems, statuses, vbaChecked: true });
     expect(section(s, 'callbacks').items.map((i) => [i.level, i.target])).toEqual([['must', 'callbacks']]);
     expect(section(s, 'errors').items).toEqual([]);

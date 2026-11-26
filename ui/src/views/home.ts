@@ -50,10 +50,7 @@ function onboardingCard(): HTMLElement {
       h('ol', { class: 'onboarding-steps' }, steps.map(([title, body], i) =>
         h('li', null,
           h('span', { class: 'onboarding-num', 'aria-hidden': 'true' }, String(i + 1)),
-          h('div', null, h('strong', null, title), h('p', null, body))))),
-      h('div', { class: 'onboarding-actions' },
-        h('button', { type: 'button', onclick: () => void openSample() }, svg(uiIcons.recipe), t('サンプルを開いて試す')),
-        h('span', { class: 'muted' }, t('ファイルがなくても試せます。サンプルは保存できません。')))));
+          h('div', null, h('strong', null, title), h('p', null, body)))))));
   details.addEventListener('toggle', () => rememberOnboarding(!details.open));
   return details;
 }
@@ -137,23 +134,25 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
     }
     return h('section', { class: 'card', 'aria-labelledby': 'home-books' },
       h('div', { class: 'card-head' },
-        h('h2', { id: 'home-books' }, t('Excelで開いているブック')),
+        h('h2', { id: 'home-books' }, t('Excel で開いているブック')),
         app.info.excelInstalled
           ? h('button', { type: 'button', class: 'small', onclick: () => void loadWorkbooks(), disabled: workbooks.kind === 'loading' }, svg(shellIcons.refresh), t('再読み込み'))
           : null),
       h('div', { class: 'card-body' }, body));
   };
 
-  const drop = h('div', { class: 'home-drop' },
-    svg(shellIcons.folder),
-    h('p', null, h('strong', null, t('ここにファイルをドロップ'))),
-    h('p', { class: 'muted' }, '.xlsm / .xlam / .xltm / .xlsb'));
-  // ドロップそのものは main.ts の window の処理に任せ、ここでは場所を示すだけにする
-  drop.addEventListener('dragenter', () => drop.classList.add('over'));
-  drop.addEventListener('dragleave', (e) => {
-    if (!drop.contains(e.relatedTarget as Node)) drop.classList.remove('over');
+  // ドロップそのものは main.ts の window の処理に任せる。ここでは「ここに落とせる」ことを 1 行で示し、
+  // ファイルをドラッグしている間だけ、ホーム全体に点線の枠と薄い緑の地を出す（枠の形が「押せそう」に見える点線の四角は置かない。総点検 H-1）
+  const dropNote = h('p', { class: 'home-drop-note muted' }, t('ブックをここにドロップしても開けます（.xlsm / .xlam / .xltm / .xlsb）'));
+  const isFileDrag = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  host.addEventListener('dragenter', (e) => {
+    if (isFileDrag(e)) host.classList.add('dragging');
   });
-  drop.addEventListener('drop', () => drop.classList.remove('over'));
+  host.addEventListener('dragleave', (e) => {
+    if (!host.contains(e.relatedTarget as Node | null)) host.classList.remove('dragging');
+  });
+  host.addEventListener('drop', () => host.classList.remove('dragging'));
+  host.addEventListener('dragend', () => host.classList.remove('dragging'));
 
   /**
    * ホームは編集画面の上に重ねて出すので、下の要素に Tab が入り込む（見えないキャンバスや XML エディタで止まり、
@@ -183,13 +182,21 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
     host.replaceChildren(
       h('div', { class: 'home-inner' },
         h('div', { class: 'home-hero' },
-          h('div', null,
-            h('h1', null, 'Sash'),
-            h('p', { class: 'home-lead' }, t('xlsm / xlam のリボンを、見たまま作って直せるエディタ')),
-            h('button', { type: 'button', class: 'primary home-open', onclick: () => open() }, svg(uiIcons.open), t('ファイルを開く'), h('kbd', null, 'Ctrl+O'))),
-          drop),
+          h('div', { class: 'home-intro' },
+            h('div', { class: 'home-title' },
+              h('img', { class: 'home-logo', src: `${import.meta.env.BASE_URL}sash-icon.png`, alt: '', width: 40, height: 40 }),
+              h('div', null,
+                h('h1', null, 'Sash'),
+                h('p', { class: 'home-lead' }, t('xlsm / xlam のリボンを、見たまま作って直せるエディタ')))),
+            h('div', { class: 'home-actions' },
+              h('button', { type: 'button', class: 'primary home-open', onclick: () => open() }, svg(uiIcons.open), t('ファイルを開く'), h('kbd', null, 'Ctrl+O')),
+              // 初めての人が最初に押すものなので、「はじめての方へ」の中ではなくここに置く
+              h('button', { type: 'button', class: 'home-sample', onclick: () => void openSample() }, svg(uiIcons.recipe), t('サンプルを開いて試す'))),
+            dropNote),
+          // 空いた右側に、Excel で開いているブック（そのまま開ける）を上げる
+          workbookCard()),
         onboardingCard(),
-        h('div', { class: 'home-cards' }, recentCard(), workbookCard())),
+        h('div', { class: 'home-cards' }, recentCard())),
     );
     // 一覧を描き直してもフォーカスを失わないよう、同じ文字のボタンへ戻す
     if (hadFocus !== null) Array.from(host.querySelectorAll<HTMLElement>('button')).find((b) => b.textContent === hadFocus)?.focus();

@@ -356,3 +356,61 @@ describe('窓に合わせた丸め（総点検 G-1）', () => {
     expect(h.isCollapsed('left')).toBe(true);
   });
 });
+
+describe('下部パネルの自動開閉（総点検 B-1）', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('問題がなければ帯に畳み、出たら開く。保存は書き換えない', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    expect(h.isCollapsed('bottom')).toBe(false);
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(true);
+    expect(root.classList.contains('collapsed-bottom')).toBe(true);
+    h.setBottomAuto(true);
+    expect(h.isCollapsed('bottom')).toBe(false);
+    expect(root.style.getPropertyValue('--bottom')).toBe(`${DEFAULT_SIZES.bottom}px`);
+    // 自動の開閉だけでは何も保存しない
+    expect(localStorage.getItem('sash.layout')).toBeNull();
+  });
+
+  it('自動で畳んでいるあいだに別の操作で保存しても、下部パネルの大きさは 0 にならない', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    h.setBottomAuto(false);
+    key(root.querySelector('[data-splitter="left"]')!, 'ArrowRight');
+    expect(JSON.parse(localStorage.getItem('sash.layout')!).bottom).toBe(DEFAULT_SIZES.bottom);
+    expect(JSON.parse(localStorage.getItem('sash.layout')!).bottomAuto).toBe(true);
+  });
+
+  it('利用者が開閉・ドラッグしたら、以後は自動にしない（bottomAuto: false を保存）', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    h.setBottomAuto(false);
+    h.toggle('bottom'); // 利用者が開いた
+    expect(h.isCollapsed('bottom')).toBe(false);
+    expect(JSON.parse(localStorage.getItem('sash.layout')!).bottomAuto).toBe(false);
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(false);
+  });
+
+  it('保存された bottomAuto: false は、次の起動でも自動にしない。古い保存で大きさを変えていた人も自動にしない', () => {
+    expect(parseLayout('{"bottomAuto":false}').bottomAuto).toBe(false);
+    expect(parseLayout('{"bottom":200}').bottomAuto).toBe(false);
+    expect(parseLayout('{"bottom":140}').bottomAuto).toBe(true);
+    expect(parseLayout(null).bottomAuto).toBe(true);
+    localStorage.setItem('sash.layout', JSON.stringify({ ...DEFAULT_SIZES, bottomAuto: false }));
+    const h = mountLayout(fixture());
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(false);
+  });
+
+  it('既定のレイアウトに戻すと、自動に戻る', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    h.toggle('bottom');
+    h.reset();
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(true);
+  });
+});

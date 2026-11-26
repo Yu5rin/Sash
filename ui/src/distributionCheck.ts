@@ -239,7 +239,8 @@ export function collectChecks(input: CheckInput): CheckSection[] {
     ),
   });
 
-  const weight = (s: CheckSection) => ((s.unverified ?? 0) > 0 ? -1 : s.items.some((i) => i.level === 'must') ? 0 : s.items.some((i) => i.level === 'should') ? 1 : s.items.length ? 2 : 3);
+  // エラー（Excel でリボンが出なくなるもの）は、照合の未確認よりも前に出す
+  const weight = (s: CheckSection) => (s.items.some((i) => i.level === 'must' && i.severity === 'error') ? -2 : (s.unverified ?? 0) > 0 ? -1 : s.items.some((i) => i.level === 'must') ? 0 : s.items.some((i) => i.level === 'should') ? 1 : s.items.length ? 2 : 3);
   // 同じ重さなら上の定義順のまま（sort は安定）
   return sections.sort((a, b) => weight(a) - weight(b));
 }

@@ -56,7 +56,7 @@ public static partial class RibbonPackage
         if (read == head.Length && head.AsSpan().SequenceEqual(CompoundFileSignature))
         {
             throw new UserFacingException(L(
-                "このブックはパスワードで保護（暗号化）されているか、古い形式のファイルのため開けません。Excelで「ファイルを開くためのパスワード」を外してから開いてください。",
+                "このブックはパスワードで保護（暗号化）されているか、古い形式のファイルのため開けません。Excel で「ファイルを開くためのパスワード」を外してから開いてください。",
                 "This workbook is password-protected (encrypted) or in an old file format, so it cannot be opened. Remove the password to open the file in Excel, then try again."));
         }
     }

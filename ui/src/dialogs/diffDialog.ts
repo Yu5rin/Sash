@@ -1,7 +1,7 @@
 // 保存済みの状態との差分（仕様書 §9.3、第3弾）。XML を左右に並べて比べる。
 
 import type * as MonacoTypes from 'monaco-editor/esm/vs/editor/editor.api';
-import { monaco } from '../views/monacoApi';
+import { editorScrollbar, editorThemeName, ensureEditorThemes, monaco } from '../views/monacoApi';
 import { app } from '../app';
 import { h } from '../dom';
 import { t } from '../i18n';
@@ -11,6 +11,7 @@ import { openModal } from './modal';
 const CLEANUP_TIMEOUT_MS = 5000;
 
 export function openDiff(): void {
+  ensureEditorThemes();
   const s = app.session;
   if (!s) return;
   // 二重に開くと Monaco の差分エディタが2つ作られ、閉じても片方が残る
@@ -76,7 +77,9 @@ export function openDiff(): void {
     renderSideBySide: true,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
-    theme: dark ? 'vs-dark' : 'vs',
+    theme: editorThemeName(dark),
+    scrollbar: editorScrollbar,
+    overviewRulerBorder: false,
   });
   editor.onDidUpdateDiff(() => {
     diffReady = true;

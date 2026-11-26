@@ -552,7 +552,7 @@ describe('レビューの指摘の修正（仕様書 §19）', () => {
   });
 
   it('attrValueError：コールバック名・整数・keytip の長さを確かめる（単独とまとめてで共通）', () => {
-    expect(attrValueError(attributes.get('onAction')!, '1 bad name!')).toBe('VBAのSub名として使えない文字があります');
+    expect(attrValueError(attributes.get('onAction')!, '1 bad name!')).toBe('VBA の Sub 名として使えない文字があります');
     expect(attrValueError(attributes.get('onAction')!, 'Module1.OnRun')).toBeNull();
     expect(attrValueError(attributes.get('onAction')!, '')).toBeNull();
     expect(attrValueError({ name: 'columns', kind: 'int' }, '1e')).toBe('0 以上の整数で入力してください');

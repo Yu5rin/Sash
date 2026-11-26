@@ -273,14 +273,14 @@ function commands(): AppCommand[] {
     { id: 'edit.newGroup', group: G.edit, title: countTitle(t('新しいグループに移す')), keywords: 'new group split move グループを分ける 幅', enabled: () => has() && newGroupDisabledReason() === null, run: () => moveToNewGroupSelected('other') },
     { id: 'edit.sizeLarge', group: G.edit, title: countTitle(t('大きく（size=large）'), sizeTargets().length), keywords: 'size large 大きさ 一括', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('large', 'other') },
     { id: 'edit.sizeNormal', group: G.edit, title: countTitle(t('小さく（size=normal）'), sizeTargets().length), keywords: 'size normal small 大きさ 一括 幅', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('normal', 'other') },
-    { id: 'edit.format', group: G.edit, title: t('XMLを整形'), shortcut: 'Shift+Alt+F', keywords: 'format', enabled: () => !!app.store && app.store.syncError === null, run: () => app.store?.format() },
+    { id: 'edit.format', group: G.edit, title: t('XML を整形'), shortcut: 'Shift+Alt+F', keywords: 'format', enabled: () => !!app.store && app.store.syncError === null, run: () => app.store?.format() },
     // キャンバスとツリーの F2 は自分で受ける。それ以外の場所（インスペクタなど）からは、キャンバスで名前の入力に入る
     { id: 'edit.rename', group: G.edit, title: t('名前を変える'), shortcut: 'F2', keywords: 'rename label ラベル 名前 編集', enabled: hasSel, run: () => { if (!startRenameOf(app.store?.selection)) focusPane('inspector'); } },
     { id: 'edit.palette', group: G.help, title: t('コマンドパレット'), shortcut: 'Ctrl+K', keywords: 'command', inText: true, run: () => openCommandPalette(paletteCommands) },
 
     { id: 'view.canvas', group: G.view, title: t('キャンバスに移動'), shortcut: 'Ctrl+1', inText: true, enabled: has, run: () => focusPane('canvas') },
     { id: 'view.tree', group: G.view, title: t('ツリーに移動'), shortcut: 'Ctrl+2', inText: true, enabled: has, run: () => focusPane('tree') },
-    { id: 'view.xml', group: G.view, title: t('XMLエディタに移動'), shortcut: 'Ctrl+3', inText: true, enabled: has, run: () => focusPane('xml') },
+    { id: 'view.xml', group: G.view, title: t('XML エディタに移動'), shortcut: 'Ctrl+3', inText: true, enabled: has, run: () => focusPane('xml') },
     { id: 'view.inspector', group: G.view, title: t('インスペクタに移動'), shortcut: 'Ctrl+4', inText: true, enabled: has, run: () => focusPane('inspector') },
     { id: 'view.bottom', group: G.view, title: t('下部パネルの表示・非表示'), shortcut: 'Ctrl+J', inText: true, enabled: has, run: toggleBottom },
     { id: 'view.nextPane', group: G.view, title: t('次のペインへ移る'), shortcut: 'F6', inText: true, enabled: has, run: () => cyclePane(1) },
@@ -300,7 +300,7 @@ function commands(): AppCommand[] {
     { id: 'view.theme.system', group: G.view, title: t('テーマをシステムに合わせる'), keywords: 'theme system', run: () => void updateSettings({ theme: 'system' }) },
     { id: 'view.theme.light', group: G.view, title: t('ライトテーマにする'), keywords: 'theme light', run: () => void updateSettings({ theme: 'light' }) },
     { id: 'view.theme.dark', group: G.view, title: t('ダークテーマにする'), keywords: 'theme dark', run: () => void updateSettings({ theme: 'dark' }) },
-    { id: 'view.swap', group: G.view, title: t('キャンバスとXMLの上下を入れ替える'), keywords: 'layout swap', run: () => void updateSettings({ xmlOnTop: !app.settings.xmlOnTop }) },
+    { id: 'view.swap', group: G.view, title: t('キャンバスと XML の上下を入れ替える'), keywords: 'layout swap', run: () => void updateSettings({ xmlOnTop: !app.settings.xmlOnTop }) },
     { id: 'view.resetLayout', group: G.view, title: t('既定のレイアウトに戻す'), keywords: 'layout reset', run: () => layout.reset() },
 
     ...PALETTE_ITEMS.map((tag): AppCommand => ({ id: `insert.${tag}`, group: G.insert, title: t('{name}を追加', { name: titleOf(tag) }), keywords: tag, enabled: has, run: () => void insertNearSelection(tag) })),
@@ -310,13 +310,13 @@ function commands(): AppCommand[] {
     { id: 'insert.idMso', group: G.insert, title: t('idMso カタログ…'), keywords: 'idmso catalog', enabled: has, run: openIdMsoCatalog },
     { id: 'insert.imageMso', group: G.insert, title: t('imageMso カタログ…'), keywords: 'imagemso icon catalog', enabled: has, run: openImageMsoCatalog },
 
-    { id: 'tools.apply', group: G.tools, title: t('Excelへ反映'), shortcut: 'F5', keywords: 'apply reload', inText: true, enabled: has, run: () => void applyToExcel() },
+    { id: 'tools.apply', group: G.tools, title: t('Excel へ反映'), shortcut: 'F5', keywords: 'apply reload', inText: true, enabled: has, run: () => void applyToExcel() },
     { id: 'tools.distCheck', group: G.tools, title: t('配布前チェック…'), keywords: 'check distribute release 配布 確認 チェック', enabled: has, run: () => void openOnce('distributionCheck', () => openDistributionCheck({ onNavigate: navigateToCheck })) },
     { id: 'tools.runMacro', group: G.tools, title: t('マクロを Excel で試す'), keywords: 'run macro test 試しに押す 実行 試す', enabled: () => has() && canRunMacro(), run: () => void runSelectedMacro() },
     { id: 'vba.reveal', group: 'VBA', title: t('選択中のコントロールのコールバックを VBE で表示'), keywords: 'vbe vba open procedure 開く', enabled: () => has() && revealableCallback() !== null, run: () => { const n = revealableCallback(); if (n) void revealInVbe(n); } },
     { id: 'tools.replaceIds', group: G.tools, title: t('ID の一括置換…'), keywords: 'id rename replace prefix 置換', enabled: has, run: () => openIdReplaceDialog() },
     { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
-    { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
+    { id: 'vba.refresh', group: 'VBA', title: t('VBA を再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
     { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: canMakeIcon, run: () => openImageEditor() },
@@ -597,7 +597,7 @@ const MENUS: MenuDef[] = [
           label: t('ペインへ移る'), items: () => [
             cmd('view.canvas', t('キャンバス')),
             cmd('view.tree', t('ツリー')),
-            cmd('view.xml', t('XMLエディタ')),
+            cmd('view.xml', t('XML エディタ')),
             cmd('view.inspector', t('インスペクタ')),
             SEP,
             cmd('view.nextPane'),
@@ -648,7 +648,7 @@ const MENUS: MenuDef[] = [
     id: 'tools', label: t('ツール'), mnemonic: 'T', items: () => [
       cmd('tools.apply', undefined, {
         enabled: has() && hasFile(),
-        hint: sampleHint() ?? (app.info.excelInstalled ? undefined : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)')),
+        hint: sampleHint() ?? (app.info.excelInstalled ? undefined : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)')),
       }),
       cmd('tools.diff'),
       cmd('tools.distCheck'),
@@ -697,7 +697,7 @@ toolbarButton('btn-save', uiIcons.save, t('保存'));
 toolbarButton('btn-undo', uiIcons.undo, t('元に戻す'));
 toolbarButton('btn-redo', uiIcons.redo, t('やり直し'));
 toolbarButton('btn-command', uiIcons.command, t('コマンド'));
-$('btn-apply').replaceChildren(svg(uiIcons.apply), h('span', { class: 'tb-label' }, t('Excelへ反映')), h('kbd', null, 'F5'));
+$('btn-apply').replaceChildren(svg(uiIcons.apply), h('span', { class: 'tb-label' }, t('Excel へ反映')), h('kbd', null, 'F5'));
 
 /** ツールバーのボタンと、同じ働きのコマンド。 */
 const TOOLBAR_COMMAND: Readonly<Record<string, string>> = {
@@ -764,10 +764,10 @@ function updateChrome(): void {
   set('btn-redo', store?.canRedo === true, tip(historyTitle(t('やり直し'), store?.redoLabel), 'Ctrl+Y'));
   set('btn-command', true, tip(t('コマンドパレット'), 'Ctrl+K'));
   set('btn-apply', !!s && !isSampleSession && busy === null,
-    busy === 'apply' ? t('Excelへ反映しています…') : isSampleSession ? sampleHint()! : app.info.excelInstalled ? tip(t('Excelへ反映'), 'F5') : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)'));
+    busy === 'apply' ? t('Excel へ反映しています…') : isSampleSession ? sampleHint()! : app.info.excelInstalled ? tip(t('Excel へ反映'), 'F5') : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)'));
   // Excel がない PC では、押すと何が起きるかをボタンの文字で伝える（ツールチップにだけ書いてあると、押すまで分からない。総点検 G-12）
   const applyLabel = $('btn-apply').querySelector('.tb-label');
-  if (applyLabel) applyLabel.textContent = app.info.excelInstalled ? t('Excelへ反映') : t('ファイルに書き込む');
+  if (applyLabel) applyLabel.textContent = app.info.excelInstalled ? t('Excel へ反映') : t('ファイルに書き込む');
   $('btn-save').classList.toggle('busy', busy === 'save');
   $('btn-apply').classList.toggle('busy', busy === 'apply');
 
@@ -910,7 +910,7 @@ setCanvasGrowHandler((px) => layout.growTemporarily('top', px));
 const home = mountHome($('home'), (p) => void openFile(p));
 
 // XML ペインの名前に F6 での移り方を添える（index.html の既定は日本語のままなので、今の言語で付け直す）
-document.querySelector('.xml-pane')?.setAttribute('aria-label', t('XMLエディタ（F6 で次のペインへ）'));
+document.querySelector('.xml-pane')?.setAttribute('aria-label', t('XML エディタ（F6 で次のペインへ）'));
 
 /**
  * 下部パネルを畳んだ帯に、中身の要約を出す。畳むと問題の数が見えなくなり、エラーに気づけないため。
@@ -923,6 +923,8 @@ function updateBottomSummary(): void {
   }
   const problems = app.problems.filter((p) => p.severity !== 'info').length + (app.store.syncError ? 1 : 0);
   layout.setCollapsedSummary('bottom', t('問題 {p} ・ コールバック {c}', { p: problems, c: vba.statuses().length }));
+  // 問題がなければ下部パネルを帯に畳み、出たら開く（利用者が自分で開閉・ドラッグするまでの間だけ。総点検 B-1）
+  layout.setBottomAuto(problems > 0);
 }
 app.on('session', updateBottomSummary);
 app.on('problems', updateBottomSummary);

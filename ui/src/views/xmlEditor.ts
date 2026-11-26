@@ -1,7 +1,7 @@
 // XML エディタ（仕様書 §5.5）。Monaco を使い、スキーマに基づく補完、エラーの波線、選択の同期を行う。
 
 import type * as MonacoTypes from 'monaco-editor/esm/vs/editor/editor.api';
-import { monaco } from './monacoApi';
+import { editorScrollbar, editorThemeName, ensureEditorThemes, monaco } from './monacoApi';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { app } from '../app';
 import { h } from '../dom';
@@ -78,6 +78,7 @@ export interface XmlEditorHandle {
 }
 
 export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handlers: { undo: () => void; redo: () => void }): XmlEditorHandle {
+  ensureEditorThemes();
   editor = monaco.editor.create(host, {
     language: 'xml',
     automaticLayout: true,
@@ -91,6 +92,8 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
     renderWhitespace: 'none',
     quickSuggestions: { other: true, strings: true, comments: false },
     suggestOnTriggerCharacters: true,
+    scrollbar: editorScrollbar,
+    overviewRulerBorder: false,
   });
 
   // Undo / Redo はアプリ全体の履歴に任せる（キャンバスやツリーの操作と一つの履歴にするため）。
@@ -200,7 +203,7 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
     }
     const err = store.syncError;
     statusEl.hidden = err === null;
-    statusMsg.textContent = err ? t('同期停止中：XMLの構文を直すと再開します（{message}）', { message: describeXmlError(err.message) }) : '';
+    statusMsg.textContent = err ? t('同期停止中：XML の構文を直すと再開します（{message}）', { message: describeXmlError(err.message) }) : '';
     jumpBtn.hidden = !err?.line;
     setSyncStopped(err !== null);
   };
@@ -223,7 +226,7 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
 
   return {
     focus: () => editor.focus(),
-    setTheme: (dark) => monaco.editor.setTheme(dark ? 'vs-dark' : 'vs'),
+    setTheme: (dark) => monaco.editor.setTheme(editorThemeName(dark)),
   };
 }
 

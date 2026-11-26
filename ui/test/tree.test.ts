@@ -172,3 +172,41 @@ describe('ツリーのその場での名前変更', () => {
     expect(app.store!.selection!.join('.')).toBe(otherPath);
   });
 });
+
+describe('ribbon › tabs を 1 行にまとめる（総点検 L-1）', () => {
+  const rowTexts = () => Array.from(tree.querySelectorAll('.tree-row')).map((r) => r.querySelector('.tree-label')!.textContent);
+
+  it('子が tabs だけの ribbon は、別の行にせず「ribbon › tabs」の 1 行にする', () => {
+    const labels = rowTexts();
+    expect(labels[0]).toBe('customUI');
+    expect(labels[1]).toBe('ribbon › tabs');
+    // customUI、ribbon › tabs、tab、group、button 2 つ、separator の 7 行
+    expect(labels).toHaveLength(7);
+  });
+
+  it('まとめた行の選択先は tabs。字下げは 1 段 12px で、ribbon の行が減った分だけ浅くなる', () => {
+    const merged = tree.querySelectorAll<HTMLElement>('.tree-row')[1]!;
+    expect(merged.dataset['path']).toBe('0.0');
+    // customUI が depth 0、まとめた行が depth 1、tab が depth 2
+    expect(merged.style.paddingLeft).toBe('16px');
+    expect(tree.querySelectorAll<HTMLElement>('.tree-row')[2]!.style.paddingLeft).toBe('28px');
+  });
+
+  it('「ribbon」の字を押すと ribbon を選び、まとめた行も選択中に見せる', () => {
+    tree.querySelector<HTMLElement>('.tree-crumb')!.click();
+    expect(app.store!.selectedElement?.localName).toBe('ribbon');
+    expect(tree.querySelectorAll('.tree-row.selected')).toHaveLength(1);
+    expect(tree.querySelector('.tree-row.selected')!.querySelector('.tree-label')!.textContent).toBe('ribbon › tabs');
+  });
+
+  it('行を押すと tabs を選ぶ', () => {
+    tree.querySelectorAll<HTMLElement>('.tree-row')[1]!.click();
+    expect(app.store!.selectedElement?.localName).toBe('tabs');
+  });
+
+  it('ribbon に qat など別の子があるときは、まとめない', () => {
+    const xml = XML.replace('<ribbon>', '<ribbon><qat/>');
+    app.open({ path: 'test2.xlam', parts: [{ version: 'office2010', xml, images: [] }] });
+    expect(rowTexts().slice(0, 4)).toEqual(['customUI', 'ribbon', 'qat', 'tabs']);
+  });
+});

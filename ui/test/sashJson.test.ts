@@ -5,7 +5,7 @@ import { PartStore } from '../src/store';
 const XML = '<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">\n  <ribbon />\n</customUI>\n';
 
 describe('.sash.json', () => {
-  it('書き出して読み戻すと同じXMLと画像になる', () => {
+  it('書き出して読み戻すと同じ XML と画像になる', () => {
     const store = new PartStore('office2010', XML, [{ id: 'img_b', dataUrl: 'data:image/png;base64,QUJD', isNew: false }]);
     const text = exportSash([store], 'book.xlsm');
     const json = JSON.parse(text);

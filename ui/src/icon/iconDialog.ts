@@ -127,7 +127,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   // XML の構文エラー中は、コントロールに設定できない（確定で断られる）。画像を作り込んでから断られないよう、開く前に断る。
   // 一覧から開いたとき（target なし）は画像だけを作り直すので、そのまま開く
   if (target && store.syncError) {
-    reportRefusal(tr('XMLに構文エラーがあるため、この操作はできません。先にXMLエディタでエラーを直してください'));
+    reportRefusal(tr('XML に構文エラーがあるため、この操作はできません。先に XML エディタでエラーを直してください'));
     dialogOpts.onClose?.(false);
     return;
   }
@@ -166,7 +166,11 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     fileInput,
     folderInput,
   );
-  const drop = h('div', { class: 'icon-drop', tabIndex: 0 }, h('p', null, tr('画像をドロップ、Ctrl+V で貼り付け、または')), sources, h('p', { class: 'muted' }, 'PNG / JPG / BMP / GIF / WebP / SVG / ICO'));
+  // 見出し「画像を選ぶ」＋ 2 列のボタン。取り込み方の補足は 1 つの文にまとめる（以前は「は」だけが 2 行目に残って折れていた。総点検 D-4）
+  const drop = h('div', { class: 'icon-drop', tabIndex: 0 },
+    h('h3', { class: 'icon-drop-title' }, tr('画像を選ぶ')),
+    sources,
+    h('p', { class: 'muted small icon-drop-hint' }, tr('ドロップ、または Ctrl+V でも取り込めます（PNG / JPG / BMP / GIF / WebP / SVG / ICO）')));
   const sourceView = h('canvas', { class: 'icon-source', title: tr('ドラッグで正方形に切り抜き、クリックで透過する色を選びます') });
   const sourceHint = h('div', { class: 'muted small' });
   const icoList = h('div', { class: 'segmented wrap ico-sizes' });
@@ -188,22 +192,25 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   };
   const check = (key: 'trim' | 'transparent' | 'mono' | 'replace', text: string) =>
     h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: opts[key], dataset: { opt: key }, onchange: (e: Event) => { opts[key] = (e.target as HTMLInputElement).checked; render(); } }), tr(text));
+  // 色の入力は文字がないので、名前を付ける（読み上げとツールチップのため。総点検 D-5）
+  const COLOR_NAMES = { monoColor: '単色の色', replaceFrom: '置き換える前の色', replaceTo: '置き換えた後の色', badgeColor: 'バッジの色' } as const;
   const color = (key: 'monoColor' | 'replaceFrom' | 'replaceTo' | 'badgeColor') =>
-    h('input', { type: 'color', value: opts[key], oninput: (e: Event) => { opts[key] = (e.target as HTMLInputElement).value; render(); } });
+    h('input', { type: 'color', value: opts[key], title: tr(COLOR_NAMES[key]), 'aria-label': tr(COLOR_NAMES[key]), oninput: (e: Event) => { opts[key] = (e.target as HTMLInputElement).value; render(); } });
   const select = <K extends 'size' | 'shape' | 'badge'>(key: K, options: [string, string][]) =>
     h('select', { onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (opts as unknown as Record<string, unknown>)[key] = key === 'size' ? Number(v) : v; if (key === 'size' && source?.ico) selectIco(pickIcoEntry(source.ico.entries, opts.size)); else render(); } },
       options.map(([v, t]) => h('option', { value: v, selected: String(opts[key]) === v }, tr(t))));
   const keySwatch = h('span', { class: 'swatch' });
   const cropReset = h('button', { type: 'button', class: 'small', onclick: () => { opts.crop = null; render(); } }, tr('切り抜きを解除'));
 
-  const section = (title: string, ...rows: HTMLElement[]) => h('fieldset', null, h('legend', null, tr(title)), ...rows);
+  // 枠の上に見出しが乗る形（fieldset）をやめ、ほかの画面と同じ「見出し＋区切り線」にする（総点検 D-4）
+  const section = (title: string, ...rows: HTMLElement[]) => h('section', { class: 'icon-opt-section' }, h('h4', null, tr(title)), ...rows);
   const row = (label: string, ...ctl: (HTMLElement | HTMLElement[] | null)[]) => h('label', null, h('span', { class: 'opt-label' }, tr(label)), ...ctl.flat().filter((x): x is HTMLElement => x !== null));
 
   const controls = h(
     'div',
     { class: 'icon-options' },
     section('サイズと余白',
-      row('出力サイズ', select('size', [['32', '32 × 32'], ['64', '64 × 64（高DPI）']])),
+      row('出力サイズ', select('size', [['32', '32 × 32'], ['64', '64 × 64（高 DPI）']])),
       row('余白', ...range('padding', 0, 30, '%')),
       check('trim', '余白を自動でカットしてから収める'),
       h('div', { class: 'inline' }, cropReset)),
@@ -225,7 +232,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       row('タグ', libraryTags)),
   );
 
-  const content = h('div', { class: 'icon-editor' }, h('div', { class: 'icon-left' }, drop, sourceView, sourceHint, icoList, exeList, h('h3', null, tr('プレビュー（実寸）')), previews), h('div', { class: 'icon-right' }, controls));
+  // 左の列は、結果（プレビュー）を一番上に置く。設定を変える右の列から目が離れないように
+  const content = h('div', { class: 'icon-editor' }, h('div', { class: 'icon-left' }, h('h3', null, tr('プレビュー（実寸）')), previews, drop, sourceView, sourceHint, icoList, exeList), h('div', { class: 'icon-right' }, controls));
   const title = target ? tr('アイコンを作る：{name}', { name: el!.getAttribute('id') ?? el!.localName }) : tr('アイコンを作る');
   const modal = openModal(title, content, {
     wide: true,
@@ -236,6 +244,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       if (!handedOff) dialogOpts.onClose?.(applied);
     },
   });
+
+  updateEnabled();
 
   // ---- 入力 ----
 
@@ -457,7 +467,18 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     );
   }
 
+  /** 画像を読み込むまでは、右の設定を薄くして触れないようにする（読み込む前に動かしても何も起きないため）。 */
+  function updateEnabled(): void {
+    const on = source !== null;
+    controls.classList.toggle('disabled', !on);
+    controls.inert = !on;
+    controls.setAttribute('aria-disabled', String(!on));
+    // 切り抜きを解除は、切り抜いたときだけ使える
+    cropReset.disabled = !opts.crop;
+  }
+
   function render(): void {
+    updateEnabled();
     if (!source) return;
     // SVG は拡大しても粗くならないので、小さなもの（アイコン集の 24px など）は 128px まで大きくして見せる
     const ratio = source.isSvg ? Math.max(Math.min(256 / source.width, 256 / source.height, 1), Math.min(128 / source.width, 128 / source.height)) : Math.min(256 / source.width, 256 / source.height, 1);

@@ -20,7 +20,7 @@ export function openIdReplaceDialog(initial: { find?: string; replace?: string }
   const store = app.store;
   if (!store) return;
   if (store.syncError) {
-    reportRefusal(t('XMLに構文エラーがあるため、この操作はできません。先にXMLエディタでエラーを直してください'));
+    reportRefusal(t('XML に構文エラーがあるため、この操作はできません。先に XML エディタでエラーを直してください'));
     return;
   }
   const rule = namingRule();
@@ -131,7 +131,7 @@ export function openIdReplaceDialog(initial: { find?: string; replace?: string }
     const p = plan;
     if (!p || p.ids.length === 0 || p.hasProblems) return;
     if (store.syncError) {
-      reportRefusal(t('XMLに構文エラーがあるため、この操作はできません。先にXMLエディタでエラーを直してください'));
+      reportRefusal(t('XML に構文エラーがあるため、この操作はできません。先に XML エディタでエラーを直してください'));
       return;
     }
     applyButton.disabled = true;
@@ -143,7 +143,7 @@ export function openIdReplaceDialog(initial: { find?: string; replace?: string }
       const res = await renameVbaSubs(p.callbacks.map((c) => ({ oldName: c.oldName, newName: c.newName })));
       for (const f of res.failed) for (const c of p.callbacks) if (c.oldName.replace(/^.*[.!]/, '') === f.name) skip.add(c.oldName);
       if (res.failed.length) {
-        notify({ kind: 'error', message: t('VBAの Sub 名を {n} 件変えられませんでした（そのコールバック名は変えていません）：{list}', { n: res.failed.length, list: res.failed.map((f) => `${f.name}（${f.reason}）`).join(t('、')) }) });
+        notify({ kind: 'error', message: t('VBA の Sub 名を {n} 件変えられませんでした（そのコールバック名は変えていません）：{list}', { n: res.failed.length, list: res.failed.map((f) => `${f.name}（${f.reason}）`).join(t('、')) }) });
       }
       // 元に戻す（Ctrl+Z）は XML だけを戻し、VBA は戻さないので、そのことも添える
       if (res.renamed.length) vbaNote = t('（VBA の Sub {n} 件も変更。元に戻しても VBA は戻りません）', { n: res.renamed.length });

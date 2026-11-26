@@ -137,13 +137,13 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
           if (!isXmlId(v)) add('error', el, t('id「{value}」は文字かアンダースコアで始め、文字・数字と _ . - だけを使ってください', { value: v }), name);
           break;
         case 'callback':
-          if (!isCallbackValue(v)) add('error', el, t('コールバック名「{value}」はVBAのSub名として使えません', { value: v }), name);
+          if (!isCallbackValue(v)) add('error', el, t('コールバック名「{value}」は VBA の Sub 名として使えません', { value: v }), name);
           break;
         case 'idMso':
-          if (ctx.knownIdMso.size > 0 && v && !ctx.knownIdMso.has(v)) add('warning', el, t('idMso「{value}」はExcelのコマンド一覧にありません', { value: v }), name);
+          if (ctx.knownIdMso.size > 0 && v && !ctx.knownIdMso.has(v)) add('warning', el, t('idMso「{value}」は Excel のコマンド一覧にありません', { value: v }), name);
           break;
         case 'imageMso':
-          if (ctx.missingImageMso.has(v)) add('warning', el, t('imageMso「{value}」はExcelに存在しません', { value: v }), name);
+          if (ctx.missingImageMso.has(v)) add('warning', el, t('imageMso「{value}」は Excel に存在しません', { value: v }), name);
           break;
         case 'image':
           if (!imageIsFreeText && !ctx.imageIds.has(v)) add('error', el, t('画像「{value}」がファイル内にありません', { value: v }), name);

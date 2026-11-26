@@ -123,7 +123,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         {
             if (e is IOException io && IsSharingViolation(io))
             {
-                return L("ファイルが別のプログラム（Excelなど）で開かれているため、書き込めません。Excelで開いている場合は「反映（F5）」を使うか、Excelでブックを閉じてからやり直してください。",
+                return L("ファイルが別のプログラム（Excel など）で開かれているため、書き込めません。Excel で開いている場合は「反映（F5）」を使うか、Excel でブックを閉じてからやり直してください。",
                     "The file is open in another program (such as Excel) and cannot be written. If it is open in Excel, use Apply (F5), or close the workbook in Excel and try again.");
             }
         }
@@ -264,7 +264,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         var changes = ToChanges(req.Parts);
         if (ExcelInstalled)
         {
-            ThrowIfOpenElsewhere(path, L("Excelでこのブックが開かれているため保存できません。「反映（F5）」を使うと、Excelで閉じて書き込み、開き直します。", "This workbook is open in Excel and cannot be saved. Use Apply (F5) to close it in Excel, write the changes, and reopen it."));
+            ThrowIfOpenElsewhere(path, L("Excel でこのブックが開かれているため保存できません。「反映（F5）」を使うと、Excel で閉じて書き込み、開き直します。", "This workbook is open in Excel and cannot be saved. Use Apply (F5) to close it in Excel, write the changes, and reopen it."));
         }
 
         var backup = Backups().Backup(path);
@@ -564,7 +564,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 Backup();
                 Write();
             });
-            return new { status = "written", message = L("Excelが見つからないため、ファイルに書き込みました", "Excel was not found, so the changes were written to the file"), backup };
+            return new { status = "written", message = L("Excel が見つからないため、ファイルに書き込みました", "Excel was not found, so the changes were written to the file"), backup };
         }
 
         var result = await excel.Value.ApplyAsync(path, req.SaveIfDirty, Backup, Write, req.ActivateTab);
@@ -613,7 +613,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
         if (ExcelInstalled && File.Exists(target))
         {
-            ThrowIfOpenElsewhere(target, L("Excelでこのブックが開かれているため戻せません。Excelでブックを閉じてからやり直してください。", "This workbook is open in Excel and cannot be restored. Close it in Excel and try again."));
+            ThrowIfOpenElsewhere(target, L("Excel でこのブックが開かれているため戻せません。Excel でブックを閉じてからやり直してください。", "This workbook is open in Excel and cannot be restored. Close it in Excel and try again."));
         }
 
         try
@@ -623,13 +623,13 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         catch (IOException ex) when (IsSharingViolation(ex))
         {
             // 共通の文言は「反映（F5）を使う」を勧めるが、復元は反映では代われないので、閉じてからのやり直しだけを案内する
-            throw new UserFacingException(L("ブックかバックアップが別のプログラム（Excelなど）で開かれているため、戻せません。開いているプログラムでファイルを閉じてからやり直してください。",
+            throw new UserFacingException(L("ブックかバックアップが別のプログラム（Excel など）で開かれているため、戻せません。開いているプログラムでファイルを閉じてからやり直してください。",
                 "The workbook or the backup is open in another program (such as Excel) and cannot be restored. Close the file in that program and try again."), ex);
         }
     }
 
     private ExcelService RequireExcel() =>
-        ExcelInstalled ? excel.Value : throw new InvalidOperationException(L("Excelが見つからないため、VBAを読み書きできません。", "Excel was not found, so VBA cannot be read or written."));
+        ExcelInstalled ? excel.Value : throw new InvalidOperationException(L("Excel が見つからないため、VBA を読み書きできません。", "Excel was not found, so VBA cannot be read or written."));
 
     private async Task<object> ReadVbaAsync(PathRequest req)
     {

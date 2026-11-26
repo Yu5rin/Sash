@@ -13,6 +13,8 @@ import {
 } from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
+import { emptyState } from './emptyState';
+import { uiIcons } from '../icons';
 import { closeMenu, openElementMenu, openMenu } from './contextMenu';
 import { focusField } from './inspector';
 import { iconTargetOf, iconTargetPath, innerButtonOf } from '../iconTarget';
@@ -564,7 +566,7 @@ function renderHeader(fit: ViewFit | null): HTMLElement {
         setCanvasMode(m);
       },
     }, short ? [h('span', { class: 'cv-long' }, label), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, short)] : label);
-  const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'), tr('右クリック')));
+  const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('右クリックメニュー')));
   // 操作の説明は長いので、小さな「?」のツールチップに回す（1 行に収めるため）
   const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー・Ctrl+クリックで選び足す・Shift+クリックで範囲を選ぶ') }, '?');
   // 複数選択の数（仕様書 §19）。見出しの 1 行に収まるよう、短い印にする。
@@ -1479,10 +1481,13 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
     }
   }
   if (!hasCustom) {
-    body.append(h('div', { class: 'cv-empty floating' },
-      h('span', null, tr('まだ自分のタブがありません。タブを追加するか、組み込みタブにグループを足してください')),
+    body.append(emptyState({
+      className: 'floating',
+      title: tr('まだ自分のタブがありません'),
+      text: tr('タブを追加するか、組み込みタブにグループを足してください'),
       // 白紙から組むより、よく使う形から始めたほうが早いので、レシピへの入り口も置く
-      h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); void openOnce('recipes', () => openRecipes(notify)); } }, tr('レシピから始める'))));
+      action: h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); void openOnce('recipes', () => openRecipes(notify)); } }, tr('レシピから始める')),
+    }));
   }
 
   const qat = renderQat(doc, errorPaths);
@@ -1623,10 +1628,16 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
   });
   const addButton = h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addContextMenu(); } }, tr('コンテキストメニューを追加'));
   if (menus.length === 0) {
-    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } },
-      h('h3', null, tr('コンテキストメニュー（右クリック）')),
-      h('p', { class: 'muted' }, tr('パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます')),
-      addButton);
+    // Backstage と同じ「空の状態」の部品で出す（総点検 C-1）。パレットからのドロップ先でもある（data-ctx-new）
+    const card = emptyState({
+      icon: uiIcons.info,
+      title: tr('右クリックメニューはまだありません'),
+      text: tr('パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます'),
+      action: addButton,
+    });
+    card.classList.add('ctx-section');
+    card.dataset['ctxNew'] = '1';
+    return card;
   }
   return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, tr('コンテキストメニュー（右クリック）'), addButton), h('div', { class: 'ctx-cards' }, cards));
 }

@@ -534,7 +534,7 @@ const mock = {
         });
       }
       case 'vba.reveal':
-        return mockExcel ? r(true) : Promise.reject(new Error(t('Excelが見つからないため、VBAを読み書きできません。')));
+        return mockExcel ? r(true) : Promise.reject(new Error(t('Excel が見つからないため、VBA を読み書きできません。')));
       case 'backup.list': {
         // ブラウザ実行中の見た目の確認用。ホストは新しい順に返す
         const day = 24 * 60 * 60 * 1000;

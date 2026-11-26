@@ -252,11 +252,11 @@ function openMultiMenu(x: number, y: number, source: Source, restoreFocus?: HTML
   const down = moveDisabledReason(1);
   const clips = clipCount();
   const entries: Entry[] = [
-    { label: t('{n} 個を切り取り', { n }), shortcut: 'Ctrl+X', run: () => runCommand('cut', source) },
-    { label: t('{n} 個をコピー', { n }), shortcut: 'Ctrl+C', run: () => runCommand('copy', source) },
-    { label: clips > 1 ? t('{n} 個を貼り付け', { n: clips }) : t('貼り付け'), shortcut: 'Ctrl+V', disabled: !hasClip(), run: () => runCommand('paste', source) },
-    { label: t('{n} 個を複製', { n }), shortcut: 'Ctrl+D', disabled: dupReason !== null, reason: dupReason ?? undefined, run: () => runCommand('duplicate', source) },
-    { label: t('{n} 個を削除', { n }), shortcut: 'Del', run: () => runCommand('delete', source) },
+    { label: t('{action}（{n} 個）', { action: t('切り取り'), n }), shortcut: 'Ctrl+X', run: () => runCommand('cut', source) },
+    { label: t('{action}（{n} 個）', { action: t('コピー'), n }), shortcut: 'Ctrl+C', run: () => runCommand('copy', source) },
+    { label: clips > 1 ? t('{action}（{n} 個）', { action: t('貼り付け'), n: clips }) : t('貼り付け'), shortcut: 'Ctrl+V', disabled: !hasClip(), run: () => runCommand('paste', source) },
+    { label: t('{action}（{n} 個）', { action: t('複製'), n }), shortcut: 'Ctrl+D', disabled: dupReason !== null, reason: dupReason ?? undefined, run: () => runCommand('duplicate', source) },
+    { label: t('{action}（{n} 個）', { action: t('削除'), n }), shortcut: 'Del', run: () => runCommand('delete', source) },
     'sep',
     { label: t('上へ移動'), shortcut: 'Alt+↑', disabled: up !== null, reason: up ?? undefined, run: () => moveSelected(-1, source) },
     { label: t('下へ移動'), shortcut: 'Alt+↓', disabled: down !== null, reason: down ?? undefined, run: () => moveSelected(1, source) },

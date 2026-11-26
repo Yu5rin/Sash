@@ -84,7 +84,7 @@ async function build(start: CategoryId): Promise<void> {
         ], (v) => void update({ theme: v })), t('「システムに合わせる」では、Windows の設定（アプリ モード）に合わせて明るさが変わります。')),
         settingRow(t('レイアウト'), select<'canvas' | 'xml'>(s.xmlOnTop ? 'xml' : 'canvas', [
           { value: 'canvas', label: t('キャンバスを上に') },
-          { value: 'xml', label: t('XMLエディタを上に') },
+          { value: 'xml', label: t('XML エディタを上に') },
         ], (v) => void update({ xmlOnTop: v === 'xml' })), t('XML を主に書く人は、XML エディタを上にすると広く使えます。')));
     },
     callbacks: () => {
@@ -93,9 +93,9 @@ async function build(start: CategoryId): Promise<void> {
         h('input', { type: 'text', value, spellcheck: false, onchange: (e: Event) => void update({ [key]: (e.target as HTMLInputElement).value.trim() } as Partial<Settings>) });
       return h('div', null,
         settingRow(t('名前の規則'), text(s.callbackPattern, 'callbackPattern'), t('新しく作るコールバックの名前です。{id} はコントロールの id、{attr} は属性名（onAction など）に置き換わります。')),
-        settingRow(t('Subの共有'), select<'each' | 'shared'>(s.callbackShared ? 'shared' : 'each', [
+        settingRow(t('Sub の共有'), select<'each' | 'shared'>(s.callbackShared ? 'shared' : 'each', [
           { value: 'each', label: t('コントロールごとに分ける') },
-          { value: 'shared', label: t('1つのSubを共有し control.Id で振り分ける') },
+          { value: 'shared', label: t('1つの Sub を共有し control.Id で振り分ける') },
         ], (v) => void update({ callbackShared: v === 'shared' })), t('共有すると、ボタンが多くても VBA の Sub は属性ごとに 1 つで済みます。')),
         settingRow(t('共有するときの名前'), text(s.callbackSharedPattern, 'callbackSharedPattern'), t('{attr} が置き換わります')),
         settingRow(t('挿入先のモジュール'), text(s.callbackModule, 'callbackModule'), t('雛形を VBA に入れるときの標準モジュールの名前です。なければ作ります。')));
@@ -107,7 +107,7 @@ async function build(start: CategoryId): Promise<void> {
           t('組み込みのアイコン（imageMso）は、この PC の Excel から取り出し、この PC の中（%AppData%\\Sash\\cache）にだけ保存します。Office のアイコンは Microsoft の著作物のため、Sash には同梱していません。取り込んだ後は、Excel を起動しなくても表示できます。')),
         settingRow(t('アイコンの出力サイズ'), select<'32' | '64'>(String(s.iconSize) as '32' | '64', [
           { value: '32', label: '32 × 32' },
-          { value: '64', label: t('64 × 64（高DPI）') },
+          { value: '64', label: t('64 × 64（高 DPI）') },
         ], (v) => void update({ iconSize: Number(v) as 32 | 64 })), t('アイコンエディタで書き出す PNG の大きさです。高 DPI の画面でにじむときは 64 にします。')),
         settingRow(t('アイコンライブラリの保存先'), h('div', { class: 'setting-row' },
           h('span', { class: 'path-text', title: s.iconLibraryPath }, s.iconLibraryPath),

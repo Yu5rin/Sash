@@ -46,14 +46,14 @@ export function sectionName(s: Section): string {
 
 /** 属性の日本語名。生の属性名は横に小さく出す（XML を書く人が対応を覚えられるように）。 */
 const ATTR_LABEL: Readonly<Record<string, string>> = {
-  id: 'ID', idMso: '組み込みID', idQ: '修飾ID', tag: 'タグ文字列',
+  id: 'ID', idMso: '組み込み ID', idQ: '修飾 ID', tag: 'タグ文字列',
   insertAfterMso: 'この後ろに配置', insertBeforeMso: 'この前に配置', insertAfterQ: 'この後ろに配置（idQ）', insertBeforeQ: 'この前に配置（idQ）',
   label: 'ラベル', visible: '表示する', enabled: '有効にする', showLabel: 'ラベルを出す', showImage: 'アイコンを出す',
   screentip: 'ヒントの見出し', supertip: 'ヒントの本文', keytip: 'アクセスキー', size: '大きさ', description: '説明',
   title: '区切りの見出し', onAction: 'クリック時', getPressed: '押下状態', onChange: '入力時', getText: '表示する文字列',
   getContent: 'メニューの中身', getItemCount: '項目の数', getItemLabel: '項目のラベル', getItemImage: '項目のアイコン',
-  getItemID: '項目のID', getItemScreentip: '項目のヒント見出し', getItemSupertip: '項目のヒント本文',
-  getSelectedItemID: '選択中の項目ID', getSelectedItemIndex: '選択中の項目番号', getItemWidth: '項目の幅を返す', getItemHeight: '項目の高さを返す',
+  getItemID: '項目の ID', getItemScreentip: '項目のヒント見出し', getItemSupertip: '項目のヒント本文',
+  getSelectedItemID: '選択中の項目 ID', getSelectedItemIndex: '選択中の項目番号', getItemWidth: '項目の幅を返す', getItemHeight: '項目の高さを返す',
   onLoad: '読み込み時', loadImage: '画像の読み込み', startFromScratch: '組み込みタブを隠す', autoScale: '自動で縮める',
   centerVertically: '縦の中央に揃える', itemSize: '項目の大きさ', boxStyle: '並べる向き', sizeString: '幅の基準の文字列',
   maxLength: '最大文字数', showItemLabel: '項目のラベルを出す', showItemImage: '項目のアイコンを出す', columns: '列の数', rows: '行の数',
@@ -348,7 +348,7 @@ function renderInspector(host: HTMLElement): void {
     : null;
 
   if (!def || def.opaque) {
-    host.replaceChildren(header, h('div', { class: 'insp-empty' }, t('この要素の属性はXMLエディタで編集してください')));
+    host.replaceChildren(header, h('div', { class: 'insp-empty' }, t('この要素の属性は XML エディタで編集してください')));
     return;
   }
 
@@ -931,7 +931,7 @@ function iconRow(el: Element, key: string): HTMLElement {
     h('option', { value: '', selected: mode === '' }, t('なし')),
     h('option', { value: 'imageMso', selected: mode === 'imageMso' }, t('組み込みアイコン')),
     h('option', { value: 'image', selected: mode === 'image' }, t('画像ファイル')),
-    canDynamic ? h('option', { value: 'getImage', selected: mode === 'getImage' }, t('VBAで返す')) : null,
+    canDynamic ? h('option', { value: 'getImage', selected: mode === 'getImage' }, t('VBA で返す')) : null,
   );
 
   let detail: HTMLElement | null = null;

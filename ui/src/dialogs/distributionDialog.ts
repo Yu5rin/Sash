@@ -78,7 +78,7 @@ export function openDistributionCheck(opts: DistributionDialogOptions): void {
     if (body.isConnected) render();
   };
   const footer = [
-    app.info.excelInstalled ? h('button', { type: 'button', class: 'footer-start', onclick: () => void vba.refresh() }, t('VBAを再読み込み')) : null,
+    app.info.excelInstalled ? h('button', { type: 'button', class: 'footer-start', onclick: () => void vba.refresh() }, t('VBA を再読み込み')) : null,
     // 閉じるだけのボタンは主ボタンにしない（緑は「何かを実行する」ものだけ）。最初のフォーカスは modal 側が決める
     h('button', { type: 'button', 'data-initial-focus': '', onclick: () => handle.close() }, t('閉じる')),
   ].filter((b): b is HTMLButtonElement => b !== null);

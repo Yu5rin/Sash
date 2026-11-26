@@ -32,8 +32,8 @@ describe('lint', () => {
 
   it('未知の idMso と存在しない imageMso は警告', () => {
     const r = run('<tab idMso="TabHomeX"><group id="g"><button id="b" imageMso="NoSuchIcon"/></group></tab>');
-    expect(r).toContain('warning:idMso「TabHomeX」はExcelのコマンド一覧にありません');
-    expect(r).toContain('warning:imageMso「NoSuchIcon」はExcelに存在しません');
+    expect(r).toContain('warning:idMso「TabHomeX」は Excel のコマンド一覧にありません');
+    expect(r).toContain('warning:imageMso「NoSuchIcon」は Excel に存在しません');
   });
 
   it('keytip の重複は警告', () => {
@@ -187,7 +187,7 @@ describe('スキーマの細かな規則', () => {
 
   it('日本語の id とコールバック名を受け付ける', () => {
     expect(run('<tab id="集計" label="T"><group id="グループ" label="G"><button id="合計ボタン" onAction="Ribbon_合計_onAction"/></group></tab>')).toEqual([]);
-    expect(run('<tab id="t"><group id="g"><button id="b" onAction="Module1.Run"/><button id="c" onAction="1abc"/></group></tab>')).toEqual(['error:コールバック名「1abc」はVBAのSub名として使えません']);
+    expect(run('<tab id="t"><group id="g"><button id="b" onAction="Module1.Run"/><button id="c" onAction="1abc"/></group></tab>')).toEqual(['error:コールバック名「1abc」は VBA の Sub 名として使えません']);
   });
 });
 

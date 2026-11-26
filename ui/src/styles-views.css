@@ -29,11 +29,20 @@
 .cv-header > * { flex-shrink: 0; }
 .cv-modes button { height: var(--ctl-h-sm); padding: 0 var(--sp-2); font-size: var(--fs-xs); }
 .cv-spacer { flex: 1 1 auto; }
-.cv-hint { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border-strong); font-size: 11px; color: var(--text-subtle); cursor: help; }
+.cv-hint { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--stroke-control); font-size: var(--fs-2xs); color: var(--text-subtle); cursor: help; }
 .cv-hint:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .cv-stage { position: relative; }
 .cv-empty { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); color: var(--text-subtle); }
 .cv-empty.floating { position: absolute; right: var(--sp-3); bottom: var(--sp-2); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-xs); background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+
+/* 「空の状態」の部品（総点検 C-1）。Backstage・右クリックメニュー・自作のタブがないときで共通 */
+.empty-card { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); padding: var(--sp-5); text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); }
+.empty-card-icon { display: inline-flex; color: var(--text-subtle); }
+.empty-card-icon svg { width: 24px; height: 24px; }
+.empty-card-title { margin: 0; padding: 0; font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+.empty-card-text { margin: 0; max-width: 360px; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-subtle); }
+.empty-card button { margin-top: var(--sp-1); }
+.empty-card.floating { position: absolute; right: var(--sp-3); bottom: var(--sp-2); max-width: 320px; padding: var(--sp-3); }
 
 /* 挿入した直後の要素を一瞬だけ目立たせる（A3） */
 @keyframes sash-flash {
@@ -71,7 +80,7 @@
 .rb-tab.builtin { color: var(--text-disabled); }
 /* M365 は選んだタブを太字にせず、下に緑の線を引く */
 .rb-tab.active { background: transparent; color: var(--ribbon-text); font-weight: 600; border: none; }
-.rb-tab.active::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 2px; height: 3px; border-radius: 2px; background: var(--excel-green); }
+.rb-tab.active::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 2px; height: 3px; border-radius: var(--radius-xs); background: var(--excel-green); }
 .rb-tab.selected { outline: 2px solid var(--sel-border); outline-offset: -2px; background: var(--sel-bg); }
 .rb-tab.file { color: var(--excel-green); font-weight: 600; }
 .rb-tab.file:hover { background: var(--accent-soft); }
@@ -125,7 +134,7 @@
 .rb-group-label { position: relative; display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 20px; padding: 0 14px 2px; font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
 .rb-group-label .rb-label { max-width: 14em; overflow: hidden; text-overflow: ellipsis; }
 /* ダイアログ起動ツールは、グループ名の右下の小さな矢印 */
-.rb-launcher { position: absolute; right: 1px; bottom: 3px; width: 12px; height: 12px; margin: 0; border: none; border-radius: 2px; cursor: pointer; }
+.rb-launcher { position: absolute; right: 1px; bottom: 3px; width: 12px; height: 12px; margin: 0; border: none; border-radius: var(--radius-xs); cursor: pointer; }
 .rb-launcher::before { content: ""; position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; }
 .rb-launcher:hover { background: var(--pressed-bg); }
 .rb-launcher.selected { outline: 2px solid var(--sel-border); background: var(--sel-bg); }
@@ -149,8 +158,8 @@
 .rb-arrow { flex-shrink: 0; width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 4px solid currentColor; margin-left: 1px; }
 .rb-sep { width: 1px; padding: 0; margin: 4px 3px; height: 58px; background: var(--border); border: none; }
 .rb-sep.selected { outline-offset: 2px; }
-.rb-check { flex-shrink: 0; width: 13px; height: 13px; border: 1px solid var(--border-strong); border-radius: 2px; background: var(--surface); }
-.rb-field { display: inline-flex; align-items: stretch; justify-content: flex-end; width: 84px; height: 20px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: 2px; }
+.rb-check { flex-shrink: 0; width: 13px; height: 13px; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); background: var(--surface); }
+.rb-field { display: inline-flex; align-items: stretch; justify-content: flex-end; width: 84px; height: 20px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: var(--radius-xs); }
 .rb-field-drop { display: inline-flex; align-items: center; justify-content: center; width: 16px; border-left: 1px solid var(--border); }
 
 /* 分割ボタン：押す部分とメニューの部分を線で分ける */
@@ -171,7 +180,7 @@
 .rb-bg-inner > .rb-ctl + .rb-ctl { border-left-color: var(--border); }
 .rb-empty-slot { font-size: var(--fs-xs); color: var(--text-subtle); padding: 2px 6px; }
 .rb-empty-slot.group { align-self: center; padding: var(--sp-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); white-space: nowrap; }
-.rb-icon.placeholder { border-radius: 3px; background: var(--placeholder-bg); color: var(--text-subtle); border: 1px solid var(--border); }
+.rb-icon.placeholder { border-radius: var(--radius-xs); background: var(--placeholder-bg); color: var(--text-subtle); border: 1px solid var(--border); }
 
 .rb-menu-popup { border-radius: var(--radius-md); box-shadow: var(--shadow-menu); border-color: var(--border); padding: 4px; }
 .rb-menu-item { padding: 0 var(--sp-3); min-height: 26px; display: flex; align-items: center; gap: 6px; border-radius: var(--radius-sm); cursor: pointer; }
@@ -181,15 +190,13 @@
 .rb-menu-sep { flex: 1; border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-subtle); padding-top: 2px; }
 
 /* ドロップ先：差し込む位置の線と、入る先の枠（A15） */
-.drop-indicator { background: var(--focus); border-radius: 2px; box-shadow: 0 0 0 1px var(--surface); }
+.drop-indicator { background: var(--focus); border-radius: var(--radius-xs); box-shadow: 0 0 0 1px var(--surface); }
 .drop-target { outline: 2px dashed var(--focus) !important; outline-offset: -2px; background: var(--sel-bg) !important; }
 
-.cv-rename { width: 9em; height: 20px; padding: 0 4px; font-size: var(--fs-xs); border: 1px solid var(--focus); border-radius: 2px; }
+.cv-rename { width: 9em; height: 20px; padding: 0 4px; font-size: var(--fs-xs); border: 1px solid var(--focus); border-radius: var(--radius-xs); }
 
 /* コンテキストメニューの表示 */
 .ctx-section h3 { display: flex; align-items: center; gap: var(--sp-3); }
-.ctx-section.empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); }
-.ctx-section.empty p { margin: 0; }
 .ctx-card { border-color: var(--border); box-shadow: var(--shadow-menu); border-radius: var(--radius-md); }
 .ctx-card.selected { outline: 2px solid var(--sel-border); }
 
@@ -201,7 +208,7 @@
 
 /* ---- XML エディタ：選択中の要素の開始タグ ---- */
 
-.monaco-editor .sash-selected-tag { background: var(--sel-bg); border-radius: 2px; }
+.monaco-editor .sash-selected-tag { background: var(--sel-bg); border-radius: var(--radius-xs); }
 .monaco-editor .sash-selected-line { box-shadow: inset 3px 0 0 var(--sel-border); }
 
 /* ---- ツリー ---- */
@@ -213,8 +220,11 @@
 #tree:focus .tree-row.selected, #tree:focus-visible .tree-row.selected { outline: 1px solid var(--focus); outline-offset: -1px; }
 .tree-row.hidden-el .tree-label { color: var(--text-subtle); font-style: italic; }
 .tree-label { flex: 0 1 auto; min-width: 2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-id { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-subtle); }
+.tree-id { flex: 0 10 auto; min-width: 0; margin-left: auto; padding-left: var(--sp-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-subtle); }
 .tree-row .badge { flex-shrink: 0; margin-left: auto; }
+.tree-row .tree-id + .badge { margin-left: var(--sp-1); }
+.tree-crumb { cursor: pointer; }
+.tree-crumb:hover { text-decoration: underline; }
 .tree-row.drop-before { border-top-color: var(--focus); }
 .tree-row.drop-after { border-bottom-color: var(--focus); }
 .tree-row.drop-inside { background: var(--sel-bg); outline: 1px dashed var(--focus); outline-offset: -1px; }
@@ -232,7 +242,7 @@
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-menu);
   font-size: var(--fs-sm);
   outline: none;
@@ -242,7 +252,7 @@
 .ctx-item:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
 .ctx-item.disabled { color: var(--text-disabled); }
 .ctx-item.has-reason { height: auto; min-height: var(--ctl-h); padding-top: 4px; padding-bottom: 4px; }
-.ctx-reason { display: block; max-width: 320px; margin-top: 1px; font-size: 11px; line-height: 1.35; color: var(--text-subtle); white-space: normal; }
+.ctx-reason { display: block; max-width: 320px; margin-top: 1px; font-size: var(--fs-2xs); line-height: 1.35; color: var(--text-subtle); white-space: normal; }
 .ctx-item.disabled:hover, .ctx-item.disabled:focus { background: transparent; }
 .ctx-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-shortcut { color: var(--text-subtle); font-size: var(--fs-xs); }
@@ -287,7 +297,7 @@
 .insp-label-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
 .insp-label { display: flex; flex-direction: column; padding-top: 3px; font-family: var(--font); color: var(--text); cursor: help; min-width: 0; }
 .insp-label-ja { font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.insp-label-raw { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-label-raw { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .insp-value input[type="text"], .insp-value select { height: var(--ctl-h-sm); }
 .insp-field { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .insp-inline { min-width: 0; }
@@ -298,14 +308,14 @@
 input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shadow: 0 0 0 1px var(--error); }
 .insp-bool { display: flex; width: 100%; }
 .insp-bool button { flex: 1 1 auto; justify-content: center; min-height: 0; height: 22px; padding: 0 4px; font-size: var(--fs-xs); white-space: nowrap; }
-.insp-mode button { min-height: 0; height: 18px; padding: 0 6px; font-size: 11px; }
+.insp-mode button { min-height: 0; height: 18px; padding: 0 6px; font-size: var(--fs-2xs); }
 .cv-modes button, .insp-section-head, .rb-tab-add, .ctx-item { min-height: 0; }
 .insp-row.wide .insp-value { gap: var(--sp-1); }
 
 /* ---- 下部パネル（問題） ---- */
 
 .bottom-tabs button .count-badge { margin-left: 4px; }
-.count-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 16px; padding: 0 5px; border-radius: 8px; font-size: 11px; font-weight: 600; line-height: 1; }
+.count-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 16px; padding: 0 5px; border-radius: var(--radius-pill); font-size: var(--fs-2xs); font-weight: 600; line-height: 1; }
 .count-badge.error { background: var(--error); color: var(--on-error); }
 .count-badge.warning { background: var(--warning); color: var(--on-warning); }
 .count-badge.info { background: var(--info); color: var(--on-info); }
@@ -372,7 +382,7 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .cv-mi { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 26px; padding: 0 var(--sp-2); border: none; border-radius: var(--radius-sm); background: transparent; text-align: left; font-size: var(--fs-xs); color: var(--text); justify-content: flex-start; }
 .cv-mi:hover:not(:disabled):not(.disabled) { background: var(--hover-bg); }
 .cv-mi.disabled, .cv-mi:disabled { color: var(--text-disabled); }
-.cv-mi-reason { margin-left: auto; color: var(--text-subtle); font-size: 11px; }
+.cv-mi-reason { margin-left: auto; color: var(--text-subtle); font-size: var(--fs-2xs); }
 .cv-mi-sep { height: 1px; margin: 2px 0; background: var(--border); }
 .cv-check.cv-mi { cursor: default; }
 .cv-short { display: none; }
@@ -438,7 +448,7 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .cv-views { display: flex; flex-direction: column; gap: var(--sp-3); }
 .cv-view { position: relative; }
 .cv-zoom { width: max-content; min-width: 0; }
-.cv-ruler { position: relative; height: 16px; margin-bottom: 2px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-subtle); }
+.cv-ruler { position: relative; height: 16px; margin-bottom: 2px; border-bottom: 1px solid var(--border); font-size: var(--fs-2xs); color: var(--text-subtle); }
 .cv-ruler.free { overflow: hidden; }
 .cv-mark { position: absolute; bottom: 0; transform: translateX(-100%); padding-right: 3px; white-space: nowrap; line-height: 14px; border-right: 1px solid var(--border-strong); }
 .cv-mark.end { color: var(--text); font-weight: 600; }
@@ -465,7 +475,7 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .rb-group.rb-clipped { opacity: 0.55; }
 .rb-group.rb-clipped::before { content: ""; position: absolute; inset: 0; border-radius: var(--radius-sm); background: repeating-linear-gradient(135deg, transparent 0 6px, var(--error-tint-18) 6px 12px); pointer-events: none; }
 .rb-group.temp-expanded { box-shadow: inset 0 0 0 1px var(--focus); }
-.rb-chip { height: 16px; min-height: 0; padding: 0 6px; margin-left: 2px; font-size: 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); }
+.rb-chip { height: 16px; min-height: 0; padding: 0 6px; margin-left: 2px; font-size: var(--fs-2xs); border-radius: var(--radius-pill); border: 1px solid var(--stroke-control); background: var(--surface); color: var(--text); }
 .rb-chip:hover { background: var(--hover-bg); }
 .rb-group-popup { padding: var(--sp-1) var(--sp-1) 0; white-space: nowrap; }
 .rb-group-popup .rb-controls { min-height: 68px; }
@@ -480,10 +490,10 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
   min-width: 14px;
   padding: 0 3px;
   border: 1px solid var(--border-strong);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--surface);
   color: var(--text);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   line-height: 13px;
   text-align: center;
@@ -512,10 +522,10 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
   line-height: 1.45;
   pointer-events: none;
 }
-.rb-screentip-title { font-weight: 700; }
+.rb-screentip-title { font-weight: 600; }
 .rb-screentip-body { margin-top: 4px; white-space: pre-wrap; }
 .rb-screentip .dynamic { font-weight: 400; font-style: italic; color: var(--text-subtle); }
-.rb-screentip-id { margin-top: 4px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-subtle); }
+.rb-screentip-id { margin-top: 4px; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-subtle); }
 
 /* 2つの幅を比べるときの、比べる側の見出しの知らせ */
 .cv-msg { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 1px var(--sp-2); border-radius: var(--radius-sm); font-size: var(--fs-xs); border: 1px solid var(--border); background: var(--surface); }
@@ -573,17 +583,19 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
   height: var(--ctl-h-sm);
   min-width: 36px;
   padding: 0 5px;
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   line-height: 1;
+  /* 枠なしの小さなボタン。1 行に入力欄・［提案］［選ぶ］と並ぶので、線を増やさない（総点検 S-1） */
   background: transparent;
   color: var(--text-subtle);
-  border: 1px solid var(--border-strong);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
 }
 .insp-modebtn:hover:not(:disabled) { background: var(--hover-bg); color: var(--text); }
-.insp-modebtn.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.insp-modebtn.on:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
+/* VBA で返しているとき */
+.insp-modebtn.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.insp-modebtn.on:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-hover); }
 .insp-modebtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 /* 真偽値の 3 択は、ボタンが並ぶ幅が狭いときに文字を切って詰める（切り替えボタンのぶん幅が減るため。全文は選択肢の読み上げと同じ） */
 .insp-row.has-mode .insp-bool button { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 3px; }
@@ -598,6 +610,12 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .catalog-grid .catalog-id { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; overflow: hidden; overflow-wrap: anywhere; }
 .catalog-fullname { min-height: 1.4em; padding: 0 var(--sp-1); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-subtle); overflow-wrap: anywhere; }
 /* I-1：1 属性 1 段（約 32px）。ラベル列は 2 行（日本語名＋属性名）ぶんの高さで、入力欄は上下中央に合わせる */
-.insp-row, .insp-row.has-mode { grid-template-columns: minmax(72px, 29%) 1fr; padding: 2px var(--sp-3); }
+.insp-row, .insp-row.has-mode { grid-template-columns: 108px minmax(0, 1fr); padding: 2px var(--sp-3); }
+/* I-1：インスペクタが 280px 未満（下限の 260px 付近）のときは、ラベルの下に値を置く 1 列にする。
+   2 列のままだと入力欄が 50px ほどになり、「既定／はい／いいえ」が重なって読めなかった */
+@container inspector (max-width: 279px) {
+  .insp-row, .insp-row.has-mode { grid-template-columns: minmax(0, 1fr); }
+  .insp-label { min-height: 0; }
+}
 .insp-label { padding-top: 0; justify-content: center; min-height: var(--ctl-h-sm); }
-.insp-row.has-mode .insp-bool button { font-size: 11px; }
+.insp-row.has-mode .insp-bool button { font-size: var(--fs-2xs); }
