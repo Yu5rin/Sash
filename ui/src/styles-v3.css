@@ -57,3 +57,10 @@
 .import-cb-where { font-size: var(--fs-xs); flex: 1; min-width: 0; }
 .import-cb-actions { display: flex; gap: var(--sp-2); }
 @media (max-width: 760px) { .import-grid { grid-template-columns: 1fr; } }
+
+/* ---- 配布前チェックの案内（§23.5） ---- */
+.dist-item.static { cursor: default; flex-wrap: wrap; }
+.dist-item.static:hover { background: none; }
+.dist-item.static .dist-detail { flex-basis: 100%; margin-left: 0; padding-left: 22px; max-width: none; white-space: normal; }
+.dist-item.static .dist-text { flex: 1; min-width: 0; }
+.dist-item.static { align-items: flex-start; padding-top: 4px; padding-bottom: 4px; }

@@ -14,6 +14,7 @@ const FILES = [
   '../src/importFlow.ts',
   '../src/dialogs/importDialog.ts',
   '../src/ribbonImport.ts',
+  '../src/distributionCheck.ts',
 ];
 
 const sources = import.meta.glob(['../src/**/*.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;

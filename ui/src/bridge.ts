@@ -562,6 +562,28 @@ function mockLogoPng(): string {
   }
 }
 
+/** ?badimages の画像。黒一色（透明な背景）・白い背景つき・128px の大きい画像。描けない環境（テスト）では空。 */
+function mockBadImages(): { id: string; contentType: string; base64: string }[] {
+  const make = (w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): string => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      draw(ctx);
+      return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+    } catch {
+      return '';
+    }
+  };
+  return [
+    { id: 'darkIcon', contentType: 'image/png', base64: make(32, 32, (c) => { c.fillStyle = '#111'; c.fillRect(6, 6, 20, 20); }) },
+    { id: 'whiteBgIcon', contentType: 'image/png', base64: make(32, 32, (c) => { c.fillStyle = '#fff'; c.fillRect(0, 0, 32, 32); c.fillStyle = '#185c37'; c.fillRect(8, 8, 16, 16); }) },
+    { id: 'bigIcon', contentType: 'image/png', base64: make(128, 128, (c) => { c.fillStyle = '#c42b1c'; c.fillRect(16, 16, 96, 96); }) },
+  ];
+}
+
 /** ?external のとき、再読み込み（file.open のやり直し）のあとはディスクの内容を取り込んだ扱いにする。 */
 let mockReloaded = false;
 let mockOpened = false;
@@ -579,7 +601,13 @@ const mock = {
       case 'file.open':
         if (mockOpened) mockReloaded = true;
         mockOpened = true;
-        return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }], fingerprint: { office2010: 'base' }, webMark: mockParams.has('webmark') });
+        // ?badimages を付けると、暗い単色・白い背景つき・大きすぎる画像を使っているブックとして開く（配布前チェックの確認用）
+        return r({
+          path: 'C:\\sample\\集計ツール.xlam',
+          parts: [mockParams.has('badimages') ? { version: 'office2010', xml: sampleXml.replace('<group id="grpMode"', '<group id="grpIcons" label="アイコン"><button id="icoDark" label="黒" image="darkIcon" screentip="s" onAction="Ribbon_btnQuick_onAction" /><button id="icoWhiteBg" label="白地" image="whiteBgIcon" screentip="s" onAction="Ribbon_btnQuick_onAction" /><button id="icoBig" label="大" image="bigIcon" screentip="s" onAction="Ribbon_btnQuick_onAction" /></group>\n        <group id="grpMode"'), images: mockBadImages() } : { version: 'office2010', xml: sampleXml, images: [] }],
+          fingerprint: { office2010: 'base' },
+          webMark: mockParams.has('webmark'),
+        });
       case 'file.fingerprint':
         // ?external を付けると、開いたあとにほかで書き換えられたものとして振る舞う（保存・反映の前の確認を確かめられる）
         return r({ fingerprint: { office2010: mockParams.has('external') && !mockReloaded ? 'changed' : 'base' } });
