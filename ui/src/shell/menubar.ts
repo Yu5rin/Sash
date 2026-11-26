@@ -11,6 +11,8 @@ import { normalizeForSearch } from './text';
 export interface MenuItemDef {
   type?: 'item' | 'separator' | 'submenu';
   label?: string;
+  /** アクセスキー（英字 1 文字）。日本語は「保存(S)」、英語は文字に下線を引く。開いているメニューでその英字を押すと実行する。 */
+  mnemonic?: string;
   shortcut?: string;
   /** 省略時は有効。 */
   enabled?: boolean;
@@ -176,7 +178,7 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
           title: item.hint ?? null,
         },
         h('span', { class: 'mi-check' }, item.checked ? svg(shellIcons.check) : null),
-        h('span', { class: 'mi-label' }, item.label ?? ''),
+        h('span', { class: 'mi-label' }, ...(item.mnemonic && item.label ? labelWithMnemonic(item.label, item.mnemonic) : [item.label ?? ''])),
         h('span', { class: 'mi-shortcut' }, item.shortcut ?? ''),
         h('span', { class: 'mi-sub' }, hasSub ? svg(shellIcons.submenu) : null),
       );
@@ -263,6 +265,23 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
     }
   };
 
+  /**
+   * アクセスキー。開いているメニューで英字を押したとき、その字を持つ項目を探す。
+   * 1 つなら実行（サブメニューなら開く）、同じ字が複数あれば順に移るだけ（実行は Enter）。見つからなければ false。
+   */
+  const pressMnemonic = (level: Level, depth: number, ch: string): boolean => {
+    const c = ch.toLowerCase();
+    const hits = level.items.map((it, i) => (isFocusable(it) && isEnabled(it) && it.mnemonic?.toLowerCase() === c ? i : -1)).filter((i) => i >= 0);
+    if (hits.length === 0) return false;
+    if (hits.length === 1) {
+      focusItem(level, hits[0]!);
+      activate(level.items[hits[0]!]!, depth);
+    } else {
+      focusItem(level, hits.find((i) => i > level.active) ?? hits[0]!);
+    }
+    return true;
+  };
+
   const typeAhead = (level: Level, ch: string) => {
     const c = normalizeForSearch(ch);
     const n = level.items.length;
@@ -322,8 +341,10 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
         restoreFocus();
         break;
       default:
-        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) typeAhead(level, e.key);
-        else handled = false;
+        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          // アクセスキーを先に見て、なければ頭文字での移動（英語のラベル用）
+          if (!pressMnemonic(level, depth, e.key)) typeAhead(level, e.key);
+        } else handled = false;
     }
     if (handled) {
       e.preventDefault();
@@ -389,9 +410,13 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
           handled = false;
           break;
         default: {
+          const single = e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey;
+          // マウスで開いたメニューは、フォーカスがまだメニューバーのボタンにある。項目のアクセスキーが効くよう、開いているメニューへ渡す（見直し 低9）
+          if (single && openIndex === i && levels[0] && pressMnemonic(levels[0], 0, e.key)) break;
           // メニューバーにいるときは、Alt なしでもアクセスキーで開ける
           const idx = e.key.length === 1 && !e.ctrlKey && !e.metaKey ? menus.findIndex((m) => m.mnemonic.toLowerCase() === e.key.toLowerCase()) : -1;
           if (idx >= 0) openMenu(idx, 'first');
+          else if (single && openIndex === i && levels[0]) typeAhead(levels[0], e.key);
           else handled = false;
         }
       }

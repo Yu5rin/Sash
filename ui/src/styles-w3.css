@@ -10,7 +10,7 @@
 .tree-filter-count { font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
 .tree-filter-count.none { color: var(--warning-text); }
 .tree-row.filter-ancestor .tree-label, .tree-row.filter-ancestor .tree-id { color: var(--text-subtle); }
-.tree-mark { background: var(--warning-bg); color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px var(--warning-border); }
+.tree-mark { background: var(--warning-bg); color: inherit; border-radius: var(--radius-xs); box-shadow: 0 0 0 1px var(--warning-border); }
 
 /* ---- ID の一括置換 ---- */
 .idr { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
@@ -60,8 +60,8 @@
 .icon-suggest-head { font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-suggest-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .icon-suggest-row[hidden] { display: none; }
-.icon-suggest-kind { font-size: 11px; color: var(--text-subtle); flex-basis: 100%; }
-.icon-suggest { display: inline-flex; align-items: center; gap: 4px; min-height: var(--ctl-h-sm); height: auto; padding: 1px 6px; font-size: 11px; max-width: 100%; }
+.icon-suggest-kind { font-size: var(--fs-2xs); color: var(--text-subtle); flex-basis: 100%; }
+.icon-suggest { display: inline-flex; align-items: center; gap: 4px; min-height: var(--ctl-h-sm); height: auto; padding: 1px 6px; font-size: var(--fs-2xs); max-width: 100%; }
 .icon-suggest span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .icon-suggest img { width: 16px; height: 16px; }
 .icon-suggest.fluent { width: var(--ctl-h-sm); padding: 0; justify-content: center; }
@@ -72,7 +72,7 @@
 .insp-inner-note { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 4px var(--sp-3) 6px; font-size: var(--fs-xs); color: var(--text-subtle); }
 .insp-inner-note.error { color: var(--error-text); }
 .insp-dynamic { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--fs-xs); }
-.insp-dynamic-badge { padding: 0 6px; border-radius: 8px; background: var(--info-bg); color: var(--info-text); border: 1px solid var(--info-border); font-size: 11px; }
+.insp-dynamic-badge { padding: 0 6px; border-radius: var(--radius-pill); background: var(--info-bg); color: var(--info-text); border: 1px solid var(--info-border); font-size: var(--fs-2xs); }
 /* ID の一括置換：VBA で直す必要がある箇所 */
 .idr-warn { color: var(--warning-text); font-weight: 600; }
 .idr-vba { margin: 0; padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border); font-size: var(--fs-sm); }
@@ -103,7 +103,7 @@
 
 /* ---- XML エディタ：構文エラーで同期が止まっているとき ---- */
 .xml-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
-.xml-status-msg { flex: 1 1 24ch; min-width: 0; }
+.xml-status-msg { flex: 1 1 24ch; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xml-status-actions { display: inline-flex; gap: var(--sp-2); flex-shrink: 0; }
 .xml-status-actions button[hidden] { display: none; }
 /* 画面の更新は止まっているので、ほかのペインは触れそうに見えないよう薄くする（操作自体は各所で断られる） */

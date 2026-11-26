@@ -22,8 +22,19 @@ public static partial class RibbonPackage
     {
         var fullPath = System.IO.Path.GetFullPath(path);
         ThrowIfCompoundFile(fullPath);
-        using var package = Package.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return new RibbonDocument(fullPath, ReadParts(package));
+        try
+        {
+            using var package = Package.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return new RibbonDocument(fullPath, ReadParts(package));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or FileFormatException or System.Xml.XmlException or ArgumentException or NotSupportedException)
+        {
+            // zip として壊れているファイルや、拡張子だけ .xlsm にした別のファイル。.NET の文言をそのまま見せず、わかる言葉で伝える
+            // （元の例外は InnerException に残し、ホストがログに書く）
+            throw new UserFacingException(L(
+                "このファイルは Excel のブックとして読めませんでした。壊れているか、別の種類のファイルです。Excel で開けるか確かめてください。",
+                "This file could not be read as an Excel workbook. It may be damaged or a different kind of file. Check that it opens in Excel."), ex);
+        }
     }
 
     /// <summary>OLE 複合ファイル（D0 CF 11 E0 A1 B1 1A E1）の先頭 8 バイト。</summary>
@@ -45,7 +56,7 @@ public static partial class RibbonPackage
         if (read == head.Length && head.AsSpan().SequenceEqual(CompoundFileSignature))
         {
             throw new UserFacingException(L(
-                "このブックはパスワードで保護（暗号化）されているか、古い形式のファイルのため開けません。Excelで「ファイルを開くためのパスワード」を外してから開いてください。",
+                "このブックはパスワードで保護（暗号化）されているか、古い形式のファイルのため開けません。Excel で「ファイルを開くためのパスワード」を外してから開いてください。",
                 "This workbook is password-protected (encrypted) or in an old file format, so it cannot be opened. Remove the password to open the file in Excel, then try again."));
         }
     }

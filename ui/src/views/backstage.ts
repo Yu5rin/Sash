@@ -5,9 +5,11 @@ import { app } from '../app';
 import { runEdit } from '../clipboard';
 import { endDrag, startDrag } from '../dnd';
 import { h } from '../dom';
+import { uiIcons } from '../icons';
+import { emptyState } from './emptyState';
 import { childElements, createElement, elementAt, pathOf, samePath, type Path } from '../model';
 import { msoIcon } from '../msoIcons';
-import { t as tr } from '../i18n';
+import { lang, t as tr } from '../i18n';
 
 /** 組み込みの Backstage のメニュー（表示だけ）。 */
 const BUILTIN_NAV = ['ホーム', '新規', '開く', '情報', '上書き保存', '名前を付けて保存', '印刷', '共有', 'エクスポート', '閉じる'];
@@ -155,13 +157,15 @@ export function renderBackstage(doc: Document, errors: Set<string>): HTMLElement
   }
   const bs = childElements(doc.documentElement).find((c) => c.localName === 'backstage');
   if (!bs) {
-    return h(
-      'div',
-      { class: 'bs-view empty', dataset: { bsNew: '1' } },
-      h('p', null, tr('［ファイル］タブ（Backstage）に、自分のタブやボタンを足せます。')),
-      h('p', { class: 'muted' }, tr('パレットの「Backstage」をここにドラッグするか、ダブルクリックしてください。')),
-      h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addBackstage(); } }, tr('Backstage を追加')),
-    );
+    // 同じ役割の「空の状態」は 1 つの部品で出す（総点検 C-1）。ここはパレットからのドロップ先でもある（data-bs-new）
+    const card = emptyState({
+      icon: uiIcons.info,
+      title: tr('Backstage はまだありません'),
+      text: [tr('［ファイル］タブ（Backstage）に、自分のタブやボタンを足せます。'), tr('パレットの「Backstage」をここにドラッグするか、ダブルクリックしてください。')].join(lang === 'en' ? ' ' : ''),
+      action: h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addBackstage(); } }, tr('Backstage を追加')),
+    });
+    card.dataset['bsNew'] = '1';
+    return card;
   }
   const ctx: Ctx = { sel: store.selection, errors };
   const tabs = childElements(bs).filter((c) => c.localName === 'tab');

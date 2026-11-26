@@ -24,7 +24,11 @@ internal sealed class MainForm : Form
     private readonly Lazy<ExcelService> _excel;
     private readonly string? _initialFile;
     private readonly string? _updatedFrom;
+    private readonly SettingsStore _settings;
     private bool _closeConfirmed;
+
+    /// <summary>最小化する前のウィンドウの状態。最小化したまま閉じても、最大化だったことを覚えておくため。</summary>
+    private FormWindowState _stateBeforeMinimize = FormWindowState.Normal;
     private bool _uiReady;
     private bool _closePending;
 
@@ -58,15 +62,23 @@ internal sealed class MainForm : Form
 
         Text = "Sash";
         Icon = LoadAppIcon();
-        ClientSize = new Size(1440, 900);
         MinimumSize = new Size(960, 600);
-        StartPosition = FormStartPosition.CenterScreen;
+        _settings = settings;
+        RestoreWindowPlacement(settings.Load().Window);
+        Resize += (_, _) =>
+        {
+            if (WindowState != FormWindowState.Minimized)
+            {
+                _stateBeforeMinimize = WindowState;
+            }
+        };
         Controls.Add(_webView);
 
         Load += async (_, _) => await InitializeWebViewAsync();
         FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
         {
+            SaveWindowPlacement();
             // 取り込みの途中なら止める（取り込み用の Excel は ExcelService の Dispose で閉じる）
             _router.Shutdown();
             if (_excel.IsValueCreated)
@@ -74,6 +86,41 @@ internal sealed class MainForm : Form
                 _excel.Value.Dispose();
             }
         };
+    }
+
+    /// <summary>
+    /// 前回の位置と大きさで開く。保存がない、または今の画面から外れているときは既定（作業領域の 90%、小さな画面は最大化）にする。
+    /// 実際の画面（作業領域）に依存するので、判断そのものは WindowPlacement（テストあり）に任せる。
+    /// </summary>
+    private void RestoreWindowPlacement(WindowBounds? saved)
+    {
+        var areas = Screen.AllScreens.Select(s => ToArea(s.WorkingArea)).ToList();
+        var b = WindowPlacement.Resolve(saved, areas, ToArea(Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1040)));
+        StartPosition = FormStartPosition.Manual;
+        Bounds = new Rectangle(b.X, b.Y, b.Width, b.Height);
+        if (b.Maximized)
+        {
+            WindowState = FormWindowState.Maximized;
+        }
+    }
+
+    private static ScreenArea ToArea(Rectangle r) => new(r.X, r.Y, r.Width, r.Height);
+
+    /// <summary>閉じるときに位置と大きさを覚える。最大化中・最小化中は、戻したときの値（RestoreBounds）を保存する。</summary>
+    private void SaveWindowPlacement()
+    {
+        try
+        {
+            // 最小化したまま閉じたときは WindowState が Minimized なので、最小化する前の状態（最大化だったか）を使う
+            var maximized = WindowState == FormWindowState.Maximized || (WindowState == FormWindowState.Minimized && _stateBeforeMinimize == FormWindowState.Maximized);
+            var r = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            _settings.Update(s => s with { Window = new WindowBounds { X = r.X, Y = r.Y, Width = r.Width, Height = r.Height, Maximized = maximized } });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UserFacingException)
+        {
+            // 覚えられなくても、閉じることは続ける
+            AppLog.Write("ウィンドウの位置の保存に失敗", ex);
+        }
     }
 
     /// <summary>未保存の変更があるかは UI が知っているので、閉じる前に UI に確認させる。</summary>
@@ -211,8 +258,23 @@ internal sealed class MainForm : Form
         core.Settings.AreDevToolsEnabled = IsDevelopment(devUrl);
         core.Settings.AreDefaultContextMenusEnabled = IsDevelopment(devUrl);
         core.Settings.IsStatusBarEnabled = false;
+        // Ctrl+ホイールとピンチでの拡大・縮小を止める。Ctrl+0 などのブラウザのキーも切っているので、一度拡大されると戻せなくなる（総点検 W-2）
+        core.Settings.IsZoomControlEnabled = false;
+        core.Settings.IsPinchZoomEnabled = false;
+        // 英字の識別子の入力欄に、前に入れた値の候補やパスワード保存の案内が出ないようにする（総点検 D-13）
+        core.Settings.IsGeneralAutofillEnabled = false;
+        core.Settings.IsPasswordAutosaveEnabled = false;
         core.Settings.AreBrowserAcceleratorKeysEnabled = false; // F5 の再読み込みなどを無効にし、アプリのショートカットに使う
         core.WebMessageReceived += OnWebMessageReceived;
+        // 入力欄の右クリック［貼り付け］は navigator.clipboard.readText() を使う。WebView2 の既定では確認の吹き出しが出るので、
+        // 自分の画面（UiAssets.Origin、開発時は Vite のオリジン）からのクリップボードの読み取りだけ、確認なしで許す。ほかの権限は既定のまま
+        core.PermissionRequested += (_, e) =>
+        {
+            if (e.PermissionKind == CoreWebView2PermissionKind.ClipboardRead && IsOwnOrigin(e.Uri))
+            {
+                e.State = CoreWebView2PermissionState.Allow;
+            }
+        };
         core.NewWindowRequested += (_, e) => e.Handled = true;
         core.NavigationStarting += OnNavigationStarting;
         core.ProcessFailed += OnProcessFailed;
@@ -228,6 +290,18 @@ internal sealed class MainForm : Form
         core.AddWebResourceRequestedFilter($"{UiAssets.Origin}/*", CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += OnWebResourceRequested;
         core.Navigate(_startUrl);
+    }
+
+    /// <summary>権限の要求の元が、自分の画面のオリジンか。</summary>
+    private bool IsOwnOrigin(string uri)
+    {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var u))
+        {
+            return false;
+        }
+
+        var own = _allowedOrigin;
+        return u.Scheme == own.Scheme && string.Equals(u.Host, own.Host, StringComparison.OrdinalIgnoreCase) && u.Port == own.Port;
     }
 
     private void FailToStart(string message)

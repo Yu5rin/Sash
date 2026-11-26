@@ -79,7 +79,7 @@ function imageUses(doc: Document): Map<string, Element[]> {
   return map;
 }
 
-const STATE_LABEL: Record<CallbackState, string> = { implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: 'VBA側にしかない' };
+const STATE_LABEL: Record<CallbackState, string> = { implemented: '実装済み', missing: '未実装', mismatch: '引数が不一致', unused: 'VBA 側にしかない' };
 
 function renderCallbacks(store: PartStore, toast: (msg: string, kind?: ToastKind) => void): HTMLElement {
   const statuses = vba.statuses();
@@ -95,7 +95,7 @@ function renderCallbacks(store: PartStore, toast: (msg: string, kind?: ToastKind
     h(
       'li',
       { class: 'panel-actions' },
-      h('span', { class: 'muted' }, vba.loading ? t('VBAを読み込んでいます…') : vba.statusMessage()),
+      h('span', { class: 'muted' }, vba.loading ? t('VBA を読み込んでいます…') : vba.statusMessage()),
       h(
         'span',
         { class: 'actions' },
@@ -196,6 +196,8 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
         type: 'button',
         class: `small filter ${sev}${shown.has(sev) ? ' active' : ''}`,
         'aria-pressed': String(shown.has(sev)),
+        // 0 件の種類は隠すものがないので押せない
+        disabled: n === 0,
         onclick: () => {
           if (shown.has(sev)) shown.delete(sev);
           else shown.add(sev);
@@ -212,7 +214,7 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
           role: 'button',
           onclick: () => syncError.line && revealLine(syncError.line),
           onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && syncError.line && revealLine(syncError.line),
-        }, svg(uiIcons.error), h('span', { class: 'msg' }, t('XMLの構文エラー：{message}', { message: describeXmlError(syncError.message) })), h('span', { class: 'where' }, syncError.line ? t('{line}行目', { line: syncError.line }) : '')),
+        }, svg(uiIcons.error), h('span', { class: 'msg' }, t('XML の構文エラー：{message}', { message: describeXmlError(syncError.message) })), h('span', { class: 'where' }, syncError.line ? t('{line}行目', { line: syncError.line }) : '')),
       );
     }
     const order: Record<Severity, number> = { error: 0, warning: 1, info: 2 };

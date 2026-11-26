@@ -12,7 +12,7 @@ export function attrValueError(d: Pick<AttrDef, 'name' | 'kind'>, value: string)
   if (v === '') return null;
   if (d.kind === 'int') return /^\d+$/.test(v) ? null : t('0 以上の整数で入力してください');
   // コールバック名は「モジュール名.Sub名」「ブック!Sub名」の形も認める（isCallbackName）
-  if (d.kind === 'callback') return isCallbackName(v) ? null : t('VBAのSub名として使えない文字があります');
+  if (d.kind === 'callback') return isCallbackName(v) ? null : t('VBA の Sub 名として使えない文字があります');
   // keytip は 1〜3 文字（XSD の ST_Keytip）。4 文字以上だと Excel がファイルを読み込めないので、確定させない
   if (d.name === 'keytip' && [...v].length > 3) return t('keytip は3文字以内で指定してください');
   return null;

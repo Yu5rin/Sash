@@ -18,7 +18,9 @@
             <span class="file-chip-name" id="file-name"></span>
             <span class="file-chip-dirty" id="file-dirty" hidden></span>
           </span>
-          <select id="part-switch" class="compact" hidden title="編集するパーツ（2010以降のExcelは customUI14 を優先します）" data-i18n-title="編集するパーツ（2010以降のExcelは customUI14 を優先します）" aria-label="編集するパーツ（2010以降のExcelは customUI14 を優先します）"></select>
+          <span id="excel-chip" class="excel-chip" hidden></span>
+          <span id="vba-chip" class="excel-chip vba-chip" hidden></span>
+          <select id="part-switch" class="compact" hidden title="編集するパーツ（2010以降の Excel は customUI14 を優先します）" data-i18n-title="編集するパーツ（2010以降の Excel は customUI14 を優先します）" aria-label="編集するパーツ（2010以降の Excel は customUI14 を優先します）"></select>
         </div>
         <button id="update-banner" type="button" class="update-banner" hidden></button>
       </header>
@@ -27,10 +29,11 @@
         <button id="btn-open" type="button" class="tb-button"></button>
         <button id="btn-save" type="button" class="tb-button" disabled></button>
         <span class="tb-sep" role="separator"></span>
-        <button id="btn-undo" type="button" class="tb-button" disabled></button>
-        <button id="btn-redo" type="button" class="tb-button" disabled></button>
+        <button id="btn-undo" type="button" class="tb-button icon-only" disabled></button>
+        <button id="btn-redo" type="button" class="tb-button icon-only" disabled></button>
         <span class="tb-sep" role="separator"></span>
         <button id="btn-command" type="button" class="tb-button subtle"></button>
+        <button id="btn-dist" type="button" class="tb-button subtle" disabled></button>
         <span class="tb-spacer"></span>
         <button id="btn-apply" type="button" class="tb-button excel" disabled></button>
       </div>
@@ -53,7 +56,7 @@
           <div id="canvas" tabindex="0" data-pane="canvas" aria-label="キャンバス"></div>
         </section>
         <div class="splitter h" data-splitter="top" aria-label="キャンバスの高さ" title="ドラッグで高さを変更、ダブルクリックで畳む" data-i18n-title="ドラッグで高さを変更、ダブルクリックで畳む"></div>
-        <section class="xml-pane" aria-label="XMLエディタ（F6 で次のペインへ）" data-pane="xml">
+        <section class="xml-pane" aria-label="XML エディタ（F6 で次のペインへ）" data-pane="xml">
           <div class="xml-status" id="xml-status" hidden></div>
           <div id="xml-editor"></div>
         </section>

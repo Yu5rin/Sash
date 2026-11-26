@@ -2,6 +2,7 @@
 // 操作はすべて「コマンド」として 1 か所に定義し、メニュー・ツールバー・コマンドパレット・ショートカット一覧は
 // そこから作る（どこから呼んでも同じ名前・同じショートカット・同じ有効条件になるように）。
 
+import './boot'; // 最初に評価される（想定外の例外の受け皿。後ろの import の評価中の失敗も拾うため）
 import './styles.css';
 import { app } from './app';
 import { invoke, isHosted, onHostEvent, sendDroppedFiles } from './bridge';
@@ -12,7 +13,7 @@ import { openDiff } from './dialogs/diffDialog';
 import { openCommandPalette, type Command } from './dialogs/commandPalette';
 import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
 import { ask, isModalOpen, openOnce } from './dialogs/modal';
-import { $, h, svg } from './dom';
+import { $, debounce, h, svg } from './dom';
 import { lang, storeLang, t, translateDocument } from './i18n';
 import { applyLibraryIcon, openIconDialog } from './icon/iconDialog';
 import { openLibrary } from './dialogs/libraryDialog';
@@ -33,11 +34,13 @@ import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palett
 import { filteredTreePaths, focusTreeFilter, mountTree } from './views/tree';
 import { openIdReplaceDialog } from './idReplaceDialog';
 import { openSample } from './sample';
-import { mountXmlEditor, revealInXml } from './views/xmlEditor';
+import { mountXmlEditor, revealInXml, setXmlEscapeHandler } from './views/xmlEditor';
 import { probeInsert, setEditRefusedHandler } from './shell/compat';
 import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
 import { describeElement } from './elementHelp';
 import { inTextField, runEditCommand } from './shell/editCommands';
+import { createPollGate } from './shell/pollGate';
+import { vbaChipState } from './shell/vbaChip';
 import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
 import { mountMenubar, type MenuDef, type MenuItemDef } from './shell/menubar';
@@ -46,6 +49,8 @@ import { openSettings } from './shell/settingsDialog';
 import { matchShortcut, splitPath } from './shell/text';
 import { applyTheme, setEditorThemeHandler, updateSettings } from './shell/theme';
 import { notify, toast } from './shell/toast';
+import { reportUnexpected } from './shell/errorReport';
+import { installTextFieldMenu } from './shell/textMenu';
 import { changePreview, currentPreview, fitExcelToPreview, SCALE_CHOICES, WIDTH_CHOICES, widthChoiceLabel } from './shell/previewCommands';
 import { openDistributionCheck } from './dialogs/distributionDialog';
 import { openHistoryDialog } from './dialogs/historyDialog';
@@ -54,6 +59,10 @@ import { controlRows, toCsv, toTsv } from './controlList';
 import { clipCount, copyText, moveDisabledReason, moveSelected, moveToNewGroupSelected, newGroupDisabledReason, setSizeSelected, sizeTargets } from './clipboard';
 import { canRevealInVbe, revealInVbe, runMacroDisabledReason, runMacroFor, runSelectedMacro } from './vbaReveal';
 import { callbacksAt } from './vba';
+
+// 想定外の例外の受け皿は、最初に評価される ./boot で登録している（この本文は、すべての import の評価が終わってから動くため）
+// 入力欄の右クリック（切り取り・コピー・貼り付け）。製品版は WebView2 の既定のメニューを切っている
+installTextFieldMenu();
 
 // ---- 文言 ----
 
@@ -190,6 +199,17 @@ function canRunMacro(): boolean {
   return runMacroDisabledReason(app.store?.selectedElement ?? null) === '';
 }
 
+/** 選択中の要素にアイコンを設定できるか（ボタンなど。分割ボタンは中のボタンに設定する）。タブやグループでは使えない。 */
+function canMakeIcon(): boolean {
+  const store = app.store;
+  return !!store?.selection && iconTargetPath(store.doc, store.selection) !== null;
+}
+
+/** アイコンを作れないときの理由（メニューのツールチップ）。 */
+function iconDisabledHint(): string | undefined {
+  return canMakeIcon() ? undefined : t('ボタンなど、アイコンを持てるコントロールを選ぶと使えます');
+}
+
 /** 選択中の要素のコールバックのうち、VBE で表示できる最初のもの。 */
 function revealableCallback(): string | null {
   const store = app.store;
@@ -204,6 +224,8 @@ interface AppCommand extends Command {
   inText?: boolean;
   /** 表示とは別に受けるキー（やり直しの Ctrl+Shift+Z など）。 */
   altKeys?: string[];
+  /** true なら shortcut は表示だけで、キーの照合には使わない（Alt+F4 は Windows が受ける。Alt+↑↓ はキャンバスとツリーが受ける）。 */
+  displayOnly?: boolean;
 }
 
 const has = () => app.session !== null;
@@ -223,7 +245,7 @@ function historyTitle(base: string, label: string | null | undefined): string {
 function commands(): AppCommand[] {
   const G = { file: t('ファイル'), edit: t('編集'), view: t('表示'), insert: t('挿入'), tools: t('ツール'), help: t('ヘルプ'), recipe: t('レシピ') };
   return [
-    { id: 'file.new', group: G.file, title: t('新しいリボンを作る…'), keywords: 'new create ribbon 新規 作成 はじめて', enabled: idle, run: () => void newRibbon() },
+    { id: 'file.new', group: G.file, title: t('新しいリボンを作る…'), shortcut: 'Ctrl+N', inText: true, keywords: 'new create ribbon 新規 作成 はじめて', enabled: idle, run: () => void newRibbon() },
     { id: 'file.open', group: G.file, title: t('開く…'), shortcut: 'Ctrl+O', keywords: 'open file ファイルを開く', inText: true, enabled: idle, run: () => void openFile() },
     // 保存と反映は、実行中でも押せるようにしておき、押されたら「終わるまでお待ちください」と知らせる（黙って無視しない）
     { id: 'file.save', group: G.file, title: t('保存'), shortcut: 'Ctrl+S', keywords: 'save', inText: true, enabled: has, run: () => void save() },
@@ -234,7 +256,7 @@ function commands(): AppCommand[] {
     { id: 'file.exportControls', group: G.file, title: t('コントロール一覧を CSV で書き出す…'), keywords: 'export csv controls list 一覧 書き出し', enabled: has, run: () => void exportControlList() },
     { id: 'file.copyControls', group: G.file, title: t('コントロール一覧をコピー（Excel に貼り付け用）'), keywords: 'copy tsv controls list 一覧 クリップボード', enabled: has, run: copyControlList },
     { id: 'file.sample', group: G.file, title: t('サンプルを開く'), keywords: 'sample example サンプル 試す', enabled: idle, run: () => void openSample() },
-    { id: 'file.quit', group: G.file, title: t('終了'), keywords: 'quit exit', enabled: () => isHosted, run: () => void quit() },
+    { id: 'file.quit', group: G.file, title: t('終了'), shortcut: 'Alt+F4', displayOnly: true, keywords: 'quit exit', enabled: () => isHosted, run: () => void quit() },
 
     { id: 'edit.undo', group: G.edit, title: historyTitle(t('元に戻す'), app.store?.undoLabel), shortcut: 'Ctrl+Z', keywords: 'undo', enabled: () => app.store?.canUndo === true, run: undo },
     { id: 'edit.redo', group: G.edit, title: historyTitle(t('やり直し'), app.store?.redoLabel), shortcut: 'Ctrl+Y', altKeys: ['Ctrl+Shift+Z'], keywords: 'redo', enabled: () => app.store?.canRedo === true, run: redo },
@@ -248,17 +270,20 @@ function commands(): AppCommand[] {
     // ツリーを絞り込んでいるときは、見えている行の兄弟だけを選ぶ（隠れた要素を続けて消してしまわないように。仕様書 §19.1）
     { id: 'edit.selectAll', group: G.edit, title: t('同じ階層をすべて選択'), shortcut: 'Ctrl+A', keywords: 'select all multi 複数選択 すべて選択', enabled: () => (app.store?.selection?.length ?? 0) > 0, run: () => app.store?.selectAll('other', filteredTreePaths() ?? undefined) },
     { id: 'edit.clearMulti', group: G.edit, title: t('複数選択を解除'), keywords: 'deselect multi 複数選択 解除', enabled: () => app.store?.isMulti === true, run: () => app.store?.clearMulti('other') },
-    { id: 'edit.moveUp', group: G.edit, title: countTitle(t('上へ移動')), keywords: 'move up 並べ替え alt+up', enabled: () => has() && moveDisabledReason(-1) === null, run: () => moveSelected(-1, 'other') },
-    { id: 'edit.moveDown', group: G.edit, title: countTitle(t('下へ移動')), keywords: 'move down 並べ替え alt+down', enabled: () => has() && moveDisabledReason(1) === null, run: () => moveSelected(1, 'other') },
+    { id: 'edit.moveUp', group: G.edit, title: countTitle(t('上へ移動')), shortcut: 'Alt+↑', displayOnly: true, keywords: 'move up 並べ替え alt+up', enabled: () => has() && moveDisabledReason(-1) === null, run: () => moveSelected(-1, 'other') },
+    { id: 'edit.moveDown', group: G.edit, title: countTitle(t('下へ移動')), shortcut: 'Alt+↓', displayOnly: true, keywords: 'move down 並べ替え alt+down', enabled: () => has() && moveDisabledReason(1) === null, run: () => moveSelected(1, 'other') },
     { id: 'edit.newGroup', group: G.edit, title: countTitle(t('新しいグループに移す')), keywords: 'new group split move グループを分ける 幅', enabled: () => has() && newGroupDisabledReason() === null, run: () => moveToNewGroupSelected('other') },
     { id: 'edit.sizeLarge', group: G.edit, title: countTitle(t('大きく（size=large）'), sizeTargets().length), keywords: 'size large 大きさ 一括', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('large', 'other') },
     { id: 'edit.sizeNormal', group: G.edit, title: countTitle(t('小さく（size=normal）'), sizeTargets().length), keywords: 'size normal small 大きさ 一括 幅', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('normal', 'other') },
-    { id: 'edit.format', group: G.edit, title: t('XMLを整形'), shortcut: 'Shift+Alt+F', keywords: 'format', enabled: () => !!app.store && app.store.syncError === null, run: () => app.store?.format() },
-    { id: 'edit.palette', group: G.edit, title: t('コマンドパレット'), shortcut: 'Ctrl+K', keywords: 'command', inText: true, run: () => openCommandPalette(paletteCommands) },
+    { id: 'edit.format', group: G.edit, title: t('XML を整形'), shortcut: 'Shift+Alt+F', keywords: 'format', enabled: () => !!app.store && app.store.syncError === null, run: () => app.store?.format() },
+    // F2 はキャンバスとツリーが自分で受ける。入力欄（インスペクタなど）の中では奪わない（inText を付けない。入力欄の中の F2 は文字の編集のためのもの）。
+    // 入力欄の外の、パレットなど（フォーカスが要素にない所）の F2 と、メニュー・コマンドパレットからは、キャンバスで名前の入力に入る
+    { id: 'edit.rename', group: G.edit, title: t('名前を変える'), shortcut: 'F2', keywords: 'rename label ラベル 名前 編集', enabled: hasSel, run: () => { if (!startRenameOf(app.store?.selection)) focusPane('inspector'); } },
+    { id: 'edit.palette', group: G.help, title: t('コマンドパレット'), shortcut: 'Ctrl+K', keywords: 'command', inText: true, run: () => openCommandPalette(paletteCommands) },
 
     { id: 'view.canvas', group: G.view, title: t('キャンバスに移動'), shortcut: 'Ctrl+1', inText: true, enabled: has, run: () => focusPane('canvas') },
     { id: 'view.tree', group: G.view, title: t('ツリーに移動'), shortcut: 'Ctrl+2', inText: true, enabled: has, run: () => focusPane('tree') },
-    { id: 'view.xml', group: G.view, title: t('XMLエディタに移動'), shortcut: 'Ctrl+3', inText: true, enabled: has, run: () => focusPane('xml') },
+    { id: 'view.xml', group: G.view, title: t('XML エディタに移動'), shortcut: 'Ctrl+3', inText: true, enabled: has, run: () => focusPane('xml') },
     { id: 'view.inspector', group: G.view, title: t('インスペクタに移動'), shortcut: 'Ctrl+4', inText: true, enabled: has, run: () => focusPane('inspector') },
     { id: 'view.bottom', group: G.view, title: t('下部パネルの表示・非表示'), shortcut: 'Ctrl+J', inText: true, enabled: has, run: toggleBottom },
     { id: 'view.nextPane', group: G.view, title: t('次のペインへ移る'), shortcut: 'F6', inText: true, enabled: has, run: () => cyclePane(1) },
@@ -278,31 +303,33 @@ function commands(): AppCommand[] {
     { id: 'view.theme.system', group: G.view, title: t('テーマをシステムに合わせる'), keywords: 'theme system', run: () => void updateSettings({ theme: 'system' }) },
     { id: 'view.theme.light', group: G.view, title: t('ライトテーマにする'), keywords: 'theme light', run: () => void updateSettings({ theme: 'light' }) },
     { id: 'view.theme.dark', group: G.view, title: t('ダークテーマにする'), keywords: 'theme dark', run: () => void updateSettings({ theme: 'dark' }) },
-    { id: 'view.swap', group: G.view, title: t('キャンバスとXMLの上下を入れ替える'), keywords: 'layout swap', run: () => void updateSettings({ xmlOnTop: !app.settings.xmlOnTop }) },
+    { id: 'view.swap', group: G.view, title: t('キャンバスと XML の上下を入れ替える'), keywords: 'layout swap', run: () => void updateSettings({ xmlOnTop: !app.settings.xmlOnTop }) },
     { id: 'view.resetLayout', group: G.view, title: t('既定のレイアウトに戻す'), keywords: 'layout reset', run: () => layout.reset() },
 
     ...PALETTE_ITEMS.map((tag): AppCommand => ({ id: `insert.${tag}`, group: G.insert, title: t('{name}を追加', { name: titleOf(tag) }), keywords: tag, enabled: has, run: () => void insertNearSelection(tag) })),
-    { id: 'insert.recipes', group: G.insert, title: t('レシピ…'), keywords: 'recipe template レシピを挿入', enabled: has, run: () => void openOnce('recipes', () => openRecipes(notify)) },
+    { id: 'insert.recipes', group: G.insert, title: t('レシピ…'), keywords: 'recipe template レシピを挿入', enabled: () => has() && !app.store?.syncError, run: () => void openOnce('recipes', () => openRecipes(notify)) },
     { id: 'insert.saveRecipe', group: G.recipe, title: t('選択中のタブ・グループをレシピとして保存'), keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(notify) },
-    ...builtinRecipes.map((r): AppCommand => ({ id: `recipe.${r.id}`, group: G.recipe, title: t(r.title), keywords: 'recipe template', enabled: has, run: () => runAndNotify(applyRecipe(r)) })),
+    ...builtinRecipes.map((r): AppCommand => ({ id: `recipe.${r.id}`, group: G.recipe, title: t(r.title), keywords: 'recipe template', enabled: () => has() && !app.store?.syncError, run: () => runAndNotify(applyRecipe(r)) })),
     { id: 'insert.idMso', group: G.insert, title: t('idMso カタログ…'), keywords: 'idmso catalog', enabled: has, run: openIdMsoCatalog },
     { id: 'insert.imageMso', group: G.insert, title: t('imageMso カタログ…'), keywords: 'imagemso icon catalog', enabled: has, run: openImageMsoCatalog },
 
-    { id: 'tools.apply', group: G.tools, title: t('Excelへ反映'), shortcut: 'F5', keywords: 'apply reload', inText: true, enabled: has, run: () => void applyToExcel() },
+    { id: 'tools.apply', group: G.tools, title: t('Excel へ反映'), shortcut: 'F5', keywords: 'apply reload', inText: true, enabled: has, run: () => void applyToExcel() },
     { id: 'tools.distCheck', group: G.tools, title: t('配布前チェック…'), keywords: 'check distribute release 配布 確認 チェック', enabled: has, run: () => void openOnce('distributionCheck', () => openDistributionCheck({ onNavigate: navigateToCheck })) },
     { id: 'tools.runMacro', group: G.tools, title: t('マクロを Excel で試す'), keywords: 'run macro test 試しに押す 実行 試す', enabled: () => has() && canRunMacro(), run: () => void runSelectedMacro() },
     { id: 'vba.reveal', group: 'VBA', title: t('選択中のコントロールのコールバックを VBE で表示'), keywords: 'vbe vba open procedure 開く', enabled: () => has() && revealableCallback() !== null, run: () => { const n = revealableCallback(); if (n) void revealInVbe(n); } },
     { id: 'tools.replaceIds', group: G.tools, title: t('ID の一括置換…'), keywords: 'id rename replace prefix 置換', enabled: has, run: () => openIdReplaceDialog() },
     { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
-    { id: 'vba.refresh', group: 'VBA', title: t('VBAを再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
+    { id: 'vba.refresh', group: 'VBA', title: t('VBA を再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
-    { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: hasSel, run: () => openImageEditor() },
+    { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: canMakeIcon, run: () => openImageEditor() },
     { id: 'tools.library', group: G.tools, title: t('アイコンライブラリ…'), keywords: 'icon library', run: () => void openOnce('library', () => openLibrary(undefined, notify, { onCreateIcon: (target) => openIconDialog(target) })) },
     { id: 'tools.settings', group: G.tools, title: t('設定…'), keywords: 'settings options', run: () => void openSettings() },
     { id: 'tools.language', group: G.tools, title: lang === 'en' ? 'Switch language / 言語を切り替える' : '言語を切り替える / Switch language', keywords: 'language switch english japanese 言語 英語 日本語', run: () => void changeLanguage(lang === 'en' ? 'ja' : 'en') },
 
     { id: 'help.shortcuts', group: G.help, title: t('キーボードショートカット'), keywords: 'keyboard shortcuts keys', run: () => openShortcutsDialog(shortcutCommands()) },
+    { id: 'help.readme', group: G.help, title: t('使い方（README）を開く'), keywords: 'readme guide manual 使い方 説明', run: () => openUrl(REPO_URL) },
+    { id: 'help.logs', group: G.help, title: t('ログのフォルダーを開く'), keywords: 'log folder 問い合わせ ログ', run: () => void openLogFolder() },
     { id: 'help.update', group: G.help, title: t('更新を確認…'), keywords: 'update version', run: () => void checkForUpdates(true) },
     { id: 'help.releases', group: G.help, title: t('リリースノートを開く'), keywords: 'release notes', run: () => openUrl(RELEASES_URL) },
     { id: 'help.github', group: G.help, title: t('GitHub のページを開く'), keywords: 'github repository', run: () => openUrl(REPO_URL) },
@@ -319,13 +346,57 @@ function shortcutCommands(): Command[] {
   return commands().map((c) => (fixed[c.id] ? { ...c, title: fixed[c.id]! } : c));
 }
 
+/** 問い合わせのときに要るログの場所を開く（app.log と update.log は同じフォルダにある）。 */
+async function openLogFolder(): Promise<void> {
+  try {
+    const status = await invoke('update.status');
+    if (!status.logPath) {
+      toast({ kind: 'info', message: t('ブラウザで動かしているため、ログのフォルダーはありません') });
+      return;
+    }
+    await invoke('update.openPage', { url: status.logPath.replace(/[\\/][^\\/]+$/, '') });
+  } catch (e) {
+    toast({ kind: 'error', message: (e as Error).message });
+  }
+}
+
 function openUrl(url: string): void {
   void invoke('update.openPage', { url }).catch((e: Error) => toast({ kind: 'error', message: e.message }));
 }
 
+/** 処理が終わるまで使えないコマンド（ファイルを開く・閉じるなど）。 */
+const IDLE_ONLY = new Set(['file.new', 'file.open', 'file.close', 'file.backup', 'file.sample']);
+/** 要素を選ぶと使えるコマンド。 */
+const NEEDS_SELECTION = new Set(['edit.cut', 'edit.copy', 'edit.duplicate', 'edit.delete', 'edit.rename', 'edit.selectAll', 'insert.saveRecipe']);
+
+/** コマンドパレットで、使えないコマンドに添える理由（メニューのツールチップと同じ考え方。なければ「いまは使えません」）。 */
+function disabledReasonFor(c: AppCommand): string | undefined {
+  // 構文エラー中は、レシピ（recipe.*）も挿入できない（挿入メニューの「レシピ…」と同じ理由）
+  if (c.id.startsWith('recipe.') && has() && app.store?.syncError) return t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください');
+  switch (c.id) {
+    case 'edit.undo': return t('元に戻す操作がありません');
+    case 'edit.redo': return t('やり直す操作がありません');
+    case 'edit.history': return t('操作の履歴がありません');
+    case 'edit.moveUp': return has() ? moveDisabledReason(-1) ?? undefined : t('ファイルを開くと使えます');
+    case 'edit.moveDown': return has() ? moveDisabledReason(1) ?? undefined : t('ファイルを開くと使えます');
+    case 'edit.clearMulti': return t('複数選択のときに使えます');
+    case 'tools.runMacro': return has() ? runMacroHint() : t('ファイルを開くと使えます');
+    case 'tools.icon': return has() ? iconDisabledHint() : t('ファイルを開くと使えます');
+    case 'insert.recipes': return has() ? t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください') : t('ファイルを開くと使えます');
+    case 'file.quit': return t('ブラウザで動かしているときは使えません');
+    case 'view.fitExcel': return t('画面の幅を選び、Excel が見つかっているときに使えます');
+    case 'vba.refresh': case 'vba.insert': return has() ? t('Excel で開いているブックで使えます') : t('ファイルを開くと使えます');
+    default:
+  }
+  if (IDLE_ONLY.has(c.id) && !idle()) return t('処理が終わるまでお待ちください');
+  if (!has()) return t('ファイルを開くと使えます');
+  if (NEEDS_SELECTION.has(c.id)) return t('要素を選択すると使えます');
+  return undefined;
+}
+
 /** コマンドパレットに出すもの（パレット自身は除く）。 */
 function paletteCommands(): Command[] {
-  return commands().filter((c) => c.id !== 'edit.palette');
+  return commands().filter((c) => c.id !== 'edit.palette').map((c): Command => ({ ...c, disabledReason: () => disabledReasonFor(c) }));
 }
 
 // ---- メニュー ----
@@ -369,12 +440,12 @@ async function recentItems(): Promise<MenuItemDef[]> {
     {
       label: t('一覧から消す'),
       // ホームの「最近使ったファイル」にも同じ一覧が出ているので、消したら取り直す
-      items: () => recent.map((r): MenuItemDef => ({ label: splitPath(r.path).name, hint: r.path, run: () => void invoke('file.removeRecent', { path: r.path }).then(() => home.refresh()) })),
+      items: () => recent.map((r): MenuItemDef => ({ label: splitPath(r.path).name, hint: r.path, run: () => void invoke('file.removeRecent', { path: r.path }).then(() => home.refresh()).catch((e: unknown) => reportUnexpected(e, 'file.removeRecent')) })),
     },
     {
       label: t('見つからないファイルを一覧から消す'),
       enabled: missing.length > 0,
-      run: () => void Promise.all(missing.map((r) => invoke('file.removeRecent', { path: r.path }))).then(() => {
+      run: () => void Promise.all(missing.map((r) => invoke('file.removeRecent', { path: r.path }))).catch((e: unknown) => reportUnexpected(e, 'file.removeRecent')).then(() => {
         home.refresh();
         toast({ kind: 'success', message: t('{n} 件を一覧から消しました', { n: missing.length }) });
       }),
@@ -400,7 +471,7 @@ function insertItem(tag: string): MenuItemDef {
 const CANVAS_MODES: readonly { mode: CanvasMode; label: string }[] = [
   { mode: 'ribbon', label: 'リボン' },
   { mode: 'backstage', label: 'Backstage' },
-  { mode: 'contextMenu', label: 'コンテキストメニュー' },
+  { mode: 'contextMenu', label: '右クリックメニュー' },
 ];
 
 /** 「自由」を含めた幅の選択肢。 */
@@ -411,17 +482,16 @@ function previewMenuItems(): MenuItemDef[] {
   const p = currentPreview();
   const on = has();
   return [
-    { label: t('画面の幅'), enabled: on, items: () => WIDTH_CHOICES_ALL.map((w): MenuItemDef => ({ label: widthChoiceLabel(w), checked: p.width === w, run: () => changePreview({ width: w }) })) },
-    { label: t('拡大率'), enabled: on, items: () => SCALE_CHOICES.map((sc): MenuItemDef => ({ label: `${sc}%`, checked: p.scale === sc, run: () => changePreview({ scale: sc }) })) },
+    { label: t('画面の幅'), mnemonic: 'W', enabled: on, items: () => WIDTH_CHOICES_ALL.map((w): MenuItemDef => ({ label: widthChoiceLabel(w), checked: p.width === w, run: () => changePreview({ width: w }) })) },
+    { label: t('拡大率'), mnemonic: 'Z', enabled: on, items: () => SCALE_CHOICES.map((sc): MenuItemDef => ({ label: `${sc}%`, checked: p.scale === sc, run: () => changePreview({ scale: sc }) })) },
     {
-      label: t('表示のしかた'), enabled: on, items: () => [
+      label: t('表示のしかた'), mnemonic: 'S', enabled: on, items: () => [
         { label: t('全体を表示'), checked: p.fit === 'fit', run: () => changePreview({ fit: 'fit' }) },
         { label: t('実寸'), checked: p.fit === 'actual', run: () => changePreview({ fit: 'actual' }) },
       ],
     },
-    { label: t('キーヒントを表示'), enabled: on, checked: p.keytips, run: () => changePreview({ keytips: !p.keytips }) },
-    cmd('view.collapseSides'),
-    cmd('view.fitExcel', undefined, { hint: p.width === null ? t('画面の幅を選ぶと使えます') : app.info.excelInstalled ? undefined : t('Excel が見つからないため使えません') }),
+    { label: t('キーヒントを表示'), mnemonic: 'K', enabled: on, checked: p.keytips, run: () => changePreview({ keytips: !p.keytips }) },
+    cmd('view.fitExcel', undefined, { mnemonic: 'X', hint: p.width === null ? t('画面の幅を選ぶと使えます') : app.info.excelInstalled ? undefined : t('Excel が見つからないため使えません') }),
   ];
 }
 
@@ -432,18 +502,37 @@ function runMacroHint(): string | undefined {
   return runMacroDisabledReason(el) || t('引数のない Sub と、IRibbonControl を 1 つ受け取る Sub を実行できます（control には Nothing を渡します）');
 }
 
+/** サンプル（パスのないセッション）で保存・反映が使えない理由。 */
+const sampleHint = (): string | undefined => (app.session && !hasFile() ? t('サンプルは保存できません。自分のブックを開くと使えます') : undefined);
+
+/** Excel で開いているブックの一覧（ファイルを開いたあとでも、ホームに戻らずに選べるように）。開くたびに取り直す。 */
+async function excelBookItems(): Promise<MenuItemDef[]> {
+  const books = await invoke('excel.openWorkbooks').catch(() => []);
+  const editable = books.filter((b) => /\.(xlsm|xlam|xltm|xlsb)$/i.test(b.fullPath));
+  if (editable.length === 0) return [{ label: t('Excel で開いているブックはありません'), enabled: false }];
+  return editable.map((b): MenuItemDef => ({
+    label: `${splitPath(b.fullPath).name}${b.isAddIn ? t('（アドイン）') : ''}`,
+    hint: b.isDirty ? t('{path}（Excel に未保存の変更があります）', { path: b.fullPath }) : b.fullPath,
+    enabled: idle(),
+    run: () => void openFile(b.fullPath),
+  }));
+}
+
 const MENUS: MenuDef[] = [
   {
     id: 'file', label: t('ファイル'), mnemonic: 'F', items: () => [
-      cmd('file.new'),
-      cmd('file.open'),
-      { label: t('最近使ったファイル'), items: recentItems },
-      cmd('file.sample'),
+      cmd('file.new', undefined, { mnemonic: 'N' }),
+      cmd('file.open', undefined, { mnemonic: 'O' }),
+      { label: t('最近使ったファイル'), mnemonic: 'R', items: recentItems },
+      {
+        label: t('Excel で開いているブック'), mnemonic: 'E', enabled: app.info.excelInstalled,
+        hint: app.info.excelInstalled ? undefined : t('Excel が見つからないため使えません'), items: excelBookItems,
+      },
       SEP,
-      cmd('file.save'),
-      cmd('file.close'),
+      cmd('file.save', undefined, { mnemonic: 'S', enabled: has() && hasFile(), hint: sampleHint() }),
+      cmd('file.close', undefined, { mnemonic: 'C' }),
       SEP,
-      cmd('file.backup', undefined, { hint: app.session && !hasFile() ? t('サンプルにはバックアップがありません') : undefined }),
+      cmd('file.backup', undefined, { mnemonic: 'B', hint: app.session && !hasFile() ? t('サンプルにはバックアップがありません') : undefined }),
       cmd('file.export'),
       cmd('file.import'),
       {
@@ -453,26 +542,27 @@ const MENUS: MenuDef[] = [
         ],
       },
       SEP,
-      cmd('file.quit', undefined, { hint: isHosted ? undefined : t('ブラウザで動かしているときは使えません') }),
+      cmd('file.quit', undefined, { mnemonic: 'X', hint: isHosted ? undefined : t('ブラウザで動かしているときは使えません') }),
     ],
   },
   {
     id: 'edit', label: t('編集'), mnemonic: 'E', items: () => [
-      cmd('edit.undo'),
-      cmd('edit.redo'),
-      cmd('edit.history'),
+      cmd('edit.undo', undefined, { mnemonic: 'U' }),
+      cmd('edit.redo', undefined, { mnemonic: 'R' }),
+      cmd('edit.history', undefined, { mnemonic: 'H' }),
       SEP,
-      cmd('edit.cut'),
-      cmd('edit.copy'),
-      cmd('edit.paste'),
-      cmd('edit.duplicate'),
-      cmd('edit.delete'),
+      cmd('edit.cut', undefined, { mnemonic: 'T' }),
+      cmd('edit.copy', undefined, { mnemonic: 'C' }),
+      cmd('edit.paste', undefined, { mnemonic: 'P' }),
+      cmd('edit.duplicate', undefined, { mnemonic: 'D' }),
+      cmd('edit.delete', undefined, { mnemonic: 'L' }),
       SEP,
-      cmd('edit.selectAll'),
-      cmd('edit.clearMulti'),
+      cmd('edit.rename', undefined, { mnemonic: 'N' }),
+      cmd('edit.selectAll', undefined, { mnemonic: 'A' }),
+      cmd('edit.clearMulti', undefined, { mnemonic: 'M' }),
       {
         // まとめての操作。使えないときは理由をツールチップに出す（隠さずに無効で見せる）
-        label: t('並べ替えと大きさ'), enabled: has(), items: () => [
+        label: t('並べ替えと大きさ'), mnemonic: 'O', enabled: has(), items: () => [
           cmd('edit.moveUp', undefined, { hint: moveDisabledReason(-1) ?? undefined }),
           cmd('edit.moveDown', undefined, { hint: moveDisabledReason(1) ?? undefined }),
           cmd('edit.newGroup', undefined, { hint: newGroupDisabledReason() ?? undefined }),
@@ -482,12 +572,11 @@ const MENUS: MenuDef[] = [
         ],
       },
       SEP,
-      cmd('edit.format'),
-      SEP,
-      cmd('edit.palette'),
+      cmd('edit.format', undefined, { mnemonic: 'F' }),
     ],
   },
   {
+    // 働きの違う項目（そこへ移る／出し入れする／表示を切り替える／下部パネルのタブを開く）を、種類ごとの入れ物にまとめる（総点検 G-6）
     id: 'view', label: t('表示'), mnemonic: 'V', items: () => {
       const s = app.session;
       const is2007 = app.store?.version === 'office2007';
@@ -501,79 +590,107 @@ const MENUS: MenuDef[] = [
           focusPane('canvas');
         },
       }));
+      // 2 つのパーツ（customUI14 と customUI）があるときだけ、編集するほうを選べる
       const parts: MenuItemDef[] = s && s.parts.size >= 2
-        ? [SEP, ...[...s.parts.keys()].map((v): MenuItemDef => ({ label: v === 'office2010' ? t('customUI14.xml（2010以降）') : t('customUI.xml（2007）'), checked: s.active.version === v, run: () => app.switchPart(v) }))]
+        ? [{
+            label: t('編集するパーツ'),
+            mnemonic: 'E',
+            items: () => [...s.parts.keys()].map((v): MenuItemDef => ({ label: v === 'office2010' ? t('customUI14.xml（2010以降）') : t('customUI.xml（2007）'), checked: s.active.version === v, run: () => app.switchPart(v) })),
+          }]
         : [];
       const theme = app.settings.theme;
       return [
-        cmd('view.canvas', t('キャンバス')),
-        cmd('view.tree', t('ツリー')),
-        cmd('view.xml', t('XMLエディタ')),
-        cmd('view.inspector', t('インスペクタ')),
-        cmd('view.bottom', t('下部パネル'), { checked: !layout.isCollapsed('bottom') }),
-        cmd('view.treeFilter'),
-        SEP,
-        ...modes,
+        {
+          label: t('ペインへ移る'), mnemonic: 'P', items: () => [
+            cmd('view.canvas', t('キャンバス'), { mnemonic: 'C' }),
+            cmd('view.tree', t('ツリー'), { mnemonic: 'T' }),
+            cmd('view.xml', t('XML エディタ'), { mnemonic: 'X' }),
+            cmd('view.inspector', t('インスペクタ'), { mnemonic: 'I' }),
+            SEP,
+            cmd('view.nextPane', undefined, { mnemonic: 'N' }),
+            cmd('view.prevPane', undefined, { mnemonic: 'V' }),
+            cmd('view.treeFilter', undefined, { mnemonic: 'F' }),
+          ],
+        },
+        { label: t('キャンバスの表示'), mnemonic: 'C', enabled: has(), items: () => modes },
         ...parts,
         SEP,
         ...previewMenuItems(),
         SEP,
-        cmd('view.problems', t('問題')),
-        cmd('view.callbacks', t('コールバック')),
-        cmd('view.images', t('アイコン')),
-        SEP,
+        cmd('view.bottom', t('下部パネル'), { checked: !layout.isCollapsed('bottom'), mnemonic: 'B' }),
         {
-          label: t('テーマ'), items: () => [
-            { label: t('システムに合わせる'), checked: theme === 'system', run: () => void updateSettings({ theme: 'system' }) },
-            { label: t('ライト'), checked: theme === 'light', run: () => void updateSettings({ theme: 'light' }) },
-            { label: t('ダーク'), checked: theme === 'dark', run: () => void updateSettings({ theme: 'dark' }) },
+          label: t('下部パネルのタブ'), mnemonic: 'T', enabled: has(), items: () => [
+            cmd('view.problems', t('問題'), { mnemonic: 'P' }),
+            cmd('view.callbacks', t('コールバック'), { mnemonic: 'C' }),
+            cmd('view.images', t('アイコン'), { mnemonic: 'I' }),
           ],
         },
-        cmd('view.swap'),
-        cmd('view.resetLayout'),
+        cmd('view.collapseSides', undefined, { mnemonic: 'L' }),
+        SEP,
+        {
+          label: t('テーマ'), mnemonic: 'M', items: () => [
+            { label: t('システムに合わせる'), mnemonic: 'S', checked: theme === 'system', run: () => void updateSettings({ theme: 'system' }) },
+            { label: t('ライト'), mnemonic: 'L', checked: theme === 'light', run: () => void updateSettings({ theme: 'light' }) },
+            { label: t('ダーク'), mnemonic: 'D', checked: theme === 'dark', run: () => void updateSettings({ theme: 'dark' }) },
+          ],
+        },
+        cmd('view.swap', undefined, { mnemonic: 'V' }),
+        cmd('view.resetLayout', undefined, { mnemonic: 'R' }),
       ];
     },
   },
   {
     id: 'insert', label: t('挿入'), mnemonic: 'I', items: () => [
       ...INSERT_COMMON.map(insertItem),
-      { label: t('その他の要素'), items: () => PALETTE_ITEMS.filter((tag) => !INSERT_COMMON.includes(tag)).map(insertItem) },
+      { label: t('その他の要素'), mnemonic: 'O', items: () => PALETTE_ITEMS.filter((tag) => !INSERT_COMMON.includes(tag)).map(insertItem) },
       SEP,
-      cmd('insert.recipes'),
-      cmd('insert.saveRecipe', t('選択中をレシピとして保存…')),
+      cmd('insert.recipes', undefined, { mnemonic: 'R', hint: app.store?.syncError ? disabledReasonFor(byId('insert.recipes')) : undefined }),
+      cmd('insert.saveRecipe', t('選択中をレシピとして保存…'), { mnemonic: 'S' }),
       SEP,
-      cmd('insert.idMso'),
-      cmd('insert.imageMso'),
+      cmd('insert.idMso', undefined, { mnemonic: 'D' }),
+      cmd('insert.imageMso', undefined, { mnemonic: 'M' }),
     ],
   },
   {
     id: 'tools', label: t('ツール'), mnemonic: 'T', items: () => [
-      cmd('tools.apply', undefined, { hint: app.info.excelInstalled ? undefined : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)') }),
-      cmd('tools.diff'),
-      cmd('tools.distCheck'),
-      cmd('tools.replaceIds'),
+      cmd('tools.apply', undefined, {
+        mnemonic: 'A',
+        enabled: has() && hasFile(),
+        hint: sampleHint() ?? (app.info.excelInstalled ? undefined : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)')),
+      }),
+      cmd('tools.diff', undefined, { mnemonic: 'D' }),
+      cmd('tools.distCheck', undefined, { mnemonic: 'C' }),
       SEP,
-      cmd('tools.runMacro', undefined, { hint: runMacroHint() }),
-      cmd('vba.reveal'),
-      cmd('vba.refresh', undefined, { hint: app.session && !hasFile() ? t('サンプルは Excel で開かれていないため、VBA と照合できません') : undefined }),
-      cmd('vba.insert'),
-      cmd('vba.holder'),
+      {
+        label: 'VBA', mnemonic: 'V', items: () => [
+          cmd('tools.runMacro', t('マクロを Excel で試す'), { mnemonic: 'M', hint: runMacroHint() }),
+          cmd('vba.reveal', t('コールバックを VBE で表示'), { mnemonic: 'V' }),
+          cmd('vba.refresh', t('VBA を読み直して照合'), { mnemonic: 'R', hint: app.session && !hasFile() ? t('サンプルは Excel で開かれていないため、VBA と照合できません') : undefined }),
+          cmd('vba.insert', t('足りないコールバックを挿入'), { mnemonic: 'I' }),
+          cmd('vba.holder', t('onLoad と Invalidate の雛形を挿入'), { mnemonic: 'H' }),
+        ],
+      },
       SEP,
-      cmd('tools.icon'),
-      cmd('tools.library'),
+      cmd('tools.replaceIds', undefined, { mnemonic: 'R' }),
+      cmd('tools.icon', t('アイコンを作る…'), { mnemonic: 'I', hint: iconDisabledHint() }),
+      cmd('tools.library', undefined, { mnemonic: 'L' }),
       SEP,
-      cmd('tools.settings'),
+      cmd('tools.settings', undefined, { mnemonic: 'S' }),
     ],
   },
   {
     id: 'help', label: t('ヘルプ'), mnemonic: 'H', items: () => [
-      cmd('help.shortcuts'),
+      cmd('edit.palette', t('コマンドを探す…'), { mnemonic: 'C' }),
+      cmd('help.shortcuts', undefined, { mnemonic: 'K' }),
+      cmd('help.readme', undefined, { mnemonic: 'R' }),
+      cmd('file.sample', t('サンプルを開いて試す'), { mnemonic: 'S' }),
       SEP,
-      cmd('help.update'),
-      cmd('help.releases'),
-      cmd('help.github'),
+      cmd('help.update', undefined, { mnemonic: 'U' }),
+      cmd('help.releases', t('リリースノート'), { mnemonic: 'N' }),
+      cmd('help.github', t('GitHub のページ'), { mnemonic: 'G' }),
+      cmd('help.logs', undefined, { mnemonic: 'L' }),
       SEP,
-      cmd('help.about'),
+      cmd('help.about', undefined, { mnemonic: 'A' }),
     ],
   },
 ];
@@ -588,7 +705,8 @@ toolbarButton('btn-save', uiIcons.save, t('保存'));
 toolbarButton('btn-undo', uiIcons.undo, t('元に戻す'));
 toolbarButton('btn-redo', uiIcons.redo, t('やり直し'));
 toolbarButton('btn-command', uiIcons.command, t('コマンド'));
-$('btn-apply').replaceChildren(svg(uiIcons.apply), h('span', { class: 'tb-label' }, t('Excelへ反映')), h('kbd', null, 'F5'));
+toolbarButton('btn-dist', uiIcons.check, t('配布前チェック'));
+$('btn-apply').replaceChildren(svg(uiIcons.apply), h('span', { class: 'tb-label' }, t('Excel へ反映')), h('kbd', null, 'F5'));
 
 /** ツールバーのボタンと、同じ働きのコマンド。 */
 const TOOLBAR_COMMAND: Readonly<Record<string, string>> = {
@@ -597,6 +715,7 @@ const TOOLBAR_COMMAND: Readonly<Record<string, string>> = {
   'btn-undo': 'edit.undo',
   'btn-redo': 'edit.redo',
   'btn-command': 'edit.palette',
+  'btn-dist': 'tools.distCheck',
   'btn-apply': 'tools.apply',
 };
 const toolbarKeys = new Map<string, string>();
@@ -624,8 +743,10 @@ function updateChrome(): void {
   chip.hidden = !s;
   if (s) {
     // 同梱のサンプルはパスが空なので、「サンプル」と出す
-    const name = s.path === '' ? t('サンプル') : splitPath(s.path).name;
+    const isSample = s.path === '';
+    const name = isSample ? t('サンプル（保存できません）') : splitPath(s.path).name;
     $('file-name').textContent = name;
+    chip.classList.toggle('sample', isSample);
     const where = s.path === '' ? t('サンプル（保存できません）') : s.path;
     chip.title = dirty ? t('{path}（未保存の変更があります）', { path: where }) : where;
     const dot = $('file-dirty');
@@ -646,12 +767,18 @@ function updateChrome(): void {
     else b.removeAttribute('aria-keyshortcuts');
   };
   set('btn-open', busy === null, tip(t('開く'), 'Ctrl+O'));
-  set('btn-save', !!s && busy === null, busy === 'save' ? t('保存しています…') : tip(t('保存'), 'Ctrl+S'));
+  // サンプルは保存・反映できない。押して断られるのではなく、押せない理由を先に見せる（総点検 G-11）
+  const isSampleSession = !!s && !hasFile();
+  set('btn-save', !!s && !isSampleSession && busy === null, busy === 'save' ? t('保存しています…') : isSampleSession ? sampleHint()! : tip(t('保存'), 'Ctrl+S'));
   set('btn-undo', store?.canUndo === true, tip(historyTitle(t('元に戻す'), store?.undoLabel), 'Ctrl+Z'));
   set('btn-redo', store?.canRedo === true, tip(historyTitle(t('やり直し'), store?.redoLabel), 'Ctrl+Y'));
   set('btn-command', true, tip(t('コマンドパレット'), 'Ctrl+K'));
-  set('btn-apply', !!s && busy === null,
-    busy === 'apply' ? t('Excelへ反映しています…') : app.info.excelInstalled ? tip(t('Excelへ反映'), 'F5') : t('Excelが見つからないため、ファイルへの書き込みだけを行います (F5)'));
+  set('btn-dist', !!s, t('配布前チェック'));
+  set('btn-apply', !!s && !isSampleSession && busy === null,
+    busy === 'apply' ? t('Excel へ反映しています…') : isSampleSession ? sampleHint()! : app.info.excelInstalled ? tip(t('Excel へ反映'), 'F5') : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)'));
+  // Excel がない PC では、押すと何が起きるかをボタンの文字で伝える（ツールチップにだけ書いてあると、押すまで分からない。総点検 G-12）
+  const applyLabel = $('btn-apply').querySelector('.tb-label');
+  if (applyLabel) applyLabel.textContent = app.info.excelInstalled ? t('Excel へ反映') : t('ファイルに書き込む');
   $('btn-save').classList.toggle('busy', busy === 'save');
   $('btn-apply').classList.toggle('busy', busy === 'apply');
 
@@ -663,6 +790,76 @@ function updateChrome(): void {
     );
   }
 }
+
+// ---- Excel とのつながりの印（総点検 G-12） ----
+
+type ExcelLink = 'none' | 'open' | 'closed';
+let excelLink: ExcelLink | null = null;
+let excelLinkPath = '';
+let excelChipRequest = 0;
+
+/** 開いているファイルが Excel で開かれているかを調べ、ファイル名の横の印に出す。サンプルでは出さない。 */
+async function refreshExcelChip(): Promise<void> {
+  const chip = $('excel-chip');
+  const s = app.session;
+  if (!s || s.path === '') {
+    chip.hidden = true;
+    excelLink = null;
+    return;
+  }
+  const mine = ++excelChipRequest;
+  let next: ExcelLink;
+  if (!app.info.excelInstalled) next = 'none';
+  else {
+    const books = await invoke('excel.openWorkbooks').catch(() => null);
+    if (mine !== excelChipRequest) return;
+    // 問い合わせに失敗したときは前の表示のままにする（取れなかっただけで「開いていません」と言い切らない）。
+    // 前の表示がないときは、出さずにおく
+    if (books === null) return;
+    const here = s.path.toLowerCase();
+    next = books.some((b) => b.fullPath.toLowerCase() === here) ? 'open' : 'closed';
+  }
+  // 同じファイルで状態が変わっていなければ、前の値のまま取り直す（印のちらつきを避ける）
+  if (excelLink === next && excelLinkPath === s.path && !chip.hidden) return;
+  excelLink = next;
+  excelLinkPath = s.path;
+  chip.hidden = false;
+  chip.dataset['state'] = next;
+  chip.textContent = next === 'none' ? t('Excel：未検出') : next === 'open' ? t('Excel：このブックを開いています') : t('Excel：開いていません');
+  chip.title = next === 'none' ? t('Excel が見つからないため、反映はファイルへの書き込みだけになります') : next === 'open' ? t('F5 で、Excel で開いているこのブックに反映します') : t('F5 でファイルに書き込みます（Excel では開かれていません）');
+}
+// ---- VBA との照合の印（総点検 G-12）。下部パネルのタブを開かなくても、照合できているかが分かる ----
+
+function refreshVbaChip(): void {
+  const chip = $('vba-chip');
+  const s = app.session;
+  const st = s && s.path !== '' ? vbaChipState(vba.status, vba.status === 'ok' ? vba.statuses().filter((x) => x.state === 'missing' || x.state === 'mismatch').length : 0) : null;
+  chip.hidden = st === null;
+  if (!st) return;
+  chip.dataset['state'] = st.state;
+  chip.textContent = st.text;
+  chip.title = vba.statusMessage();
+}
+const refreshVbaChipSoon = debounce(refreshVbaChip, 200);
+app.on('vba', refreshVbaChipSoon);
+app.on('session', refreshVbaChipSoon);
+// コールバックの書き換えで「要対応」の数が変わるので、文書の編集でも取り直す（間引く）
+app.on('store', (c) => {
+  if (!c || c.kinds.has('doc')) refreshVbaChipSoon();
+});
+
+// 問い合わせは重ねず、窓に戻るだけの取り直しは 30 秒に 1 回まで、保存・反映の最中は送らない。
+// Excel への問い合わせは COM の待ち行列を使うので、focus のたびに投げると F5 が後ろで待たされる
+const EXCEL_CHIP_MIN_INTERVAL_MS = 30_000;
+const pollExcelChip = createPollGate(refreshExcelChip, { minIntervalMs: EXCEL_CHIP_MIN_INTERVAL_MS, busy: () => busyState() !== null });
+// 窓に戻ったとき（Excel で開いたり閉じたりして戻ってきたとき）に取り直す
+window.addEventListener('focus', () => void pollExcelChip());
+// ファイルを開いた・閉じたとき、反映（Excel でブックを開き直す）が終わったときは、状態が変わったので間引かずに取り直す。
+// 入力のたびに呼ばれる updateChrome からは呼ばない（Excel への問い合わせが重いため）
+app.on('session', () => void pollExcelChip(true));
+onBusyChange(() => {
+  if (busyState() === null) void pollExcelChip(true);
+});
 
 // ツールバーは ←→ で移る（WAI-ARIA の toolbar と同じ。Tab ではツールバー全体を 1 つとして飛ばせる）
 function setupToolbarKeys(bar: HTMLElement): void {
@@ -709,6 +906,8 @@ mountCanvas($('canvas'), { onImageDrop: (files, path, target) => {
   openIconDialog(target, files);
 } });
 const xmlHandle = mountXmlEditor($('xml-editor'), $('xml-status'), { undo, redo });
+// Esc で XML エディタを出る（Tab は字下げに使うので、キーボードだけでは出られなかった）
+setXmlEscapeHandler(() => focusPane('canvas'));
 setEditorThemeHandler((dark) => xmlHandle.setTheme(dark));
 // 保存・反映・閉じる前に、インスペクタで入力中の値を確定させる
 setPendingEditFlusher(flushPendingEdits);
@@ -719,6 +918,12 @@ mountInspector($('inspector'), {
   },
   pickImageMso: (cur, apply) => openCatalog('imageMso', cur, apply),
   editImage: (existing) => openImageEditor(undefined, existing),
+  // 何も選んでいないときの、よく使う 3 つの操作（総点検 I-4）
+  quickStart: () => [
+    { label: t('タブを追加'), run: () => void insertNearSelection('tab') },
+    { label: t('レシピから作る…'), run: () => void openOnce('recipes', () => openRecipes(notify)) },
+    { label: t('customUI の設定（onLoad）を開く'), run: () => app.store?.select([], 'inspector') },
+  ],
   pickFromLibrary: () => {
     const store = app.store;
     const target = store?.selection ? iconTargetPath(store.doc, store.selection) : null;
@@ -749,7 +954,7 @@ setCanvasGrowHandler((px) => layout.growTemporarily('top', px));
 const home = mountHome($('home'), (p) => void openFile(p));
 
 // XML ペインの名前に F6 での移り方を添える（index.html の既定は日本語のままなので、今の言語で付け直す）
-document.querySelector('.xml-pane')?.setAttribute('aria-label', t('XMLエディタ（F6 で次のペインへ）'));
+document.querySelector('.xml-pane')?.setAttribute('aria-label', t('XML エディタ（F6 で次のペインへ）'));
 
 /**
  * 下部パネルを畳んだ帯に、中身の要約を出す。畳むと問題の数が見えなくなり、エラーに気づけないため。
@@ -762,6 +967,8 @@ function updateBottomSummary(): void {
   }
   const problems = app.problems.filter((p) => p.severity !== 'info').length + (app.store.syncError ? 1 : 0);
   layout.setCollapsedSummary('bottom', t('問題 {p} ・ コールバック {c}', { p: problems, c: vba.statuses().length }));
+  // 問題がなければ下部パネルを帯に畳み、出たら開く（利用者が自分で開閉・ドラッグするまでの間だけ。総点検 B-1）
+  layout.setBottomAuto(problems > 0);
 }
 app.on('session', updateBottomSummary);
 app.on('problems', updateBottomSummary);
@@ -795,6 +1002,7 @@ $('btn-apply').addEventListener('click', () => void applyToExcel());
 $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
 $('btn-command').addEventListener('click', () => openCommandPalette(paletteCommands));
+$('btn-dist').addEventListener('click', () => byId('tools.distCheck').run());
 setupToolbarKeys($('toolbar'));
 initUpdates({ confirmDiscard });
 $<HTMLSelectElement>('part-switch').addEventListener('change', (e) => app.switchPart((e.target as HTMLSelectElement).value as 'office2007' | 'office2010'));
@@ -803,8 +1011,14 @@ $<HTMLSelectElement>('part-switch').addEventListener('change', (e) => app.switch
 
 /** 押されたキーに当たるコマンド。 */
 function commandForKey(e: KeyboardEvent): AppCommand | undefined {
-  return commands().find((c) => [c.shortcut, ...(c.altKeys ?? [])].some((k) => !!k && matchShortcut(e, k)));
+  // コマンドの一覧（約 110 個。名前の翻訳や選択の数え上げを含む）は、キーを押すたびには作らない（総点検 G-15）。
+  // ショートカットの表は初回に 1 度だけ作り、当たったときだけ、いまの状態でコマンドを作って返す。
+  // ショートカットは言語や状態で変わらない（言語を変えると画面ごと読み込み直す）
+  shortcutIndex ??= commands().filter((c) => !c.displayOnly).map((c) => ({ id: c.id, keys: [c.shortcut, ...(c.altKeys ?? [])].filter((k): k is string => !!k) })).filter((x) => x.keys.length > 0);
+  const hit = shortcutIndex.find((x) => x.keys.some((k) => matchShortcut(e, k)));
+  return hit ? commands().find((c) => c.id === hit.id) : undefined;
 }
+let shortcutIndex: { id: string; keys: string[] }[] | null = null;
 
 /**
  * 入力欄の中でも受けるコマンド（保存・反映・ペインの移動など）は、捕捉の段階（capture）で先に受ける。
@@ -870,7 +1084,12 @@ onHostEvent((e) => {
 
 // ---- 起動 ----
 
-const [ready, info, settings] = await Promise.all([invoke('app.ready'), invoke('app.info'), invoke('settings.get')]);
+// ホストとの最初のやり取りが失敗しても、画面は既定の設定で動かして原因を知らせる（無言で止まらないように）
+const [ready, info, settings] = await Promise.all([invoke('app.ready'), invoke('app.info'), invoke('settings.get')]).catch((e: unknown) => {
+  reportUnexpected(e, 'startup');
+  const noReady: { initialFile: string | null; updatedFrom?: string | null; version?: string } = { initialFile: null };
+  return [noReady, app.info, app.settings] as const;
+});
 app.info = info;
 app.settings = settings;
 if (settings.language && settings.language !== lang && sessionGet(LANG_SYNC_KEY) === null) {

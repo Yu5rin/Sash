@@ -4,7 +4,7 @@
 import { t } from './i18n';
 import type { Problem, Severity } from './lint';
 import { allElements, displayName, pathOf, type Path } from './model';
-import { attributes } from './schema';
+import { attributes, titleOf } from './schema';
 import type { CallbackStatus } from './vba';
 
 /**
@@ -28,7 +28,7 @@ export interface CheckItem {
   severity?: Severity;
 }
 
-export type CheckSectionId = 'problems' | 'callbacks' | 'fit' | 'keytips' | 'longLabels' | 'unusedImages' | 'noScreentip' | 'noIcon' | 'dynamicText';
+export type CheckSectionId = 'errors' | 'warnings' | 'callbacks' | 'fit' | 'keytips' | 'longLabels' | 'unusedImages' | 'noScreentip' | 'noIcon' | 'dynamicText';
 
 export interface CheckSection {
   id: CheckSectionId;
@@ -108,7 +108,8 @@ const isCustom = (el: Element) => el.hasAttribute('id') || el.hasAttribute('idQ'
 
 const describe = (el: Element) => {
   const name = displayName(el);
-  return name ? `${name}（${el.localName}）` : el.localName;
+  // 種類は日本語名で（「集計する（ボタン）」。問題の一覧と同じ。英字のタグ名は出さない。総点検 D-3）
+  return name ? `${name}（${titleOf(el.localName)}）` : titleOf(el.localName);
 };
 
 const isCallbackAttr = (name: string | undefined) => !!name && attributes.get(name)?.kind === 'callback';
@@ -141,7 +142,9 @@ export function collectChecks(input: CheckInput): CheckSection[] {
   const problemItem = (p: Problem, level: CheckLevel): CheckItem => ({ level, text: p.message, detail: detailOf(p.path), path: p.path, target: 'element', severity: p.severity });
 
   const sections: CheckSection[] = [];
-  sections.push({ id: 'problems', title: t('エラーと警告'), items: restProblems.map((p) => problemItem(p, 'must')) });
+  // エラー（id の重複・id のないボタン・使えない属性・ない画像など）は、Excel でリボンが出なくなる。警告と分けて先頭に置く
+  sections.push({ id: 'errors', title: t('エラー'), items: restProblems.filter((p) => p.severity === 'error').map((p) => problemItem(p, 'must')) });
+  sections.push({ id: 'warnings', title: t('警告'), items: restProblems.filter((p) => p.severity !== 'error').map((p) => problemItem(p, 'must')) });
 
   // 2. VBA にないコールバック・引数の合わないコールバック。
   // 照合できていないのにコールバックがあるなら「配ってよい」とは言えない（押すと「マクロが見つかりません」になりうる）ので、
@@ -237,7 +240,8 @@ export function collectChecks(input: CheckInput): CheckSection[] {
     ),
   });
 
-  const weight = (s: CheckSection) => ((s.unverified ?? 0) > 0 ? -1 : s.items.some((i) => i.level === 'must') ? 0 : s.items.some((i) => i.level === 'should') ? 1 : s.items.length ? 2 : 3);
+  // エラー（Excel でリボンが出なくなるもの）は、照合の未確認よりも前に出す
+  const weight = (s: CheckSection) => (s.items.some((i) => i.level === 'must' && i.severity === 'error') ? -2 : (s.unverified ?? 0) > 0 ? -1 : s.items.some((i) => i.level === 'must') ? 0 : s.items.some((i) => i.level === 'should') ? 1 : s.items.length ? 2 : 3);
   // 同じ重さなら上の定義順のまま（sort は安定）
   return sections.sort((a, b) => weight(a) - weight(b));
 }
@@ -245,6 +249,19 @@ export function collectChecks(input: CheckInput): CheckSection[] {
 /** 見出しに出す「確認が必要な件数」（must の項目の数）。 */
 export function attentionCount(sections: readonly CheckSection[]): number {
   return sections.reduce((n, s) => n + s.items.filter((i) => i.level === 'must').length, 0);
+}
+
+/** エラー（Excel でリボンが出なくなるもの）の件数。must のうち severity が error のもの。 */
+export function errorCount(sections: readonly CheckSection[]): number {
+  return sections.reduce((n, s) => n + s.items.filter((i) => i.level === 'must' && i.severity === 'error').length, 0);
+}
+
+/** 見出しの深刻さ。エラーがあれば error、要確認があれば attention、なければ ok。 */
+export type SummaryLevel = 'error' | 'attention' | 'ok';
+
+export function summaryLevel(sections: readonly CheckSection[]): SummaryLevel {
+  if (errorCount(sections) > 0) return 'error';
+  return readyToDistribute(sections) ? 'ok' : 'attention';
 }
 
 /** 見直すとよいものの件数（should）。 */
@@ -264,6 +281,9 @@ export function readyToDistribute(sections: readonly CheckSection[]): boolean {
 
 /** 見出しの文言。コールバックを照合できていなければ、ほかに何もなくても「配ってよい」とは言わない。 */
 export function summaryText(sections: readonly CheckSection[]): string {
+  // エラーがあれば、ほかより先にそれを伝える（配ってはいけない状態だと分かるように）
+  const e = errorCount(sections);
+  if (e > 0) return t('このまま配ると、Excel でリボンが表示されません（エラー {n} 件）', { n: e });
   const n = attentionCount(sections);
   const u = unverifiedCallbacks(sections);
   if (u > 0) {

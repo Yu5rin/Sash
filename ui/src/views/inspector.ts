@@ -22,6 +22,7 @@ import { buildSvg, DEFAULT_COLOR, displayName as fluentName, iconSet, loadIconSe
 import { hasSuggestTerms, suggestFluent, suggestImageMso } from '../iconSuggest';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { openMenu } from './contextMenu';
+import { emptyState } from './emptyState';
 import { renderBulkInspector } from './bulkInspector';
 import '../styles-w3.css';
 
@@ -30,6 +31,8 @@ export interface InspectorHooks {
   pickImageMso(current: string, apply: (v: string) => void): void;
   editImage(existing?: ImageEntry): void;
   pickFromLibrary(): void;
+  /** 何も選んでいないときに案内する、よく使う操作（省略可）。 */
+  quickStart?(): { label: string; run: () => void }[];
 }
 
 export type Section = '基本' | '表示' | '画像' | 'コールバック' | '詳細';
@@ -46,14 +49,14 @@ export function sectionName(s: Section): string {
 
 /** 属性の日本語名。生の属性名は横に小さく出す（XML を書く人が対応を覚えられるように）。 */
 const ATTR_LABEL: Readonly<Record<string, string>> = {
-  id: 'ID', idMso: '組み込みID', idQ: '修飾ID', tag: 'タグ文字列',
+  id: 'ID', idMso: '組み込み ID', idQ: '修飾 ID', tag: 'タグ文字列',
   insertAfterMso: 'この後ろに配置', insertBeforeMso: 'この前に配置', insertAfterQ: 'この後ろに配置（idQ）', insertBeforeQ: 'この前に配置（idQ）',
   label: 'ラベル', visible: '表示する', enabled: '有効にする', showLabel: 'ラベルを出す', showImage: 'アイコンを出す',
   screentip: 'ヒントの見出し', supertip: 'ヒントの本文', keytip: 'アクセスキー', size: '大きさ', description: '説明',
   title: '区切りの見出し', onAction: 'クリック時', getPressed: '押下状態', onChange: '入力時', getText: '表示する文字列',
   getContent: 'メニューの中身', getItemCount: '項目の数', getItemLabel: '項目のラベル', getItemImage: '項目のアイコン',
-  getItemID: '項目のID', getItemScreentip: '項目のヒント見出し', getItemSupertip: '項目のヒント本文',
-  getSelectedItemID: '選択中の項目ID', getSelectedItemIndex: '選択中の項目番号', getItemWidth: '項目の幅を返す', getItemHeight: '項目の高さを返す',
+  getItemID: '項目の ID', getItemScreentip: '項目のヒント見出し', getItemSupertip: '項目のヒント本文',
+  getSelectedItemID: '選択中の項目 ID', getSelectedItemIndex: '選択中の項目番号', getItemWidth: '項目の幅を返す', getItemHeight: '項目の高さを返す',
   onLoad: '読み込み時', loadImage: '画像の読み込み', startFromScratch: '組み込みタブを隠す', autoScale: '自動で縮める',
   centerVertically: '縦の中央に揃える', itemSize: '項目の大きさ', boxStyle: '並べる向き', sizeString: '幅の基準の文字列',
   maxLength: '最大文字数', showItemLabel: '項目のラベルを出す', showItemImage: '項目のアイコンを出す', columns: '列の数', rows: '行の数',
@@ -306,6 +309,18 @@ function restoreFocus(host: HTMLElement, memo: FocusMemo | null): void {
   next.focus({ preventScroll: true });
 }
 
+/**
+ * 何も選んでいないときの画面。案内の 1 行だけだと、広いインスペクタの大半が空くので、
+ * 空の状態の部品（emptyState）で案内し、よく使う操作を縦に並べる（総点検 I-4）。
+ */
+function renderNothingSelected(): HTMLElement {
+  const actions = hooks.quickStart?.() ?? [];
+  const list = actions.length
+    ? h('div', { class: 'insp-quick' }, actions.map((a) => h('button', { type: 'button', class: 'small', onclick: a.run }, a.label)))
+    : undefined;
+  return emptyState({ icon: uiIcons.info, title: t('要素を選んでください'), text: t('キャンバスかツリーで要素を選択してください'), action: list, className: 'insp-empty-card' });
+}
+
 function renderInspector(host: HTMLElement): void {
   window.clearTimeout(renderTimer);
   const store = app.store;
@@ -315,7 +330,7 @@ function renderInspector(host: HTMLElement): void {
 
   if (!store || !el || !store.selection) {
     pendingIcon = null;
-    host.replaceChildren(h('div', { class: 'insp-empty' }, store ? t('キャンバスかツリーで要素を選択してください') : ''));
+    host.replaceChildren(store ? renderNothingSelected() : h('div', { class: 'insp-empty' }));
     return;
   }
   // 複数を選んでいるときは、共通の属性をまとめて変える画面にする（仕様書 §19）
@@ -348,7 +363,7 @@ function renderInspector(host: HTMLElement): void {
     : null;
 
   if (!def || def.opaque) {
-    host.replaceChildren(header, h('div', { class: 'insp-empty' }, t('この要素の属性はXMLエディタで編集してください')));
+    host.replaceChildren(header, h('div', { class: 'insp-empty' }, t('この要素の属性は XML エディタで編集してください')));
     return;
   }
 
@@ -802,6 +817,7 @@ function iconSuggestions(el: Element, nowPath: () => Path | null, setMso: (v: st
           const ja = msoLabels.get(name);
           return h('button', {
             type: 'button',
+            tabIndex: -1,
             class: 'icon-suggest',
             title: ja ? `${ja}（${name}）` : name,
             onclick: () => setMso(name),
@@ -814,6 +830,25 @@ function iconSuggestions(el: Element, nowPath: () => Path | null, setMso: (v: st
     h('div', { class: 'icon-suggest-head muted' }, t('候補（ラベル「{label}」から）', { label })),
     msoRow,
     fluentRow);
+  // 候補は 1 つの Tab 停止にして、中は ←→ で移る（9 個続くボタンを Tab で通り抜けるのに 9 回かかるため。総点検 I-3）
+  const stops = () => Array.from(box.querySelectorAll<HTMLButtonElement>('button.icon-suggest')).filter((b) => !b.closest('[hidden]'));
+  const roving = (current?: HTMLElement) => {
+    const list = stops();
+    const cur = current && list.includes(current as HTMLButtonElement) ? current : list.find((b) => b.tabIndex === 0) ?? list[0];
+    for (const b of list) b.tabIndex = b === cur ? 0 : -1;
+  };
+  box.addEventListener('focusin', (e) => roving(e.target as HTMLElement));
+  box.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
+    const list = stops();
+    const i = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (i < 0) return;
+    e.preventDefault();
+    const j = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : Math.min(list.length - 1, Math.max(0, i + (e.key === 'ArrowRight' ? 1 : -1)));
+    roving(list[j]);
+    list[j]!.focus();
+  });
+  queueMicrotask(() => roving());
   const fillFluent = async (icons: FluentIcon[]) => {
     const picks = await suggestFluent(icons, label);
     // 待っている間に欄が描き直されて外れていたら、何もしない
@@ -824,6 +859,7 @@ function iconSuggestions(el: Element, nowPath: () => Path | null, setMso: (v: st
       const markup = buildSvg(icon, 'regular', 'currentColor', 20);
       return h('button', {
         type: 'button',
+        tabIndex: -1,
         class: 'icon-suggest fluent',
         title: t('{name}（アイコン集）を加工して設定する', { name: fluentName(icon.name) }),
         'aria-label': fluentName(icon.name),
@@ -833,6 +869,7 @@ function iconSuggestions(el: Element, nowPath: () => Path | null, setMso: (v: st
         },
       }, markup ? svg(markup) : null);
     }));
+    roving();
   };
   // 概念の辞書（小さい）で言葉が見つかったときだけ、大きなアイコン集のデータを読み込む。
   // 旧来の小さな辞書だけで足切りすると、「出荷」「精算する」「猫」のような言葉で候補が出なくなる
@@ -931,7 +968,7 @@ function iconRow(el: Element, key: string): HTMLElement {
     h('option', { value: '', selected: mode === '' }, t('なし')),
     h('option', { value: 'imageMso', selected: mode === 'imageMso' }, t('組み込みアイコン')),
     h('option', { value: 'image', selected: mode === 'image' }, t('画像ファイル')),
-    canDynamic ? h('option', { value: 'getImage', selected: mode === 'getImage' }, t('VBAで返す')) : null,
+    canDynamic ? h('option', { value: 'getImage', selected: mode === 'getImage' }, t('VBA で返す')) : null,
   );
 
   let detail: HTMLElement | null = null;

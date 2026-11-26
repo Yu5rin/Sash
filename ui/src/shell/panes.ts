@@ -10,8 +10,11 @@ import type { LayoutHandle, PaneKey } from '../layout';
 
 export type PaneId = 'canvas' | 'palette' | 'tree' | 'xml' | 'inspector' | 'bottom';
 
-/** F6 で回る順。パレットも入れる（キーボードだけで部品を探して追加できるように）。 */
-export const PANE_ORDER: readonly PaneId[] = ['canvas', 'palette', 'tree', 'xml', 'inspector', 'bottom'];
+/**
+ * F6 で回る順。画面の並び（左 → 中央上 → 中央下 → 右 → 下）に合わせる（総点検 G-13）。Ctrl+1〜4 の順（キャンバス・ツリー・XML・インスペクタ）とも矛盾しない。
+ * パレットも入れる（キーボードだけで部品を探して追加できるように）。
+ */
+export const PANE_ORDER: readonly PaneId[] = ['palette', 'tree', 'canvas', 'xml', 'inspector', 'bottom'];
 
 let layout: LayoutHandle | null = null;
 

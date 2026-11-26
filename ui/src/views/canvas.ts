@@ -1,6 +1,6 @@
 // キャンバス（仕様書 §5.2）。本物の Excel（Microsoft 365）に近い見た目でリボンを描き、ドラッグで部品を置く。
 // 組み込みタブと組み込みグループはグレーのプレースホルダーで示し、自分で足した部分だけを編集対象にする。
-// 表示はリボン・Backstage・コンテキストメニューの3つを切り替える（一度に全部出すと、どれを編集しているか分かりにくいため）。
+// 表示はリボン・Backstage・右クリックメニューの3つを切り替える（一度に全部出すと、どれを編集しているか分かりにくいため）。
 
 import '../styles-views.css';
 import { app } from '../app';
@@ -13,6 +13,8 @@ import {
 } from '../model';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { followBackstageSelection, renderBackstage, resetBackstage } from './backstage';
+import { emptyState } from './emptyState';
+import { uiIcons } from '../icons';
 import { closeMenu, openElementMenu, openMenu } from './contextMenu';
 import { focusField } from './inspector';
 import { iconTargetOf, iconTargetPath, innerButtonOf } from '../iconTarget';
@@ -61,8 +63,32 @@ const BUILTIN_GROUP_JA: Readonly<Record<string, string>> = {
   GroupThreadedComments: 'コメント', GroupCommentsLegacy: 'コメント', GroupChangesExcel: '変更', GroupProtectExcel: '保護', GroupInk: 'インク',
   GroupNamedSheetView: 'シート ビュー', GroupWorkbookViews: 'ブックの表示', GroupViewShowHide: '表示', GroupZoom: 'ズーム', GroupWindow: 'ウィンドウ', GroupMacros: 'マクロ',
   GroupCode: 'コード', GroupAddins: 'アドイン', GroupControls: 'コントロール', GroupXml: 'XML',
-  GroupHelpAndSupport: 'ヘルプ', GroupExcelCommunity: 'コミュニティ',
+  GroupHelpAndSupport: 'ヘルプ', GroupExcelCommunity: 'コミュニティ', GroupOfficeExtensionsAddinFlyout: 'アドイン',
 };
+
+/**
+ * よく使う右クリックメニューの日本語名（Excel の呼び名）。Excel から表示名が届かない環境で、見出しが ContextMenuCell のままになるのを避ける（総点検 C-3）。
+ * 見出しは「セル（ContextMenuCell）」の形にして、idMso も読めるようにする。
+ */
+const CONTEXT_MENU_JA: Readonly<Record<string, string>> = {
+  ContextMenuCell: 'セル', ContextMenuRow: '行', ContextMenuColumn: '列', ContextMenuPly: 'シート見出し', ContextMenuListRange: 'テーブル',
+};
+
+/** 右クリックメニューのカードの見出し。Excel から届いた名前、日本語の対応表（「セル（ContextMenuCell）」）、idMso の順。 */
+export function contextMenuTitle(idMso: string): string {
+  const fromExcel = labels.get(idMso);
+  if (fromExcel) return fromExcel;
+  const ja = lang === 'ja' ? CONTEXT_MENU_JA[idMso] : undefined;
+  return ja ? `${ja}（${idMso}）` : idMso;
+}
+
+/**
+ * 組み込みグループの枠を描くか。日本語で名前が分からないもの（Excel から名前が届かず、対応表にもない）は、
+ * 「Activation」のような英字の ID が見出しになってしまうので描かない。ただし、自分のグループをその前後に置いているときは描く（置き場所が分からなくなるため）。
+ */
+export function showBuiltinGroup(id: string, anchored: boolean): boolean {
+  return anchored || lang !== 'ja' || labels.has(id) || id in BUILTIN_GROUP_JA;
+}
 
 /** 組み込みグループの表示名。Excel から届いた名前、日本語の対応表、ID の順。 */
 export function builtinGroupName(id: string): string {
@@ -426,7 +452,7 @@ export function mountCanvas(host: HTMLElement, opts: { onImageDrop: (files: File
   });
 }
 
-/** 選択がタブ（または Backstage・コンテキストメニュー）の中に移ったら、そこを表示する。 */
+/** 選択がタブ（または Backstage・右クリックメニュー）の中に移ったら、そこを表示する。 */
 function followSelection(fromCanvas: boolean): void {
   const store = app.store;
   const sel = store?.selection;
@@ -564,9 +590,9 @@ function renderHeader(fit: ViewFit | null): HTMLElement {
         setCanvasMode(m);
       },
     }, short ? [h('span', { class: 'cv-long' }, label), h('span', { class: 'cv-short', 'aria-hidden': 'true' }, short)] : label);
-  const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('コンテキストメニュー'), tr('右クリック')));
+  const modes = h('div', { class: 'segmented cv-modes', role: 'group', 'aria-label': tr('キャンバスの表示') }, seg('ribbon', tr('リボン')), seg('backstage', 'Backstage'), seg('contextMenu', tr('右クリックメニュー')));
   // 操作の説明は長いので、小さな「?」のツールチップに回す（1 行に収めるため）
-  const hint = h('span', { class: 'cv-hint', tabIndex: 0, role: 'note', 'aria-label': tr('キー操作'), title: tr('矢印キーで移動・Enter で編集・右クリックでメニュー・Ctrl+クリックで選び足す・Shift+クリックで範囲を選ぶ') }, '?');
+  const hint = renderKeyHelp();
   // 複数選択の数（仕様書 §19）。見出しの 1 行に収まるよう、短い印にする。
   // 状態の文字（縮むほう）より前に置く。後ろに置くと、狭い画面では見出しの右端からはみ出して見えなくなるため
   const count = app.store?.isMulti ? multiBadge(app.store.selections.length) : null;
@@ -574,6 +600,49 @@ function renderHeader(fit: ViewFit | null): HTMLElement {
   // 毎回は使わない切り替え（比べる・キーヒント・VBA で変わる表示・チェックする幅・Excel の幅）は「表示」メニューにまとめた
   if (mode !== 'ribbon') return h('div', { class: 'cv-header' }, modes, count, h('span', { class: 'cv-spacer' }), hint);
   return h('div', { class: 'cv-header' }, modes, renderWidthControls(), count, renderStatus(fit), renderViewMenu(), hint);
+}
+
+/**
+ * 「?」のキー操作の案内。キーボードでも読めるよう button にして、押す・Enter で小さな案内（.cv-pop）を出す（総点検 C-4）。
+ * title だけだとマウスを乗せたときしか出ず、読み上げも「キー操作」としか言わなかった。Esc・外を押す・もう一度押すで閉じる。
+ */
+export const KEY_HELP_LINES = (): string[] => [
+  tr('矢印キー：移動'),
+  tr('Enter：名前を編集（F2 でも）'),
+  tr('右クリック：メニュー'),
+  tr('Ctrl+クリック：選び足す'),
+  tr('Shift+クリック：範囲を選ぶ'),
+  tr('Esc：親を選ぶ（複数選択のときは解除）'),
+];
+
+function renderKeyHelp(): HTMLElement {
+  const pop = h('div', { class: 'cv-pop cv-keyhelp', id: 'cv-keyhelp', role: 'region', 'aria-label': tr('キー操作'), hidden: true },
+    h('div', { class: 'cv-pop-title' }, tr('キー操作')),
+    h('ul', { class: 'cv-keyhelp-list' }, KEY_HELP_LINES().map((line) => h('li', null, line))));
+  const button = h('button', { type: 'button', class: 'cv-hint', 'aria-label': tr('キー操作'), 'aria-expanded': 'false', 'aria-controls': 'cv-keyhelp' }, '?') as HTMLButtonElement;
+  const onOutside = (e: MouseEvent) => {
+    if (!(e.target as HTMLElement).closest?.('.cv-keyhelp-wrap')) setOpen(false, false);
+  };
+  const setOpen = (open: boolean, focusButton: boolean) => {
+    pop.hidden = !open;
+    button.setAttribute('aria-expanded', String(open));
+    if (open) window.addEventListener('mousedown', onOutside, true);
+    else window.removeEventListener('mousedown', onOutside, true);
+    if (!open && focusButton) button.focus();
+  };
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(pop.hidden, false);
+  });
+  const wrap = h('div', { class: 'cv-menu-wrap cv-viewmenu cv-keyhelp-wrap' }, button, pop);
+  wrap.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || pop.hidden) return;
+    // キャンバスの Esc（親を選ぶ）には渡さない。案内を閉じるだけ
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false, true);
+  });
+  return wrap;
 }
 
 /** 「3 個選択中」の印。押すと、主な選択だけに戻す（Esc と同じ）。読み上げは announceSelection の領域が受け持つ。 */
@@ -1454,11 +1523,13 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
       const builtinGroups = catalog.filter((c) => c.type === 'group' && c.tab === active.idMso).slice(0, 8);
       const placed = new Set<Element>();
       for (const bg of builtinGroups) {
+        const anchored = groups.some((g) => g.getAttribute('insertBeforeMso') === bg.id || g.getAttribute('insertAfterMso') === bg.id);
+        const draw = showBuiltinGroup(bg.id, anchored);
         for (const g of groups) if (g.getAttribute('insertBeforeMso') === bg.id && !placed.has(g)) {
           body.append(renderOne(g));
           placed.add(g);
         }
-        body.append(h('div', { class: 'rb-group builtin', title: tr('組み込みのグループ（編集できません）') }, h('div', { class: 'rb-controls' }), h('div', { class: 'rb-group-label' }, h('span', null, builtinGroupName(bg.id)))));
+        if (draw) body.append(h('div', { class: 'rb-group builtin', title: tr('組み込みのグループ（編集できません）') }, h('div', { class: 'rb-controls' }), h('div', { class: 'rb-group-label' }, h('span', null, builtinGroupName(bg.id)))));
         for (const g of groups) if (g.getAttribute('insertAfterMso') === bg.id && !placed.has(g)) {
           body.append(renderOne(g));
           placed.add(g);
@@ -1479,10 +1550,13 @@ function renderRibbon(host: HTMLElement, doc: Document, errorPaths: Set<string>,
     }
   }
   if (!hasCustom) {
-    body.append(h('div', { class: 'cv-empty floating' },
-      h('span', null, tr('まだ自分のタブがありません。タブを追加するか、組み込みタブにグループを足してください')),
+    body.append(emptyState({
+      className: 'floating',
+      title: tr('まだ自分のタブがありません'),
+      text: tr('タブを追加するか、組み込みタブにグループを足してください'),
       // 白紙から組むより、よく使う形から始めたほうが早いので、レシピへの入り口も置く
-      h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); void openOnce('recipes', () => openRecipes(notify)); } }, tr('レシピから始める'))));
+      action: h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); void openOnce('recipes', () => openRecipes(notify)); } }, tr('レシピから始める')),
+    }));
   }
 
   const qat = renderQat(doc, errorPaths);
@@ -1571,9 +1645,9 @@ function addChild(parentPath: Path, tag: string): void {
   if (ok) startRenameOf(added);
 }
 
-/** コンテキストメニュー（右クリックメニュー）に足す項目を、メニューの形で並べる。 */
+/** 右クリックメニューに足す項目を、メニューの形で並べる。 */
 function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement {
-  if (app.store?.version === 'office2007') return h('div', { class: 'cv-empty' }, tr('コンテキストメニューは customUI14（2010以降）の形式でのみ編集できます'));
+  if (app.store?.version === 'office2007') return h('div', { class: 'cv-empty' }, tr('右クリックメニューは customUI14（2010以降）の形式でのみ編集できます'));
   const cms = findChild(doc.documentElement, 'contextMenus');
   const menus = cms ? childElements(cms).filter((c) => c.localName === 'contextMenu') : [];
   const sel = app.store?.selection ?? null;
@@ -1616,19 +1690,25 @@ function renderContextMenus(doc: Document, errorPaths: Set<string>): HTMLElement
           app.store?.select(mp, 'canvas');
         },
       },
-      h('div', { class: 'ctx-title', title: idMso }, labels.get(idMso) ?? idMso),
+      h('div', { class: 'ctx-title', title: idMso }, contextMenuTitle(idMso)),
       h('div', { class: 'ctx-builtin' }, tr('（組み込みの項目）')),
       h('div', { class: 'ctx-items', dataset: { container: mp.join('.') } }, m.children.length ? childElements(m).flatMap((c) => item(c, 0)) : h('div', { class: 'rb-menu-item muted' }, tr('ここに項目をドラッグ'))),
     );
   });
-  const addButton = h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addContextMenu(); } }, tr('コンテキストメニューを追加'));
+  const addButton = h('button', { type: 'button', class: 'small', onclick: (e: MouseEvent) => { e.stopPropagation(); addContextMenu(); } }, tr('右クリックメニューを追加'));
   if (menus.length === 0) {
-    return h('section', { class: 'ctx-section empty', dataset: { ctxNew: '1' } },
-      h('h3', null, tr('コンテキストメニュー（右クリック）')),
-      h('p', { class: 'muted' }, tr('パレットの「コンテキストメニュー」をここにドラッグすると、右クリックメニューに項目を足せます')),
-      addButton);
+    // Backstage と同じ「空の状態」の部品で出す（総点検 C-1）。パレットからのドロップ先でもある（data-ctx-new）
+    const card = emptyState({
+      icon: uiIcons.info,
+      title: tr('右クリックメニューはまだありません'),
+      text: tr('パレットの「右クリックメニュー」をここにドラッグすると、右クリックメニューに項目を足せます'),
+      action: addButton,
+    });
+    card.classList.add('ctx-section');
+    card.dataset['ctxNew'] = '1';
+    return card;
   }
-  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, tr('コンテキストメニュー（右クリック）'), addButton), h('div', { class: 'ctx-cards' }, cards));
+  return h('section', { class: 'ctx-section', dataset: { container: cms ? pathOf(cms).join('.') : '' } }, h('h3', null, tr('右クリックメニュー（contextMenu）'), addButton), h('div', { class: 'ctx-cards' }, cards));
 }
 
 function addContextMenu(): void {
@@ -1637,7 +1717,7 @@ function addContextMenu(): void {
     const el = createElement(doc, 'contextMenu', cms);
     cms.append(el);
     return pathOf(el);
-  }, tr('コンテキストメニューを追加'));
+  }, tr('右クリックメニューを追加'));
 }
 
 function renderQat(doc: Document, errorPaths: Set<string>): HTMLElement | null {
@@ -2382,7 +2462,7 @@ function findDropSpot(e: DragEvent, host: HTMLElement): DropSpot | null {
     return { parentPath: 'backstage', index: 0, rect: { left: r.left + 4, top: r.top + 4, width: r.width - 8, height: 2 }, container: bsNew };
   }
 
-  // コンテキストメニューの一覧がまだないときは、空の欄へのドロップで作る
+  // 右クリックメニューの一覧がまだないときは、空の欄へのドロップで作る
   const ctxNew = target.closest<HTMLElement>('[data-ctx-new]');
   if (ctxNew) {
     if (draggedTag(doc) !== 'contextMenu') return null;

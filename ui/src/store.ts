@@ -320,7 +320,7 @@ export class PartStore {
 
   private transact(source: Source, fn: EditFn, label: string, image: ImageEntry | null): boolean {
     if (this.syncError) {
-      reportRefusal(t('XMLに構文エラーがあるため、この操作はできません。先にXMLエディタでエラーを直してください'));
+      reportRefusal(t('XML に構文エラーがあるため、この操作はできません。先に XML エディタでエラーを直してください'));
       return false;
     }
     const before = this.snapshot(label);
@@ -398,7 +398,7 @@ export class PartStore {
   setText(text: string): void {
     if (text === this.text) return;
     const now = Date.now();
-    if (now - this.lastTextEditAt > TEXT_COALESCE_MS) this.pushHistory(t('XMLの編集'));
+    if (now - this.lastTextEditAt > TEXT_COALESCE_MS) this.pushHistory(t('XML の編集'));
     this.lastTextEditAt = now;
     this.text = text;
     const parsed = parseXml(text);
@@ -418,7 +418,7 @@ export class PartStore {
     if (this.syncError) return;
     const xml = serialize(this.doc);
     if (xml === this.text) return;
-    this.pushHistory(t('XMLの整形'));
+    this.pushHistory(t('XML の整形'));
     this.lastTextEditAt = 0;
     this.text = xml;
     this.emit(['doc'], 'other');
@@ -517,7 +517,7 @@ export class PartStore {
     return true;
   }
 
-  addImage(entry: ImageEntry, label: string = t('画像「{id}」の追加', { id: entry.id })): void {
+  addImage(entry: ImageEntry, label: string = t('画像「{id}」を追加', { id: entry.id })): void {
     this.pushHistory(label);
     this.images = new Map(this.images);
     this.images.set(entry.id, entry);
@@ -526,7 +526,7 @@ export class PartStore {
   }
 
   /** 複数の画像を一つの履歴でまとめて追加する（フォルダの一括取り込み）。 */
-  addImages(entries: readonly ImageEntry[], label: string = t('画像 {n} 個の追加', { n: entries.length })): void {
+  addImages(entries: readonly ImageEntry[], label: string = t('画像 {n} 個を追加', { n: entries.length })): void {
     if (entries.length === 0) return;
     this.pushHistory(label);
     this.images = new Map(this.images);

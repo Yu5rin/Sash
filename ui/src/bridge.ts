@@ -188,6 +188,8 @@ export interface HostApi {
   'app.titleBarTheme': { req: { dark: boolean }; res: null };
   /** ウィンドウの × で頼まれた終了を、利用者が取りやめた（未保存の確認でキャンセルなど）。ホストは次の × を受け付け直す。 */
   'app.closeCancelled': { req: undefined; res: null };
+  /** 想定外の例外をホストのログ（app.log）に残す。製品版は開発者ツールが使えないため。 */
+  'app.log': { req: { level: 'error' | 'warning' | 'info'; message: string; stack?: string }; res: null };
   'file.open': { req: { path?: string } | undefined; res: OpenedDocument | null };
   'file.save': { req: { path: string; parts: PartToSave[] }; res: { backup: string } };
   'file.exportText': { req: { defaultName: string; filter: string; content: string }; res: string | null };
@@ -532,7 +534,7 @@ const mock = {
         });
       }
       case 'vba.reveal':
-        return mockExcel ? r(true) : Promise.reject(new Error(t('Excelが見つからないため、VBAを読み書きできません。')));
+        return mockExcel ? r(true) : Promise.reject(new Error(t('Excel が見つからないため、VBA を読み書きできません。')));
       case 'backup.list': {
         // ブラウザ実行中の見た目の確認用。ホストは新しい順に返す
         const day = 24 * 60 * 60 * 1000;

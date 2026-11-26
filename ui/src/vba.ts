@@ -216,7 +216,7 @@ export function matchCallbacks(doc: Document, modules: VbaModule[] | null): Call
     const conflict = list.find((u) => compareSignature(expected, callbackSignature(u.attr, u.tag)) !== null);
     if (conflict) {
       const kinds = [...new Set(list.map((u) => `${u.tag}.${u.attr}`))].join(t('、'));
-      const reason = t('引数の違うコントロール（{kinds}）で同じSubを共有しています。Subを分けてください', { kinds });
+      const reason = t('引数の違うコントロール（{kinds}）で同じ Sub を共有しています。Sub を分けてください', { kinds });
       result.push({ name, state: 'mismatch', uses: list, expected, procedure: byName.get(bare.toLowerCase()), reason, namespace });
       continue;
     }

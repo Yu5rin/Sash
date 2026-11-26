@@ -171,7 +171,7 @@ public sealed class ExcelService : IDisposable
     }
 
     /// <summary>Excel が忙しいときに利用者に出す文言。</summary>
-    public static string BusyMessage => L("Excelが応答しません（セルの編集中やダイアログの表示中の可能性があります）。Excelでの操作を終えてから、もう一度やり直してください。",
+    public static string BusyMessage => L("Excel が応答しません（セルの編集中やダイアログの表示中の可能性があります）。Excel での操作を終えてから、もう一度やり直してください。",
         "Excel is not responding (a cell may be in edit mode or a dialog may be open). Finish what you are doing in Excel and try again.");
 
     // ---- ブックの検索 ----
@@ -295,7 +295,7 @@ public sealed class ExcelService : IDisposable
         {
             backup();
             write();
-            return new ApplyResult(ApplyStatus.Written, L("Excelでは開かれていないので、ファイルに書き込みました", "The workbook is not open in Excel, so the changes were written to the file"));
+            return new ApplyResult(ApplyStatus.Written, L("Excel では開かれていないので、ファイルに書き込みました", "The workbook is not open in Excel, so the changes were written to the file"));
         }
 
         var (app, wb) = found.Value;
@@ -305,7 +305,7 @@ public sealed class ExcelService : IDisposable
         bool? saved = SafeValue(() => (bool)wb.Saved);
         if (saved is null)
         {
-            throw new UserFacingException(L("Excelのブックに未保存の変更があるかを確認できないため、反映を中止しました。Excelでの操作を終えてから、もう一度やり直してください。",
+            throw new UserFacingException(L("Excel のブックに未保存の変更があるかを確認できないため、反映を中止しました。Excel での操作を終えてから、もう一度やり直してください。",
                 "Applying was cancelled because Sash could not check whether the workbook has unsaved changes in Excel. Finish what you are doing in Excel and try again."));
         }
 
@@ -314,13 +314,13 @@ public sealed class ExcelService : IDisposable
             // 勝手には保存しない（仕様書 §7.1 の 3）
             if (!saveIfDirty)
             {
-                return new ApplyResult(ApplyStatus.NeedsSave, L("Excel側に未保存の変更があります", "The workbook has unsaved changes in Excel"));
+                return new ApplyResult(ApplyStatus.NeedsSave, L("Excel 側に未保存の変更があります", "The workbook has unsaved changes in Excel"));
             }
 
             // 読み取り専用で開いているブックの Save は「名前を付けて保存」のダイアログを出すか失敗するので、先に断る
             if (SafeValue(() => (bool)wb.ReadOnly) == true)
             {
-                throw new UserFacingException(L("Excelでこのブックが読み取り専用で開かれているため、保存して反映できません。Excelで変更を保存するか破棄してから、やり直してください。",
+                throw new UserFacingException(L("Excel でこのブックが読み取り専用で開かれているため、保存して反映できません。Excel で変更を保存するか破棄してから、やり直してください。",
                     "The workbook is open as read-only in Excel, so it cannot be saved and applied. Save or discard the changes in Excel, then try again."));
             }
 
@@ -365,13 +365,13 @@ public sealed class ExcelService : IDisposable
         {
             throw new UserFacingException(reopenError is null
                 ? L($"書き込みに失敗しました。ブックは元のまま開き直しました：{writeError.Message}", $"Writing failed. The workbook was reopened unchanged: {writeError.Message}")
-                : L($"書き込みに失敗しました。ブックをExcelで開き直すこともできなかったので、Excelで開き直してください：{writeError.Message}", $"Writing failed, and Excel could not reopen the workbook. Please open it in Excel: {writeError.Message}"),
+                : L($"書き込みに失敗しました。ブックを Excel で開き直すこともできなかったので、Excel で開き直してください：{writeError.Message}", $"Writing failed, and Excel could not reopen the workbook. Please open it in Excel: {writeError.Message}"),
                 writeError);
         }
 
         if (reopenError is not null)
         {
-            return new ApplyResult(ApplyStatus.Blocked, L($"書き込みましたが、Excelで開き直せませんでした（{reopenError.Message}）。Excelで直接開いてください", $"The changes were written, but Excel could not reopen the workbook ({reopenError.Message}). Please open it in Excel"));
+            return new ApplyResult(ApplyStatus.Blocked, L($"書き込みましたが、Excel で開き直せませんでした（{reopenError.Message}）。Excel で直接開いてください", $"The changes were written, but Excel could not reopen the workbook ({reopenError.Message}). Please open it in Excel"));
         }
 
         // ここから先は書き込みも開き直しも済んでいる。確認で失敗しても「失敗」とは言わない
@@ -380,12 +380,12 @@ public sealed class ExcelService : IDisposable
             int protectedAfter = SafeValue(() => (int)app.ProtectedViewWindows.Count) ?? 0;
             if (protectedAfter > protectedBefore)
             {
-                return new ApplyResult(ApplyStatus.Blocked, L("反映しましたが、保護ビューで開かれています。Excelで［編集を有効にする］を押すとリボンが表示されます", "Applied, but the workbook opened in Protected View. Click Enable Editing in Excel to show the ribbon"));
+                return new ApplyResult(ApplyStatus.Blocked, L("反映しましたが、保護ビューで開かれています。Excel で［編集を有効にする］を押すとリボンが表示されます", "Applied, but the workbook opened in Protected View. Click Enable Editing in Excel to show the ribbon"));
             }
 
             if (TryGetWorkbook(app, fullPath, WorkbookPaths.ReadSyncMounts()) is null)
             {
-                return new ApplyResult(ApplyStatus.Blocked, L("反映しましたが、ブックの再読み込みが確認できません。Excelの画面を確認してください", "Applied, but reopening the workbook could not be confirmed. Please check Excel"));
+                return new ApplyResult(ApplyStatus.Blocked, L("反映しましたが、ブックの再読み込みが確認できません。Excel の画面を確認してください", "Applied, but reopening the workbook could not be confirmed. Please check Excel"));
             }
 
             // 作ったタブを前面に出す（仕様書 §7.1 の 6）。外からは IRibbonUI を触れないので、
@@ -397,7 +397,7 @@ public sealed class ExcelService : IDisposable
         }
         catch (Exception ex)
         {
-            return new ApplyResult(ApplyStatus.Blocked, L($"反映しましたが、Excelの状態を確認できませんでした（{ex.Message}）。Excelの画面を確認してください", $"Applied, but the state of Excel could not be checked ({ex.Message}). Please check Excel"));
+            return new ApplyResult(ApplyStatus.Blocked, L($"反映しましたが、Excel の状態を確認できませんでした（{ex.Message}）。Excel の画面を確認してください", $"Applied, but the state of Excel could not be checked ({ex.Message}). Please check Excel"));
         }
 
         return new ApplyResult(ApplyStatus.Applied, isAddIn ? L("アドインを読み込み直して反映しました", "Reloaded the add-in and applied the changes") : L("ブックを開き直して反映しました", "Reopened the workbook and applied the changes"));
@@ -523,7 +523,7 @@ public sealed class ExcelService : IDisposable
         || ex.Message.Contains("信頼", StringComparison.Ordinal);
 
     private static UserFacingException VbaFailure(COMException ex) =>
-        new(IsBusy(ex) ? BusyMessage : L($"VBAプロジェクトを読み書きできませんでした：{ex.Message}", $"Could not read or write the VBA project: {ex.Message}"), ex);
+        new(IsBusy(ex) ? BusyMessage : L($"VBA プロジェクトを読み書きできませんでした：{ex.Message}", $"Could not read or write the VBA project: {ex.Message}"), ex);
 
     private static dynamic? TryGetProject(dynamic wb, out VbaReadStatus status)
     {
@@ -555,12 +555,12 @@ public sealed class ExcelService : IDisposable
 
     private static dynamic RequireProject(string fullPath, out dynamic workbook)
     {
-        var found = FindWorkbook(fullPath) ?? throw new UserFacingException(L("ブックがExcelで開かれていません。", "The workbook is not open in Excel."));
+        var found = FindWorkbook(fullPath) ?? throw new UserFacingException(L("ブックが Excel で開かれていません。", "The workbook is not open in Excel."));
         workbook = found.Workbook;
         dynamic? project = TryGetProject(found.Workbook, out VbaReadStatus status);
         return project ?? throw new UserFacingException(status == VbaReadStatus.Locked
-            ? L("VBAプロジェクトがパスワードで保護されています。", "The VBA project is password protected.")
-            : L("VBAプロジェクトにアクセスできません。Excelの［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにしてください。", "Cannot access the VBA project. In Excel, turn on \"Trust access to the VBA project object model\" under Trust Center > Macro Settings."));
+            ? L("VBA プロジェクトがパスワードで保護されています。", "The VBA project is password protected.")
+            : L("VBA プロジェクトにアクセスできません。Excel の［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにしてください。", "Cannot access the VBA project. In Excel, turn on \"Trust access to the VBA project object model\" under Trust Center > Macro Settings."));
     }
 
     /// <summary>
@@ -658,7 +658,7 @@ public sealed class ExcelService : IDisposable
             }
         }
 
-        throw new UserFacingException(L("ブックのモジュール（ThisWorkbook）が見つかりません。ExcelでVBEを一度開いてから、やり直してください。", "The workbook module (ThisWorkbook) was not found. Open the VBE in Excel once, then try again."));
+        throw new UserFacingException(L("ブックのモジュール（ThisWorkbook）が見つかりません。Excel で VBE を一度開いてから、やり直してください。", "The workbook module (ThisWorkbook) was not found. Open the VBE in Excel once, then try again."));
     }
 
     /// <summary>1 行だけを書き換える。読み込んだ後にコードが変わっていたら書き換えない。</summary>
@@ -671,7 +671,7 @@ public sealed class ExcelService : IDisposable
             string current = cm.Lines(line, 1);
             if (!string.Equals(current, expected, StringComparison.Ordinal))
             {
-                throw new UserFacingException(L("VBAのコードが読み込んだ後に変更されています。コールバック一覧を再読み込みしてください。", "The VBA code changed after it was read. Please reload the callback list."));
+                throw new UserFacingException(L("VBA のコードが読み込んだ後に変更されています。コールバック一覧を再読み込みしてください。", "The VBA code changed after it was read. Please reload the callback list."));
             }
 
             cm.ReplaceLine(line, replacement);
@@ -858,7 +858,7 @@ public sealed class ExcelService : IDisposable
 
     private bool RunMacroCore(string fullPath, string? module, string procedure, MacroCallShape? argument)
     {
-        var found = FindWorkbook(fullPath) ?? throw new UserFacingException(L("ブックがExcelで開かれていません。Excel で開いてから試してください。", "The workbook is not open in Excel. Open it in Excel, then try again."));
+        var found = FindWorkbook(fullPath) ?? throw new UserFacingException(L("ブックが Excel で開かれていません。Excel で開いてから試してください。", "The workbook is not open in Excel. Open it in Excel, then try again."));
         var (app, wb) = found;
         var shape = argument ?? MacroCallShape.NoArguments;
         bool checkedSignature = false;

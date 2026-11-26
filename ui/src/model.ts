@@ -20,7 +20,7 @@ export function parseXml(xml: string): ParseResult {
     const m = /line (\d+) at column (\d+):\s*(.*?)(?:\s*Below is a rendering.*)?$/i.exec(text);
     if (m) return { ok: false, message: tr('{line}行目 {column}列：{message}', { line: m[1]!, column: m[2]!, message: m[3]! }), line: Number(m[1]) };
     const line = /line (\d+)/i.exec(text);
-    return { ok: false, message: text.trim() || tr('XMLの構文エラー'), line: line ? Number(line[1]) : undefined };
+    return { ok: false, message: text.trim() || tr('XML の構文エラー'), line: line ? Number(line[1]) : undefined };
   }
   return { ok: true, doc };
 }
@@ -278,7 +278,7 @@ export function createElement(doc: Document, tag: string, parent: Element | null
     return el;
   }
   if (tag === 'contextMenu') {
-    // コンテキストメニューは組み込みのメニュー（idMso）に項目を足すもの。既定はセルの右クリックメニュー
+    // 右クリックメニューは組み込みのメニュー（idMso）に項目を足すもの。既定はセルの右クリックメニュー
     el.removeAttribute('id');
     el.setAttribute('idMso', 'ContextMenuCell');
     el.append(make('button'));

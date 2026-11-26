@@ -84,7 +84,7 @@ export function canDropInto(doc: Document, parent: Element): boolean {
 
 /**
  * ドロップを確定する。parentPath が null ならタブ一覧（customUI > ribbon > tabs）、
- * 'contextMenus' ならコンテキストメニューの一覧を指す（なければ作る）。
+ * 'contextMenus' なら右クリックメニューの一覧を指す（なければ作る）。
  */
 export function drop(parentPath: Path | null | 'contextMenus' | 'backstage', index: number, source: 'canvas' | 'tree'): void {
   const store = app.store;
@@ -96,7 +96,7 @@ export function drop(parentPath: Path | null | 'contextMenus' | 'backstage', ind
     return;
   }
   const tag = payload.kind === 'new' ? payload.tag : elementAt(store.doc, payload.path)?.localName ?? '';
-  const label = payload.kind === 'new' ? t('{name}の追加', { name: titleOf(tag) }) : t('{name}の移動', { name: titleOf(tag) });
+  const label = payload.kind === 'new' ? t('{name}を追加', { name: titleOf(tag) }) : t('{name}を移動', { name: titleOf(tag) });
   store.edit(source, (doc) => {
     const parent =
       parentPath === null ? ensureTabs(doc)

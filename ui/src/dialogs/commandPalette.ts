@@ -18,8 +18,12 @@ export interface Command {
   /** 検索に使う別名。 */
   keywords?: string;
   enabled?: () => boolean;
+  /** 使えないときの理由（パレットの行の右に出す）。なければ「いまは使えません」。 */
+  disabledReason?: () => string | undefined;
   run: () => void;
 }
+
+const isEnabled = (c: Command) => c.enabled?.() ?? true;
 
 const RECENT_KEY = 'sash.commands.recent';
 
@@ -54,7 +58,8 @@ export function rankCommands(commands: readonly Command[], query: string, recent
       return { c, s: s > 0 ? s + Math.max(0, 10 - rank(c.id)) : 0 };
     })
     .filter((x) => x.s > 0);
-  return scored.sort((a, b) => (q ? b.s - a.s : 0) || rank(a.c.id) - rank(b.c.id)).map((x) => x.c);
+  // 使えるものを先に並べる（使えないものは薄く出すだけ。総点検 D-11）。同じ使える・使えないの中では今までの順
+  return scored.sort((a, b) => Number(isEnabled(b.c)) - Number(isEnabled(a.c)) || (q ? b.s - a.s : 0) || rank(a.c.id) - rank(b.c.id)).map((x) => x.c);
 }
 
 let open = false;
@@ -62,21 +67,31 @@ let open = false;
 export function openCommandPalette(commands: () => Command[]): void {
   if (open) return;
   open = true;
-  const all = commands().filter((c) => c.enabled?.() ?? true);
+  // 使えないコマンドも、探したときには薄く出して理由を添える（隠すと、機能そのものがないように見えるため）。
+  // 何も打っていないときは、使えるものだけを出す（100 を超える一覧が薄い行だらけにならないように）
+  const all = commands();
   const input = h('input', { type: 'search', placeholder: t('コマンドを検索（例：保存、ボタン、レシピ、テーマ）'), spellcheck: false, 'aria-label': t('コマンドを検索'), role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'command-results', 'aria-autocomplete': 'list' });
   const list = h('ul', { class: 'palette-results', role: 'listbox', id: 'command-results', 'aria-label': t('コマンド') });
   let items: Command[] = [];
   let index = 0;
+  /** 使えないコマンドで Enter を押したときに、理由を読み上げる場所。 */
+  const live = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+  const reasonOf = (c: Command) => c.disabledReason?.() ?? t('いまは使えません');
 
   const run = (c: Command | undefined) => {
     if (!c) return;
+    if (!isEnabled(c)) {
+      // 実行はせず、理由を読み上げる（閉じない）
+      live.textContent = `${c.title}：${reasonOf(c)}`;
+      return;
+    }
     layer.close();
     remember(c.id);
     c.run();
   };
   const render = () => {
     const recent = recentIds();
-    items = rankCommands(all, input.value, recent).slice(0, 80);
+    items = rankCommands(input.value.trim() ? all : all.filter(isEnabled), input.value, recent).slice(0, 80);
     index = Math.min(index, Math.max(items.length - 1, 0));
     if (items.length === 0) {
       list.replaceChildren(h('li', { class: 'palette-results-empty', role: 'presentation' }, input.value.trim() ? t('「{query}」に一致するコマンドはありません', { query: input.value.trim() }) : t('使えるコマンドはありません')));
@@ -88,10 +103,12 @@ export function openCommandPalette(commands: () => Command[]): void {
     items.forEach((c, i) => {
       if (recentCount > 0 && i === 0) rows.push(h('li', { class: 'palette-results-head', role: 'presentation' }, t('最近使ったもの')));
       if (recentCount > 0 && i === recentCount) rows.push(h('li', { class: 'palette-results-head', role: 'presentation' }, t('すべてのコマンド')));
-      rows.push(h('li', { id: `cmd-${i}`, role: 'option', class: i === index ? 'active' : '', 'aria-selected': String(i === index), onmousedown: (e: MouseEvent) => { e.preventDefault(); run(c); }, onmousemove: () => { if (index !== i) { index = i; render(); } } },
+      const off = !isEnabled(c);
+      rows.push(h('li', { id: `cmd-${i}`, role: 'option', class: `${i === index ? 'active' : ''}${off ? ' disabled' : ''}`.trim(), 'aria-selected': String(i === index), 'aria-disabled': off ? 'true' : undefined, onmousedown: (e: MouseEvent) => { e.preventDefault(); run(c); }, onmousemove: () => { if (index !== i) { index = i; render(); } } },
         h('span', { class: 'cmd-group' }, c.group),
         h('span', { class: 'cmd-title' }, c.title),
-        c.shortcut ? h('kbd', null, c.shortcut) : null));
+        off ? h('span', { class: 'cmd-reason' }, reasonOf(c)) : null,
+        c.shortcut && !off ? h('kbd', null, c.shortcut) : null));
     });
     list.replaceChildren(...rows);
     input.setAttribute('aria-activedescendant', `cmd-${index}`);
@@ -119,6 +136,7 @@ export function openCommandPalette(commands: () => Command[]): void {
   const dialog = h('div', { class: 'command-palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('コマンドパレット') },
     input,
     list,
+    live,
     h('div', { class: 'command-palette-foot', 'aria-hidden': 'true' },
       h('span', null, h('kbd', null, '↑↓'), ' ', t('項目を選ぶ')),
       h('span', null, h('kbd', null, 'Enter'), ' ', t('実行')),

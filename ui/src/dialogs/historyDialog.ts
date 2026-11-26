@@ -58,7 +58,7 @@ export function openHistoryDialog(): void {
   const handle = openModal(t('操作の履歴'), body, {
     size: 'md',
     key: 'history',
-    footer: [h('button', { type: 'button', class: 'primary', onclick: () => handle.close() }, t('閉じる'))],
+    footer: [h('button', { type: 'button', 'data-initial-focus': '', onclick: () => handle.close() }, t('閉じる'))],
     onClose: () => {
       app.off('store', onStore);
       app.off('session', onStore);

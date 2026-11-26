@@ -69,9 +69,9 @@ describe('PartStore.edit', () => {
     }, 'ボタン『B』の削除');
     expect(s.undoLabel).toBe('ボタン『B』の削除');
     s.setText(s.text.replace('label="T"', 'label="U"'));
-    expect(s.undoLabel).toBe('XMLの編集');
+    expect(s.undoLabel).toBe('XML の編集');
     s.undo();
-    expect(s.redoLabel).toBe('XMLの編集');
+    expect(s.redoLabel).toBe('XML の編集');
     expect(s.undoLabel).toBe('ボタン『B』の削除');
     s.undo();
     expect(s.redoLabel).toBe('ボタン『B』の削除');
@@ -103,7 +103,7 @@ describe('PartStore.edit', () => {
     const raw = new PartStore('office2010', `<customUI xmlns="${NS}"><ribbon/></customUI>`, []);
     raw.format();
     expect(raw.canUndo).toBe(true);
-    expect(raw.undoLabel).toBe('XMLの整形');
+    expect(raw.undoLabel).toBe('XML の整形');
   });
 });
 

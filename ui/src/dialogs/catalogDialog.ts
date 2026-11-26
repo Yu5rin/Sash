@@ -186,7 +186,7 @@ function openCatalogDialog(mode: CatalogMode, current: string, apply: (value: st
     if (first) first.tabIndex = 0;
     showFull(focusedId ?? (current && list.some((c) => c.id === current) ? current : undefined));
     if (focusedId) results.querySelector<HTMLElement>(`.catalog-item[data-id="${CSS.escape(focusedId)}"]`)?.focus();
-    status.textContent = t('{n} 件', { n: list.length }) + (list.length >= 240 ? t('（上位のみ表示）') : '') + (labels.size === 0 ? t(' ・ 日本語名はExcelがある環境で取得します') : '');
+    status.textContent = t('{n} 件', { n: list.length }) + (list.length >= 240 ? t('（上位のみ表示）') : '') + (labels.size === 0 ? t(' ・ 日本語名は Excel がある環境で取得します') : '');
   };
 
   if (mode === 'idMso') {

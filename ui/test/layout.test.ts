@@ -1,5 +1,27 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_PALETTE_RATIO, DEFAULT_SIZES, MIN_XML_HEIGHT, mountLayout, paletteHeightOf, parseLayout, ratioFromHeight, sanitizeLastRatio, sanitizeRatio } from '../src/layout';
+import { CHROME_HEIGHT, DEFAULT_PALETTE_RATIO, DEFAULT_SIZES, MIN_CENTER_WIDTH, MIN_XML_HEIGHT, PANE_MIN, fitSizes, maxSizeFor, mountLayout, paletteHeightOf, parseLayout, ratioFromHeight, sanitizeLastRatio, sanitizeRatio } from '../src/layout';
+
+describe('旧版で保存した下限未満の値（見直し 中6）', () => {
+  it('畳むしきい値（48px）未満は畳み、それ以上で下限未満なら下限にする', () => {
+    const { sizes } = parseLayout('{"left":24,"right":47,"top":50,"bottom":100}');
+    expect(sizes.left).toBe(0);
+    expect(sizes.right).toBe(0);
+    expect(sizes.top).toBe(PANE_MIN.top);
+    expect(sizes.bottom).toBe(100);
+    expect(parseLayout('{"left":120,"right":259}').sizes).toMatchObject({ left: PANE_MIN.left, right: PANE_MIN.right });
+  });
+
+  it('0（畳んだ状態）はそのまま。畳む前の大きさ（last）は 0 にせず下限以上にする', () => {
+    const l = parseLayout('{"left":0,"last":{"left":0,"right":30}}');
+    expect(l.sizes.left).toBe(0);
+    expect(l.last.left).toBe(DEFAULT_SIZES.left);
+    expect(l.last.right).toBe(PANE_MIN.right);
+  });
+
+  it('下限以上の値は変えない', () => {
+    expect(parseLayout('{"left":300,"right":400,"top":200,"bottom":96}').sizes).toEqual({ left: 300, right: 400, top: 200, bottom: 96 });
+  });
+});
 
 describe('パレットの比率の読み込み', () => {
   it('保存がなければ既定の比率になる', () => {
@@ -243,12 +265,13 @@ describe('一時的な操作', () => {
     expect(root.style.getPropertyValue('--top')).toBe(base);
   });
 
-  it('growTemporarily は窓の高さの 85% を超えない', () => {
+  it('growTemporarily は窓に収まる上限（中央の行から XML エディタの最低高さを残した分）を超えない', () => {
     const root = fixture();
     const h = mountLayout(root);
     Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true });
     h.growTemporarily('top', 5000);
-    expect(parseFloat(root.style.getPropertyValue('--top'))).toBeCloseTo(600 * 0.85);
+    // 600 − メニューとツールバー 76 − 下部 140 − 仕切り 1 − 仕切り 1 − XML の最低 120
+    expect(parseFloat(root.style.getPropertyValue('--top'))).toBeCloseTo(600 - CHROME_HEIGHT - 140 - 1 - 1 - MIN_XML_HEIGHT);
   });
 
   it('growTemporarily は中央の列の高さから XML エディタの最低高さと仕切りを残す（1366×768 で XML エディタが 0 にならない）', () => {
@@ -280,5 +303,136 @@ describe('一時的な操作', () => {
     h.toggle('bottom');
     expect(sp.getAttribute('aria-label')).toBe('下部パネルの高さ');
     expect(sp.querySelector('.splitter-summary')).toBeNull();
+  });
+});
+
+describe('窓に合わせた丸め（総点検 G-1）', () => {
+  const vp = { width: 1366, height: 768 };
+  const sizes = { left: 848, right: 320, top: 260, bottom: 140 };
+
+  it('左右の合計が窓からはみ出すとき、動かしていない側から下限まで縮める', () => {
+    const f = fitSizes(sizes, vp, 'left');
+    // 1366 − 中央の最小 320 − 仕切り 2 = 1044 に収まる。右を先に下限（260）まで縮める
+    expect(f.left + f.right).toBeLessThanOrEqual(1366 - MIN_CENTER_WIDTH - 2);
+    expect(f.right).toBe(PANE_MIN.right);
+    expect(f.left).toBe(1044 - PANE_MIN.right);
+  });
+
+  it('右を動かしているときは、左を先に縮める', () => {
+    const f = fitSizes({ ...sizes, left: 700, right: 700 }, vp, 'right');
+    expect(f.right).toBe(700);
+    expect(f.left).toBe(1044 - 700);
+  });
+
+  it('保存値そのものは変えない（元の窓に戻せば元の大きさに戻る）', () => {
+    const copy = { ...sizes };
+    fitSizes(sizes, vp);
+    expect(sizes).toEqual(copy);
+    expect(fitSizes(sizes, { width: 2400, height: 1200 })).toEqual(sizes);
+  });
+
+  it('畳んでいるペインは 0 のまま。下限より小さい窓でも下限を割らない', () => {
+    expect(fitSizes({ ...sizes, left: 0 }, vp).left).toBe(0);
+    expect(fitSizes(sizes, { width: 500, height: 768 }, 'left').right).toBe(PANE_MIN.right);
+  });
+
+  it('縦は、下部パネルとキャンバスを中央の行に収める', () => {
+    const f = fitSizes({ ...sizes, bottom: 600, top: 600 }, vp);
+    expect(f.bottom).toBe(768 - CHROME_HEIGHT - 1 - 200);
+    // 中央の行に XML エディタの最低高さが残る
+    expect(768 - CHROME_HEIGHT - 1 - f.bottom - 1 - f.top).toBeGreaterThanOrEqual(MIN_XML_HEIGHT);
+  });
+
+  it('ドラッグの上限は、もう片方を下限まで縮める前提で決まる', () => {
+    expect(maxSizeFor('left', sizes, vp)).toBe(1366 - MIN_CENTER_WIDTH - 2 - PANE_MIN.right);
+    expect(maxSizeFor('bottom', sizes, vp)).toBe(768 - CHROME_HEIGHT - 1 - 200);
+  });
+
+  it('mountLayout は保存値が窓より大きくても、表示する値を窓に収める。resize でも丸め直す', async () => {
+    localStorage.setItem('sash.layout', JSON.stringify({ left: 848, right: 320, top: 260, bottom: 140 }));
+    Object.defineProperty(window, 'innerWidth', { value: 1366, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
+    const root = fixture();
+    mountLayout(root);
+    const px = (k: string) => parseFloat(root.style.getPropertyValue(`--${k}`));
+    expect(px('left') + px('right')).toBeLessThanOrEqual(1366 - MIN_CENTER_WIDTH - 2);
+    // 窓を広げれば保存値どおりに戻る
+    Object.defineProperty(window, 'innerWidth', { value: 2400, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    expect(px('left')).toBe(848);
+    expect(JSON.parse(localStorage.getItem('sash.layout')!).left).toBe(848);
+  });
+
+  it('下限（左 200px）で止まり、さらに縮めると畳む', () => {
+    localStorage.clear();
+    Object.defineProperty(window, 'innerWidth', { value: 1366, configurable: true });
+    const root = fixture();
+    const h = mountLayout(root);
+    const sp = root.querySelector('[data-splitter="left"]')!;
+    key(sp, 'ArrowLeft');
+    expect(parseFloat(root.style.getPropertyValue('--left'))).toBe(DEFAULT_SIZES.left - 16);
+    for (let i = 0; i < 2; i++) key(sp, 'ArrowLeft');
+    expect(parseFloat(root.style.getPropertyValue('--left'))).toBe(PANE_MIN.left);
+    key(sp, 'ArrowLeft');
+    expect(h.isCollapsed('left')).toBe(true);
+  });
+});
+
+describe('下部パネルの自動開閉（総点検 B-1）', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('問題がなければ帯に畳み、出たら開く。保存は書き換えない', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    expect(h.isCollapsed('bottom')).toBe(false);
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(true);
+    expect(root.classList.contains('collapsed-bottom')).toBe(true);
+    h.setBottomAuto(true);
+    expect(h.isCollapsed('bottom')).toBe(false);
+    expect(root.style.getPropertyValue('--bottom')).toBe(`${DEFAULT_SIZES.bottom}px`);
+    // 自動の開閉だけでは何も保存しない
+    expect(localStorage.getItem('sash.layout')).toBeNull();
+  });
+
+  it('自動で畳んでいるあいだに別の操作で保存しても、下部パネルの大きさは 0 にならない', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    h.setBottomAuto(false);
+    key(root.querySelector('[data-splitter="left"]')!, 'ArrowRight');
+    expect(JSON.parse(localStorage.getItem('sash.layout')!).bottom).toBe(DEFAULT_SIZES.bottom);
+    expect(JSON.parse(localStorage.getItem('sash.layout')!).bottomAuto).toBe(true);
+  });
+
+  it('利用者が開閉・ドラッグしたら、以後は自動にしない（bottomAuto: false を保存）', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    h.setBottomAuto(false);
+    h.toggle('bottom'); // 利用者が開いた
+    expect(h.isCollapsed('bottom')).toBe(false);
+    expect(JSON.parse(localStorage.getItem('sash.layout')!).bottomAuto).toBe(false);
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(false);
+  });
+
+  it('保存された bottomAuto: false は、次の起動でも自動にしない。古い保存で大きさを変えていた人も自動にしない', () => {
+    expect(parseLayout('{"bottomAuto":false}').bottomAuto).toBe(false);
+    expect(parseLayout('{"bottom":200}').bottomAuto).toBe(false);
+    expect(parseLayout('{"bottom":140}').bottomAuto).toBe(true);
+    expect(parseLayout(null).bottomAuto).toBe(true);
+    localStorage.setItem('sash.layout', JSON.stringify({ ...DEFAULT_SIZES, bottomAuto: false }));
+    const h = mountLayout(fixture());
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(false);
+  });
+
+  it('既定のレイアウトに戻すと、自動に戻る', () => {
+    const root = fixture();
+    const h = mountLayout(root);
+    h.toggle('bottom');
+    h.reset();
+    h.setBottomAuto(false);
+    expect(h.isCollapsed('bottom')).toBe(true);
   });
 });

@@ -3,7 +3,7 @@
 
 import { app } from '../app';
 import { vba } from '../callbacks';
-import { collectChecks, readyToDistribute, suggestionCount, summaryText, type CheckItem, type CheckLevel, type CheckSection, type FitInput } from '../distributionCheck';
+import { collectChecks, suggestionCount, summaryLevel, summaryText, type CheckItem, type CheckLevel, type CheckSection, type FitInput } from '../distributionCheck';
 import { h, svg } from '../dom';
 import { t } from '../i18n';
 import { uiIcons } from '../icons';
@@ -40,33 +40,36 @@ export function currentChecks(): CheckSection[] {
 
 const LEVEL_ICON: Readonly<Record<CheckLevel, string>> = { must: uiIcons.warning, should: uiIcons.info, info: uiIcons.info };
 
+/** 項目の印。must のうち severity が error のものは、警告の三角ではなく赤い丸にする（配ってはいけないものだと分かるように）。 */
+export const itemIcon = (item: CheckItem): string => (item.level === 'must' && item.severity === 'error' ? uiIcons.error : LEVEL_ICON[item.level]);
+
 export function openDistributionCheck(opts: DistributionDialogOptions): void {
   if (!app.store) return;
   const body = h('div', { class: 'dist-check' });
   const render = () => {
     const sections = currentChecks();
-    const ok = readyToDistribute(sections);
+    const level = summaryLevel(sections);
     const m = suggestionCount(sections);
-    const header = h('div', { class: `dist-summary ${ok ? 'ok' : 'attention'}`, role: 'status' },
-      svg(ok ? uiIcons.info : uiIcons.warning),
+    const header = h('div', { class: `dist-summary ${level === 'ok' ? 'ok' : level}`, role: 'status' },
+      svg(level === 'ok' ? uiIcons.info : level === 'error' ? uiIcons.error : uiIcons.warning),
       h('div', null,
         h('strong', null, summaryText(sections)),
         h('span', { class: 'muted' }, m ? t('見直すとよいもの {n} 件', { n: m }) : t('見直すとよいものはありません'))));
     const list = sections.map((s) => {
       const count = s.items.length;
       return h('section', { class: `dist-section${count === 0 ? ' empty' : ''}` },
-        h('h3', null, h('span', null, s.title), h('span', { class: `dist-count${s.items.some((i) => i.level === 'must') || (s.unverified ?? 0) > 0 ? ' must' : ''}` }, (s.unverified ?? 0) > 0 ? t('未確認 {n}', { n: s.unverified! }) : String(count))),
+        h('h3', null, h('span', null, s.title), h('span', { class: `dist-count${s.items.some((i) => i.level === 'must' && i.severity === 'error') ? ' error' : s.items.some((i) => i.level === 'must') || (s.unverified ?? 0) > 0 ? ' must' : ''}` }, (s.unverified ?? 0) > 0 ? t('未確認 {n}', { n: s.unverified! }) : String(count))),
         s.note ? h('p', { class: 'dist-note muted' }, s.note) : null,
         count === 0 ? null : h('ul', { class: 'dist-items' }, s.items.map((item) =>
           h('li', null, h('button', {
             type: 'button',
-            class: `dist-item ${item.level}`,
+            class: `dist-item ${item.level}${item.severity === 'error' ? ' error' : ''}`,
             title: item.target === 'callbacks' ? t('コールバックの一覧を開く') : item.target === 'images' ? t('アイコンの一覧を開く') : t('この要素を選ぶ'),
             onclick: () => {
               handle.close();
               opts.onNavigate(item);
             },
-          }, svg(LEVEL_ICON[item.level]), h('span', { class: 'dist-text' }, item.text), item.detail ? h('span', { class: 'dist-detail' }, item.detail) : null)))));
+          }, svg(itemIcon(item)), h('span', { class: 'dist-text' }, item.text), item.detail ? h('span', { class: 'dist-detail' }, item.detail) : null)))));
     });
     body.replaceChildren(header, ...list);
   };
@@ -75,8 +78,9 @@ export function openDistributionCheck(opts: DistributionDialogOptions): void {
     if (body.isConnected) render();
   };
   const footer = [
-    app.info.excelInstalled ? h('button', { type: 'button', class: 'left', onclick: () => void vba.refresh() }, t('VBAを再読み込み')) : null,
-    h('button', { type: 'button', class: 'primary', onclick: () => handle.close() }, t('閉じる')),
+    app.info.excelInstalled ? h('button', { type: 'button', class: 'footer-start', onclick: () => void vba.refresh() }, t('VBA を再読み込み')) : null,
+    // 閉じるだけのボタンは主ボタンにしない（緑は「何かを実行する」ものだけ）。最初のフォーカスは modal 側が決める
+    h('button', { type: 'button', 'data-initial-focus': '', onclick: () => handle.close() }, t('閉じる')),
   ].filter((b): b is HTMLButtonElement => b !== null);
   const handle = openModal(t('配布前チェック'), body, {
     size: 'lg',

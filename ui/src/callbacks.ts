@@ -2,6 +2,7 @@
 
 import { app } from './app';
 import { invoke, type VbaReadStatus } from './bridge';
+import { notifyIfSlow } from './shell/slowCall';
 import { ask } from './dialogs/modal';
 import { t } from './i18n';
 import { allElements, elementAt, type Path } from './model';
@@ -11,6 +12,9 @@ import {
   bareCallbackName, callbackName, generateStub, matchCallbacks, parseProcedures, renameDeclaration,
   RIBBON_HOLDER_MODULE, RIBBON_HOLDER_MODULE_NAME, type CallbackStatus, type NamingRule, type VbaModule,
 } from './vba';
+
+/** VBA の読み書きは、Excel が応答しないと返らない。15 秒を超えたら知らせる（総点検 W-5）。 */
+const vbaInvoke: typeof invoke = (type, payload) => notifyIfSlow(invoke(type, payload));
 
 class VbaState {
   status: VbaReadStatus | 'idle' = 'idle';
@@ -25,7 +29,7 @@ class VbaState {
     this.loading = true;
     app.emit('vba');
     try {
-      const r = await invoke('vba.read', { path: s.path });
+      const r = await vbaInvoke('vba.read', { path: s.path });
       this.status = r.status;
       this.modules = r.status === 'ok' ? r.modules : null;
     } catch {
@@ -44,15 +48,15 @@ class VbaState {
   statusMessage(): string {
     switch (this.status) {
       case 'ok':
-        return t('VBAと照合しています');
+        return t('VBA と照合しています');
       case 'notOpen':
-        return t('ブックがExcelで開かれていないため、VBAと照合できません。Excelで開いてから再読み込みしてください');
+        return t('ブックが Excel で開かれていないため、VBA と照合できません。Excel で開いてから再読み込みしてください');
       case 'trustDenied':
-        return t('Excelの［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにすると、VBAと照合できます');
+        return t('Excel の［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにすると、VBA と照合できます');
       case 'locked':
-        return t('VBAプロジェクトがパスワードで保護されているため、照合できません');
+        return t('VBA プロジェクトがパスワードで保護されているため、照合できません');
       case 'noExcel':
-        return t('Excelが見つからないため、VBAとは照合できません。雛形のコピーは使えます');
+        return t('Excel が見つからないため、VBA とは照合できません。雛形のコピーは使えます');
       default:
         return '';
     }
@@ -107,27 +111,27 @@ export function defaultCallbackName(el: Element, attr: string): string {
 /** 共通コード（modRibbonCore）がまだ VBA になければ入れる。入れたら true。 */
 async function ensureCoreModule(path: string): Promise<boolean> {
   if (vba.modules!.some((m) => m.name === RIBBON_HOLDER_MODULE_NAME)) return false;
-  await invoke('vba.insert', { path, module: RIBBON_HOLDER_MODULE_NAME, code: RIBBON_HOLDER_MODULE, documentModule: false });
+  await vbaInvoke('vba.insert', { path, module: RIBBON_HOLDER_MODULE_NAME, code: RIBBON_HOLDER_MODULE, documentModule: false });
   return true;
 }
 
 /** 未実装のコールバックの雛形を、まとめてモジュールに挿入する。onLoad があれば共通コードも入れる。 */
 export async function insertStubs(statuses: CallbackStatus[], options: { core?: boolean } = {}): Promise<string> {
   const s = app.session;
-  if (!s || !vba.canWrite) throw new Error(vba.statusMessage() || t('VBAに書き込めません'));
+  if (!s || !vba.canWrite) throw new Error(vba.statusMessage() || t('VBA に書き込めません'));
   const missing = statuses.filter((x) => x.state === 'missing' && x.uses.length > 0);
   const wantsCore = options.core === true || missing.some((x) => x.uses.some((u) => u.attr === 'onLoad'));
   const addedCore = wantsCore ? await ensureCoreModule(s.path) : false;
   if (missing.length === 0) {
     if (addedCore) await vba.refresh();
-    return addedCore ? t('共通コード {core} を追加しました。Excelでブックを保存してください', { core: RIBBON_HOLDER_MODULE_NAME }) : t('挿入するものはありません');
+    return addedCore ? t('共通コード {core} を追加しました。Excel でブックを保存してください', { core: RIBBON_HOLDER_MODULE_NAME }) : t('挿入するものはありません');
   }
   const code = missing.map((x) => generateStub({ ...x, name: bareCallbackName(x.name) })).join('\r\n');
-  await invoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
+  await vbaInvoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
   await vba.refresh();
   return addedCore
-    ? t('{n} 件の雛形を {module} に追加しました（共通コード {core} も追加）。Excelでブックを保存してください', { n: missing.length, module: app.settings.callbackModule, core: RIBBON_HOLDER_MODULE_NAME })
-    : t('{n} 件の雛形を {module} に追加しました。Excelでブックを保存してください', { n: missing.length, module: app.settings.callbackModule });
+    ? t('{n} 件の雛形を {module} に追加しました（共通コード {core} も追加）。Excel でブックを保存してください', { n: missing.length, module: app.settings.callbackModule, core: RIBBON_HOLDER_MODULE_NAME })
+    : t('{n} 件の雛形を {module} に追加しました。Excel でブックを保存してください', { n: missing.length, module: app.settings.callbackModule });
 }
 
 /**
@@ -152,7 +156,7 @@ async function renameCallbackUnsafe(path: Path, attr: string, oldName: string, n
   if (!store || !s) return false;
   const newBare = bareCallbackName(newName);
   if (!isVbaIdentifier(newBare)) {
-    reportRefusal(t('「{name}」はVBAのSub名として使えません', { name: newBare }));
+    reportRefusal(t('「{name}」は VBA の Sub 名として使えません', { name: newBare }));
     return false;
   }
   const label = t('コールバック名の変更（{old} → {name}）', { old: oldName, name: newName });
@@ -174,22 +178,22 @@ async function renameCallbackUnsafe(path: Path, attr: string, oldName: string, n
   const oldBare = bareCallbackName(oldName).toLowerCase();
   const proc = vba.canWrite ? vba.modules!.flatMap(parseProcedures).find((p) => p.name.toLowerCase() === oldBare) : undefined;
   if (!proc) return apply(false);
-  const r = await ask(t('VBAのSub名も変えますか？'), t('VBAの {module} に {name} があります。宣言行の名前も {newName} に変えますか？（Subの中身や、ほかの場所からの呼び出しは書き換えません）', { module: proc.module, name: proc.name, newName: newBare }), [
-    { value: 'both', label: t('VBAも変える'), primary: true },
-    { value: 'xml', label: t('XMLだけ変える') },
+  const r = await ask(t('VBA の Sub 名も変えますか？'), t('VBA の {module} に {name} があります。宣言行の名前も {newName} に変えますか？（Sub の中身や、ほかの場所からの呼び出しは書き換えません）', { module: proc.module, name: proc.name, newName: newBare }), [
+    { value: 'both', label: t('VBA も変える'), primary: true },
+    { value: 'xml', label: t('XML だけ変える') },
     { value: 'cancel', label: t('キャンセル') },
   ]);
   if (r === 'cancel' || r === null) return false;
   if (r === 'xml') return apply(false);
   // VBA を先に書き換えるので、XML を書き換えられない状態（構文エラー中）なら VBA にも触らない
   if (store.syncError) {
-    reportRefusal(t('XMLに構文エラーがあるため、この操作はできません。先にXMLエディタでエラーを直してください'));
+    reportRefusal(t('XML に構文エラーがあるため、この操作はできません。先に XML エディタでエラーを直してください'));
     return false;
   }
-  const replaced = await invoke('vba.replaceLine', { path: s.path, module: proc.module, line: proc.line, expected: proc.declaration, replacement: renameDeclaration(proc.declaration, proc.name, newBare) });
+  const replaced = await vbaInvoke('vba.replaceLine', { path: s.path, module: proc.module, line: proc.line, expected: proc.declaration, replacement: renameDeclaration(proc.declaration, proc.name, newBare) });
   if (!replaced) {
     // 読み込んだあとに VBA が変わっていて、宣言行が見つからなかった。XML も変えずに、読み直してもらう
-    reportRefusal(t('VBAの {module} が読み込んだときから変わっているため、Sub名を変えられませんでした。VBAを再読み込みしてからやり直してください', { module: proc.module }));
+    reportRefusal(t('VBA の {module} が読み込んだときから変わっているため、Sub 名を変えられませんでした。VBA を再読み込みしてからやり直してください', { module: proc.module }));
     await vba.refresh();
     return false;
   }
@@ -229,15 +233,15 @@ export async function renameVbaSubs(renames: readonly { oldName: string; newName
       continue;
     }
     if (!isVbaIdentifier(newBare)) {
-      result.failed.push({ name: oldBare, reason: t('「{name}」はVBAのSub名として使えません', { name: newBare }) });
+      result.failed.push({ name: oldBare, reason: t('「{name}」は VBA の Sub 名として使えません', { name: newBare }) });
       continue;
     }
     if (procs.some((p) => p !== proc && p.name.toLowerCase() === newBare.toLowerCase())) {
-      result.failed.push({ name: oldBare, reason: t('VBAに同じ名前の {name} がすでにあります', { name: newBare }) });
+      result.failed.push({ name: oldBare, reason: t('VBA に同じ名前の {name} がすでにあります', { name: newBare }) });
       continue;
     }
     try {
-      const ok = await invoke('vba.replaceLine', { path: s.path, module: proc.module, line: proc.line, expected: proc.declaration, replacement: renameDeclaration(proc.declaration, proc.name, newBare) });
+      const ok = await vbaInvoke('vba.replaceLine', { path: s.path, module: proc.module, line: proc.line, expected: proc.declaration, replacement: renameDeclaration(proc.declaration, proc.name, newBare) });
       if (ok) result.renamed.push(oldBare);
       else result.failed.push({ name: oldBare, reason: t('読み込んだときから {module} が変わっています', { module: proc.module }) });
     } catch (e) {
@@ -268,7 +272,7 @@ export async function setupRibbonHolder(): Promise<string> {
       : '';
     const text = [`' ===== ${RIBBON_HOLDER_MODULE_NAME} =====`, RIBBON_HOLDER_MODULE, stub ? `' ===== ${app.settings.callbackModule} =====\r\n${stub}` : ''].filter(Boolean).join('\r\n');
     await navigator.clipboard.writeText(text);
-    return t('customUI に onLoad を設定し、共通コードと onLoad の雛形をクリップボードにコピーしました（Excelで開いていればモジュールに直接挿入できます）');
+    return t('customUI に onLoad を設定し、共通コードと onLoad の雛形をクリップボードにコピーしました（Excel で開いていればモジュールに直接挿入できます）');
   }
   // onLoad の Sub がすでにあっても、共通コードがなければ入れる
   return insertStubs(vba.statuses(), { core: true });
@@ -281,7 +285,7 @@ app.problemProviders.push(() => {
     st.state === 'missing' || st.state === 'mismatch'
       ? st.uses.map((u) => ({
           severity: 'warning' as const,
-          message: st.state === 'missing' ? t('コールバック {name} がVBAにありません', { name: st.name }) : t('コールバック {name} の引数が合いません：{reason}', { name: st.name, reason: st.reason ?? '' }),
+          message: st.state === 'missing' ? t('コールバック {name} が VBA にありません', { name: st.name }) : t('コールバック {name} の引数が合いません：{reason}', { name: st.name, reason: st.reason ?? '' }),
           path: u.path,
           attr: u.attr,
         }))

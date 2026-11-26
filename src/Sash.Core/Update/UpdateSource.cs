@@ -41,17 +41,17 @@ public sealed record UpdateSource(UpdateSourceKind Kind, string Location)
         {
             if (!Uri.TryCreate(s, UriKind.Absolute, out var uri))
             {
-                throw new ArgumentException(L($"更新の確認先の URL を読めません：{s}", $"The update source URL is invalid: {s}"));
+                throw UserErrors.Argument(L($"更新の確認先の URL を読めません：{s}", $"The update source URL is invalid: {s}"));
             }
 
             if (uri.Scheme == Uri.UriSchemeHttp)
             {
-                throw new ArgumentException(L("更新の確認先には https の URL を指定してください（http は途中で書き換えられるおそれがあるため使えません）。", "Use an https URL for the update source (http cannot be used because it can be tampered with in transit)."));
+                throw UserErrors.Argument(L("更新の確認先には https の URL を指定してください（http は途中で書き換えられるおそれがあるため使えません）。", "Use an https URL for the update source (http cannot be used because it can be tampered with in transit)."));
             }
 
             if (uri.Scheme != Uri.UriSchemeHttps)
             {
-                throw new ArgumentException(L($"更新の確認先に使える URL は https だけです：{s}", $"Only https URLs can be used as the update source: {s}"));
+                throw UserErrors.Argument(L($"更新の確認先に使える URL は https だけです：{s}", $"Only https URLs can be used as the update source: {s}"));
             }
 
             // github.com のリポジトリが指定されたら、GitHub の方式で確認する
@@ -77,7 +77,7 @@ public sealed record UpdateSource(UpdateSourceKind Kind, string Location)
         // 相対パスは、起動したときの作業フォルダしだいで別の場所を指してしまうため
         if (!IsFullyQualifiedFolder(s))
         {
-            throw new ArgumentException(L($"更新の確認先のフォルダは、ドライブ名から始まるパスか \\\\server\\share の形で指定してください：{s}", $"Specify the update folder as a full path starting with a drive letter, or as \\\\server\\share: {s}"));
+            throw UserErrors.Argument(L($"更新の確認先のフォルダは、ドライブ名から始まるパスか \\\\server\\share の形で指定してください：{s}", $"Specify the update folder as a full path starting with a drive letter, or as \\\\server\\share: {s}"));
         }
 
         return new UpdateSource(UpdateSourceKind.Folder, s);

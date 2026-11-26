@@ -1,7 +1,7 @@
 // キャンバスの使い勝手（C-1 追加直後の名前入力、C-3 組み込みタブの「…」、C-5 選択の読み上げ、C-7 グループ名）。
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../src/app';
-import { builtinGroupName, describeSelection, mountCanvas, setCanvasGrowHandler, startRenameOf } from '../src/views/canvas';
+import { builtinGroupName, contextMenuTitle, describeSelection, KEY_HELP_LINES, mountCanvas, setCanvasGrowHandler, showBuiltinGroup, startRenameOf } from '../src/views/canvas';
 import { elementAt, pathOf } from '../src/model';
 import { setPreview } from '../src/views/ribbonPreview';
 
@@ -200,5 +200,39 @@ describe('C-4 比べるモードの高さ', () => {
     setPreview({ compare: false });
     setCanvasGrowHandler(null);
     vi.restoreAllMocks();
+  });
+});
+
+describe('C-3 組み込みの名前', () => {
+  it('よく使う右クリックメニューは「セル（ContextMenuCell）」の形で出し、知らない idMso はそのまま', () => {
+    expect(contextMenuTitle('ContextMenuCell')).toBe('セル（ContextMenuCell）');
+    expect(contextMenuTitle('ContextMenuListRange')).toBe('テーブル（ContextMenuListRange）');
+    expect(contextMenuTitle('ContextMenuSomethingNew')).toBe('ContextMenuSomethingNew');
+  });
+
+  it('日本語の名前が分からない組み込みグループ（Activation など）は描かない。自分のグループがそこを指していれば描く', () => {
+    expect(showBuiltinGroup('GroupActivation', false)).toBe(false);
+    expect(showBuiltinGroup('GroupActivation', true)).toBe(true);
+    expect(showBuiltinGroup('GroupClipboard', false)).toBe(true);
+  });
+});
+
+describe('C-4・C-6 キー操作の案内', () => {
+  it('「?」は button で、押すと案内が開き、Esc で閉じてフォーカスを戻す。案内に Esc（親を選ぶ）を含む', () => {
+    const btn = host.querySelector<HTMLButtonElement>('button.cv-hint')!;
+    const pop = host.querySelector<HTMLElement>('#cv-keyhelp')!;
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+    expect(btn.getAttribute('aria-controls')).toBe('cv-keyhelp');
+    expect(pop.hidden).toBe(true);
+    btn.click();
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
+    expect(pop.hidden).toBe(false);
+    expect(pop.textContent).toContain('Esc：親を選ぶ');
+    expect(KEY_HELP_LINES().some((l) => l.startsWith('Esc'))).toBe(true);
+    btn.focus();
+    btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    expect(pop.hidden).toBe(true);
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(btn);
   });
 });

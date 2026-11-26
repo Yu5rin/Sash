@@ -73,6 +73,26 @@ describe('ダイアログの重なり', () => {
     expect(document.querySelectorAll('.modal').length).toBe(1);
   });
 
+  it('ダイアログを開いている間は body に modal-open が付き、閉じると外れる（通知を右上へ逃がす目印。総点検 G-2）', () => {
+    const m = openModal('M', document.createElement('div'));
+    expect(document.body.classList.contains('modal-open')).toBe(true);
+    m.close();
+    // 前のテストが開いたままのものがあれば、それが残っている間は付いたまま
+    expect(document.body.classList.contains('modal-open')).toBe(isModalOpen());
+  });
+
+  it('閉じるだけのダイアログは、data-initial-focus の［閉じる］に最初のフォーカスを置く（主ボタンにしない。総点検 D-9）', () => {
+    const close = document.createElement('button');
+    close.textContent = '閉じる';
+    close.setAttribute('data-initial-focus', '');
+    const body = document.createElement('div');
+    body.append(Object.assign(document.createElement('a'), { href: '#x', textContent: '先頭のリンク' }));
+    const m = openModal('M', body, { footer: [close] });
+    expect(document.activeElement).toBe(close);
+    expect(close.classList.contains('primary')).toBe(false);
+    m.close();
+  });
+
   it('ask は Windows の並び（主ボタンが先、キャンセルが右端）にし、閉じたら null を返す', async () => {
     // 渡す順に関係なく、［保存］［保存しない］［キャンセル］の順になる（Excel の「保存しますか？」と同じ）
     const p = ask('t', 'm', [{ value: 'no', label: 'しない' }, { value: 'cancel', label: 'キャンセル' }, { value: 'save', label: '保存', primary: true }]);
@@ -84,10 +104,10 @@ describe('ダイアログの重なり', () => {
 });
 
 describe('ダイアログのボタンの並び', () => {
-  it('キャンセルは主ボタンでも右端、class="left" は左端に残す', async () => {
+  it('キャンセルは主ボタンでも右端、class="footer-start" は左端に残す', async () => {
     const { orderFooter } = await import('../src/dialogs/modal');
     const mk = (text: string, cls = '') => { const b = document.createElement('button'); b.textContent = text; b.className = cls; return b; };
-    const order = orderFooter([mk('キャンセル', 'primary'), mk('破棄する', 'danger'), mk('リンク', 'left')]).map((b) => b.textContent);
+    const order = orderFooter([mk('キャンセル', 'primary'), mk('破棄する', 'danger'), mk('リンク', 'footer-start')]).map((b) => b.textContent);
     expect(order).toEqual(['リンク', '破棄する', 'キャンセル']);
   });
 });

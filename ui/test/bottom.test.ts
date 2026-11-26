@@ -81,3 +81,19 @@ describe('問題の一覧', () => {
     expect(new Set(ids).size).toBe(2);
   });
 });
+
+describe('B-2 絞り込みは切り替えボタン', () => {
+  it('件数のある種類は押せて aria-pressed を持ち、0 件の種類は押せない', () => {
+    const filters = Array.from(body.querySelectorAll<HTMLButtonElement>('.filters button'));
+    expect(filters).toHaveLength(3);
+    const error = filters.find((b) => b.classList.contains('error'))!;
+    const info = filters.find((b) => b.classList.contains('info'))!;
+    expect(error.disabled).toBe(false);
+    expect(error.getAttribute('aria-pressed')).toBe('true');
+    expect(info.disabled).toBe(true);
+    error.click();
+    const again = Array.from(body.querySelectorAll<HTMLButtonElement>('.filters button')).find((b) => b.classList.contains('error'))!;
+    expect(again.getAttribute('aria-pressed')).toBe('false');
+    again.click();
+  });
+});

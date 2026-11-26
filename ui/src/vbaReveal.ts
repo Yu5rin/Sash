@@ -4,12 +4,16 @@
 
 import { app } from './app';
 import { invoke } from './bridge';
+import { notifyIfSlow } from './shell/slowCall';
 import { vba } from './callbacks';
 import { t } from './i18n';
 import { ask } from './dialogs/modal';
 import { callbackSignature } from './schema';
 import { DEFAULT_TIMEOUT, toast } from './shell/toast';
 import { bareCallbackName, isCallbackName, parseParams } from './vba';
+
+/** VBA の読み書きは、Excel が応答しないと返らない。15 秒を超えたら知らせる（総点検 W-5）。 */
+const vbaInvoke: typeof invoke = (type, payload) => notifyIfSlow(invoke(type, payload));
 
 /** VBE で表示できるか（Excel があり、VBA と照合できていて、そのコールバックの Sub が VBA にある）。 */
 export function canRevealInVbe(name: string): boolean {
@@ -36,7 +40,7 @@ export async function revealInVbe(name: string): Promise<boolean> {
     return false;
   }
   try {
-    await invoke('vba.reveal', { path: s.path, module: proc.module, procedure: proc.name });
+    await vbaInvoke('vba.reveal', { path: s.path, module: proc.module, procedure: proc.name });
     return true;
   } catch (e) {
     toast({ kind: 'error', message: (e as Error).message });

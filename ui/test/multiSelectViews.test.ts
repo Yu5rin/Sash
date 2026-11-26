@@ -151,7 +151,7 @@ describe('レビューの指摘の修正（仕様書 §19）', () => {
     expect([attrOf('b1', 'onAction'), attrOf('b2', 'onAction')]).toEqual([null, null]);
     const error = input.parentElement!.querySelector<HTMLElement>('.field-error')!;
     expect(error.hidden).toBe(false);
-    expect(error.textContent).toBe('VBAのSub名として使えない文字があります');
+    expect(error.textContent).toBe('VBA の Sub 名として使えない文字があります');
     expect(input.getAttribute('aria-invalid')).toBe('true');
     // 直せば入る
     enter(input, 'Module1.OnRun');

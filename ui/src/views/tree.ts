@@ -67,8 +67,12 @@ export function mountTree(host: HTMLElement): void {
   window.addEventListener('dragend', () => clearDropMarks(host), true);
   window.addEventListener('drop', () => clearDropMarks(host), true);
   const render = () => renderTree(host);
+  let lastSession = app.session;
   app.on('session', () => {
     known = new WeakSet();
+    // 別のファイルを開いたときは、前のファイルのスクロール位置を引き継がない（総点検 L-3）。同じファイルの描き直しでは動かさない
+    if (app.session !== lastSession) host.scrollTop = 0;
+    lastSession = app.session;
     // 別のファイルを開いたら、前のファイルの検索語は意味がないので消す
     setFilter('', host);
     render();
@@ -115,6 +119,11 @@ function foldKey(el: Element, path: Path): string {
   return ident ? `${el.localName}#${ident}` : `path:${path.join('.')}`;
 }
 
+/** 子が tabs だけの ribbon（行をまとめられる）。 */
+function isMergeableRibbon(el: Element): boolean {
+  return el.localName === 'ribbon' && el.children.length === 1 && el.children[0]!.localName === 'tabs';
+}
+
 function rowId(path: Path): string {
   return `tree-row-${path.join('-') || 'root'}`;
 }
@@ -138,9 +147,15 @@ function renderTree(host: HTMLElement): void {
   const filter = filterTree(store.doc, filterQuery);
   updateFilterCount(filter);
   const rows: HTMLElement[] = [];
-  const walk = (el: Element, depth: number) => {
+  const walk = (el: Element, depth: number, mergedFrom?: Element) => {
     // 絞り込み中は、合った要素とその祖先だけを出す
     if (filter && !filter.visible.has(el)) return;
+    // ribbon の子が tabs だけのときは、2 行（ribbon / tabs）を「ribbon › tabs」の 1 行にまとめる。
+    // 選択とドロップ先は tabs のまま。ribbon は行の左（「ribbon」の字）を押したときに選ぶ（総点検 L-1。1366×768 で行数と字下げを節約する）
+    if (isMergeableRibbon(el) && (!filter || filter.visible.has(el.children[0]!))) {
+      walk(el.children[0]!, depth, el);
+      return;
+    }
     const path = pathOf(el);
     const k = path.join('.');
     const fk = foldKey(el, path);
@@ -149,12 +164,14 @@ function renderTree(host: HTMLElement): void {
     const isCollapsed = !filter && collapsed.has(fk);
     const hit = filter?.matches.has(el) ?? false;
     const c = counts.get(k);
-    const selected = samePath(store.selection, path);
+    const mergedPath = mergedFrom ? pathOf(mergedFrom) : null;
+    // まとめた行は、ribbon を選んでいるときも選択中として見せる（行が 1 つしかないため）
+    const selected = samePath(store.selection, path) || (mergedPath !== null && samePath(store.selection, mergedPath));
     // 主な選択以外に選んでいる行（複数選択）
     const secondary = !selected && store.isMulti && store.isSelected(path);
     const name = displayName(el);
     const id = el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.getAttribute('idQ');
-    const label = name && name !== id ? name : el.localName;
+    const label = mergedFrom ? 'tabs' : name && name !== id ? name : el.localName;
     const tooltip = [label, `<${el.localName}>${id ? ` ${id}` : ''}`, c?.error ? t('エラー {n}', { n: c.error }) : '', c?.warning ? t('警告 {n}', { n: c.warning }) : ''].filter(Boolean).join('\n');
     const row = h(
       'div',
@@ -169,7 +186,7 @@ function renderTree(host: HTMLElement): void {
         title: tooltip,
         draggable: depth > 0,
         dataset: { path: k, fold: fk },
-        style: `padding-left:${4 + depth * 14}px`,
+        style: `padding-left:${4 + depth * 12}px`,
         onclick: (e: MouseEvent) => {
           if (e.ctrlKey || e.metaKey) store.toggleSelect(path, 'tree');
           // 親が違う行の間は、いま見えている行の順で範囲を決める（畳んだ中の要素は選ばない）
@@ -203,7 +220,10 @@ function renderTree(host: HTMLElement): void {
         hasKids ? svg(uiIcons.chevron) : null,
       ),
       h('span', { class: 'kind-icon', title: el.localName }, svg(kindIcon(el.localName))),
-      h('span', { class: 'tree-label' }, highlighted(label, hit)),
+      h('span', { class: 'tree-label' },
+        mergedFrom
+          ? [h('span', { class: 'tree-crumb', title: 'ribbon', onclick: (e: MouseEvent) => { e.stopPropagation(); store.select(mergedPath!, 'tree'); } }, 'ribbon'), ' › ', ...highlighted(label, hit)]
+          : highlighted(label, hit)),
       id ? h('span', { class: 'tree-id' }, highlighted(id, hit)) : null,
       c && c.error > 0 ? h('span', { class: 'badge error', 'aria-label': t('エラー {n}', { n: c.error }) }, String(c.error)) : null,
       c && c.error === 0 && c.warning > 0 ? h('span', { class: 'badge warning', 'aria-label': t('警告 {n}', { n: c.warning }) }, String(c.warning)) : null,

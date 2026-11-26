@@ -41,12 +41,12 @@ public static partial class UpdateFeedLogic
         }
         catch (XmlException ex)
         {
-            throw new FormatException(L("確認先から返ってきた内容が Atom フィードではありません（社内の認証ページなどが返っている可能性があります）。", "The update source did not return an Atom feed (a sign-in page or proxy page may have been returned instead)."), ex);
+            throw UserErrors.Format(L("確認先から返ってきた内容が Atom フィードではありません（社内の認証ページなどが返っている可能性があります）。", "The update source did not return an Atom feed (a sign-in page or proxy page may have been returned instead)."), ex);
         }
 
         if (doc.Root is not { } root || root.Name != XName.Get("feed", "http://www.w3.org/2005/Atom"))
         {
-            throw new FormatException(L("確認先から返ってきた内容が Atom フィードではありません（社内の認証ページなどが返っている可能性があります）。", "The update source did not return an Atom feed (a sign-in page or proxy page may have been returned instead)."));
+            throw UserErrors.Format(L("確認先から返ってきた内容が Atom フィードではありません（社内の認証ページなどが返っている可能性があります）。", "The update source did not return an Atom feed (a sign-in page or proxy page may have been returned instead)."));
         }
 
         (string, UpdateVersion)? best = null;
@@ -111,27 +111,27 @@ public static partial class UpdateFeedLogic
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object)
         {
-            throw new FormatException(L("latest.json の中身が JSON のオブジェクト（{ … }）ではありません。", "latest.json does not contain a JSON object ({ … })."));
+            throw UserErrors.Format(L("latest.json の中身が JSON のオブジェクト（{ … }）ではありません。", "latest.json does not contain a JSON object ({ … })."));
         }
 
         string? Str(string name) => root.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 
-        var versionText = Str("version") ?? throw new FormatException(L("latest.json に version がありません。", "latest.json has no version."));
+        var versionText = Str("version") ?? throw UserErrors.Format(L("latest.json に version がありません。", "latest.json has no version."));
         if (!UpdateVersion.TryParse(versionText, out var version))
         {
-            throw new FormatException(L($"latest.json の version を版として読めません：{versionText}", $"The version in latest.json cannot be read: {versionText}"));
+            throw UserErrors.Format(L($"latest.json の version を版として読めません：{versionText}", $"The version in latest.json cannot be read: {versionText}"));
         }
 
         var file = Str("file") ?? UpdateSource.AssetFileName(version);
         if (file.Contains('/') || file.Contains('\\') || file.Contains("..", StringComparison.Ordinal) || file.Contains(':'))
         {
-            throw new FormatException(L("latest.json の file には、同じ場所にあるファイルの名前だけを書いてください。", "The file in latest.json must be just the name of a file in the same location."));
+            throw UserErrors.Format(L("latest.json の file には、同じ場所にあるファイルの名前だけを書いてください。", "The file in latest.json must be just the name of a file in the same location."));
         }
 
         var sha = Str("sha256")?.Trim().ToLowerInvariant();
         if (sha is null || !Sha256Hex().IsMatch(sha))
         {
-            throw new FormatException(L("latest.json に正しい sha256（64 桁の 16 進）がありません。", "latest.json has no valid sha256 (64 hexadecimal digits)."));
+            throw UserErrors.Format(L("latest.json に正しい sha256（64 桁の 16 進）がありません。", "latest.json has no valid sha256 (64 hexadecimal digits)."));
         }
 
         string download;

@@ -128,21 +128,37 @@ describe('複製・削除・移動', () => {
 
   it('削除の「元に戻す」付きの通知は、そのあとに別の編集や元に戻すがあったら閉じる', () => {
     const undoToast = () => Array.from(document.querySelectorAll('.toast')).find((e) => e.querySelector('.toast-action')?.textContent === '元に戻す');
-    select('[id="b1"]');
+    select('[id="g"]');
     expect(removeSelected('canvas')).toBe(true);
     expect(undoToast()).toBeDefined();
     // 選択が変わっただけなら残す
-    select('[id="b2"]');
+    select('[id="t"]');
     expect(undoToast()).toBeDefined();
     // 別の編集をしたら、押しても削除は取り消されないので閉じる
-    app.store!.edit('inspector', (d) => { d.querySelector('[id="b2"]')!.setAttribute('label', 'X'); }, 'test');
+    app.store!.edit('inspector', (d) => { d.querySelector('[id="t"]')!.setAttribute('label', 'X'); }, 'test');
     expect(undoToast()).toBeUndefined();
 
-    select('[id="b2"]');
+    select('tabs');
     expect(removeSelected('canvas')).toBe(true);
     expect(undoToast()).toBeDefined();
     app.store!.undo();
     expect(undoToast()).toBeUndefined();
+  });
+
+  it('コントロール 1 つの削除は通知しない。複数や、中身のある要素は通知し、前の通知は積まない（総点検 G-17）', () => {
+    const undoToasts = () => Array.from(document.querySelectorAll('.toast')).filter((e) => e.querySelector('.toast-action')?.textContent === '元に戻す');
+    select('[id="b1"]');
+    expect(removeSelected('canvas')).toBe(true);
+    expect(undoToasts()).toHaveLength(0);
+    // 中身のあるグループを消す → 通知。続けて別の中身のある要素を消しても、通知は 1 つのまま
+    select('[id="g"]');
+    expect(removeSelected('canvas')).toBe(true);
+    expect(undoToasts()).toHaveLength(1);
+    app.store!.undo();
+    app.store!.undo();
+    select('[id="t"]');
+    expect(removeSelected('canvas')).toBe(true);
+    expect(undoToasts()).toHaveLength(1);
   });
 
   it('削除すると次の兄弟を選ぶ', () => {

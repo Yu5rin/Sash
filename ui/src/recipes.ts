@@ -155,8 +155,8 @@ export const builtinRecipes: readonly Recipe[] = [
   },
   {
     id: 'vba-dropdown',
-    title: '選択肢をVBAで組み立てる dropDown',
-    description: '選択肢の数・ラベル・選択中の項目をVBAで返す dropDown です。',
+    title: '選択肢を VBA で組み立てる dropDown',
+    description: '選択肢の数・ラベル・選択中の項目を VBA で返す dropDown です。',
     kind: 'group',
     xml: `<group id="grpTarget" label="出力先">
   <dropDown id="ddnTarget" label="出力先" getItemCount="Ribbon_ddnTarget_getItemCount" getItemLabel="Ribbon_ddnTarget_getItemLabel" getSelectedItemIndex="Ribbon_ddnTarget_getSelectedItemIndex" onAction="Ribbon_ddnTarget_onAction" />
@@ -170,7 +170,7 @@ export const builtinRecipes: readonly Recipe[] = [
       'End Function',
       '',
       'Private Function Items_ddnTarget() As Variant',
-      '    Items_ddnTarget = Array("新しいシート", "このシート", "CSVファイル")',
+      '    Items_ddnTarget = Array("新しいシート", "このシート", "CSV ファイル")',
       'End Function',
       '',
       'Public Sub Ribbon_ddnTarget_getItemCount(control As IRibbonControl, ByRef count)',
@@ -253,7 +253,7 @@ export const builtinRecipes: readonly Recipe[] = [
     <dropDown id="ddnWtTarget" label="出力先">
       <item id="itmWtSheet" label="新しいシート" />
       <item id="itmWtHere" label="このシート" />
-      <item id="itmWtCsv" label="CSVファイル" />
+      <item id="itmWtCsv" label="CSV ファイル" />
     </dropDown>
     <editBox id="edtWtCount" label="件数" sizeString="00000" />
     <comboBox id="cboWtSheet" label="シート名" sizeString="WWWWWWWW">
@@ -367,7 +367,7 @@ export function instantiate(recipe: Recipe, doc: Document, existingVbaNames: Rea
   const ns = doc.documentElement.namespaceURI ?? NAMESPACES.office2010;
   const used = usedIds(doc);
   const parsed = parseXml(`<customUI xmlns="${ns}">${recipe.xml}</customUI>`);
-  if (!parsed.ok) throw new Error(t('レシピのXMLが壊れています：{message}', { message: parsed.message }));
+  if (!parsed.ok) throw new Error(t('レシピの XML が壊れています：{message}', { message: parsed.message }));
   const existing = [...existingVbaNames];
   const existingLower = new Set(existing.map((n) => n.toLowerCase()));
 
