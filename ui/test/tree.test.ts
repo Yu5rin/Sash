@@ -210,3 +210,13 @@ describe('ribbon › tabs を 1 行にまとめる（総点検 L-1）', () => {
     expect(rowTexts().slice(0, 4)).toEqual(['customUI', 'ribbon', 'qat', 'tabs']);
   });
 });
+
+describe('L-3 別のファイルを開いたらスクロール位置を戻す', () => {
+  it('同じファイルの描き直しでは動かさず、別のファイルを開くと先頭に戻る', () => {
+    tree.scrollTop = 40;
+    app.emit('session');
+    expect(tree.scrollTop).toBe(40);
+    app.open({ path: 'other.xlam', parts: [{ version: 'office2010', xml: XML, images: [] }] });
+    expect(tree.scrollTop).toBe(0);
+  });
+});

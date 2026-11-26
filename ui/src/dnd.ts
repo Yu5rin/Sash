@@ -84,7 +84,7 @@ export function canDropInto(doc: Document, parent: Element): boolean {
 
 /**
  * ドロップを確定する。parentPath が null ならタブ一覧（customUI > ribbon > tabs）、
- * 'contextMenus' ならコンテキストメニューの一覧を指す（なければ作る）。
+ * 'contextMenus' なら右クリックメニューの一覧を指す（なければ作る）。
  */
 export function drop(parentPath: Path | null | 'contextMenus' | 'backstage', index: number, source: 'canvas' | 'tree'): void {
   const store = app.store;

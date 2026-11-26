@@ -26,7 +26,7 @@ const CATEGORIES: readonly Category[] = [
   { id: 'controls', title: 'コントロール', tags: ['button', 'toggleButton', 'checkBox', 'dropDown', 'comboBox', 'editBox', 'gallery', 'labelControl', 'item', 'separator', 'menuSeparator', 'dialogBoxLauncher'] },
   { id: 'containers', title: 'コンテナ', tags: ['menu', 'splitButton', 'dynamicMenu', 'box', 'buttonGroup'] },
   { id: 'backstage', title: 'Backstage', tags: ['backstage', 'taskGroup', 'taskFormGroup', 'hyperlink', 'imageControl', 'groupBox', 'layoutContainer', 'radioGroup'] },
-  { id: 'contextMenu', title: 'コンテキストメニュー', tags: ['contextMenu'] },
+  { id: 'contextMenu', title: '右クリックメニュー', tags: ['contextMenu'] },
 ];
 
 export const PALETTE_ITEMS: readonly string[] = CATEGORIES.flatMap((c) => c.tags);

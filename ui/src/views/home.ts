@@ -39,7 +39,8 @@ function rememberOnboarding(collapsed: boolean): void {
  */
 function onboardingCard(): HTMLElement {
   const steps: [string, string][] = [
-    [t('Excel で .xlam / .xlsm を保存する'), t('リボンを付けたいブックを、Excel で「マクロ有効ブック」か「アドイン」として保存します。')],
+    // 見出しは 1 行に収める（4 列のうち 1 つだけ 2 行になると、本文の始まりの高さが隣とずれる。総点検 H-3）
+    [t('Excel でブックを保存'), t('リボンを付けたいブックを、Excel で .xlsm / .xlam（「マクロ有効ブック」か「アドイン」）として保存します。')],
     [t('Sash で開く'), t('［ファイルを開く］か、このページへのドロップで開きます。リボン定義がなければ新しく作ります。')],
     [t('レシピでタブを作る'), t('［挿入］→［レシピ］から、よく使う形のタブやボタンをまとめて追加できます。あとは見たまま直します。')],
     [t('Excel へ反映する（F5）'), t('ブックを Excel で開いたまま F5 を押すと、保存して Excel のリボンを読み直します。')],
@@ -143,7 +144,8 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
 
   // ドロップそのものは main.ts の window の処理に任せる。ここでは「ここに落とせる」ことを 1 行で示し、
   // ファイルをドラッグしている間だけ、ホーム全体に点線の枠と薄い緑の地を出す（枠の形が「押せそう」に見える点線の四角は置かない。総点検 H-1）
-  const dropNote = h('p', { class: 'home-drop-note muted' }, t('ブックをここにドロップしても開けます（.xlsm / .xlam / .xltm / .xlsb）'));
+  // 押すとファイルの選択を開く（「ドロップできる」と言われたら、押してみる人もいるため。総点検 H-2）
+  const dropNote = h('button', { type: 'button', class: 'home-drop-note link', onclick: () => open() }, t('ブックをここにドロップしても開けます（.xlsm / .xlam / .xltm / .xlsb）'));
   const isFileDrag = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
   host.addEventListener('dragenter', (e) => {
     if (isFileDrag(e)) host.classList.add('dragging');

@@ -63,7 +63,7 @@ describe('lint', () => {
   });
 });
 
-describe('コンテキストメニュー', () => {
+describe('右クリックメニュー', () => {
   const runCtx = (body: string, version: 'office2007' | 'office2010' = 'office2010') => {
     const ns = version === 'office2010' ? NS : 'http://schemas.microsoft.com/office/2006/01/customui';
     const r = parseXml(`<customUI xmlns="${ns}"><contextMenus>${body}</contextMenus></customUI>`);

@@ -1,6 +1,6 @@
 // customUI（2007 / 2010以降）の要素と属性の定義。
 // インスペクタの入力欄、Lint の構造チェック、XML エディタの補完の三つが、この定義を共有する。
-// 対象はリボン、QAT、commands、コンテキストメニュー、Backstage。
+// 対象はリボン、QAT、commands、右クリックメニュー、Backstage。
 
 import { t } from './i18n';
 
@@ -240,8 +240,8 @@ const elementList: ElementDef[] = [
   e({ tag: 'dialogBoxLauncher', title: 'ダイアログ起動ツール', attrs: [], children: ['button'], isControl: true, childOrder: [{ tags: ['button'], min: 1, max: 1 }] }),
   // item の id は XSD では省略できる（項目の識別は getItemID や番号でもできるため）
   e({ tag: 'item', title: '項目', attrs: ['id', 'label', 'image', 'imageMso', 'screentip', 'supertip'], children: [] }),
-  e({ tag: 'contextMenus', title: 'コンテキストメニューの一覧', attrs: [], children: ['contextMenu'], since2010: true }),
-  e({ tag: 'contextMenu', title: 'コンテキストメニュー', attrs: ['idMso'], children: MENU_CONTROLS, idRequired: true, since2010: true }),
+  e({ tag: 'contextMenus', title: '右クリックメニューの一覧', attrs: [], children: ['contextMenu'], since2010: true }),
+  e({ tag: 'contextMenu', title: '右クリックメニュー', attrs: ['idMso'], children: MENU_CONTROLS, idRequired: true, since2010: true }),
 ];
 
 export const elements: ReadonlyMap<string, ElementDef> = new Map(elementList.map((d) => [d.tag, d]));

@@ -278,7 +278,7 @@ export function createElement(doc: Document, tag: string, parent: Element | null
     return el;
   }
   if (tag === 'contextMenu') {
-    // コンテキストメニューは組み込みのメニュー（idMso）に項目を足すもの。既定はセルの右クリックメニュー
+    // 右クリックメニューは組み込みのメニュー（idMso）に項目を足すもの。既定はセルの右クリックメニュー
     el.removeAttribute('id');
     el.setAttribute('idMso', 'ContextMenuCell');
     el.append(make('button'));

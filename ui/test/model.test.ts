@@ -104,7 +104,7 @@ describe('編集操作', () => {
   });
 });
 
-describe('コンテキストメニューの作成', () => {
+describe('右クリックメニューの作成', () => {
   it('idMso 付きで、項目を1つ持って作られる', () => {
     const d = doc(`<customUI xmlns="${NS}" />`);
     const el = createElement(d, 'contextMenu');
@@ -239,7 +239,7 @@ describe('insertSmart', () => {
     expect('error' in insertSmart(old, null, 'backstage')).toBe(true);
   });
 
-  it('タブはタブ一覧に、コンテキストメニューは一覧に入れる', () => {
+  it('タブはタブ一覧に、右クリックメニューは一覧に入れる', () => {
     const d = doc(`<customUI xmlns="${NS}" />`);
     const t = insertSmart(d, null, 'tab');
     expect('el' in t && t.el.parentElement!.localName).toBe('tabs');

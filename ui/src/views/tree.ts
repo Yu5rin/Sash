@@ -67,8 +67,12 @@ export function mountTree(host: HTMLElement): void {
   window.addEventListener('dragend', () => clearDropMarks(host), true);
   window.addEventListener('drop', () => clearDropMarks(host), true);
   const render = () => renderTree(host);
+  let lastSession = app.session;
   app.on('session', () => {
     known = new WeakSet();
+    // 別のファイルを開いたときは、前のファイルのスクロール位置を引き継がない（総点検 L-3）。同じファイルの描き直しでは動かさない
+    if (app.session !== lastSession) host.scrollTop = 0;
+    lastSession = app.session;
     // 別のファイルを開いたら、前のファイルの検索語は意味がないので消す
     setFilter('', host);
     render();
