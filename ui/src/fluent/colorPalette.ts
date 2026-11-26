@@ -34,11 +34,12 @@ export interface ColorPalette {
 /** 色の読み上げ用の名前。例：「赤・濃い（#691411）」。沈む色にはその旨を足す。 */
 export function colorLabel(color: string, fallback?: string): string {
   const n = paletteName(color);
-  let name = fallback ? t(fallback) : '';
-  if (n) name = 'label' in n ? t(n.label) : `${t(n.hue)}・${t(n.shade)}`;
-  const base = name ? `${name}（${color}）` : color;
+  // 区切りの記号は言語ごとに違うので、文言ごと（テンプレート）で訳す
+  let base = color;
+  if (n) base = 'label' in n ? t('{name}（{color}）', { name: t(n.label), color }) : t('{hue}・{shade}（{color}）', { hue: t(n.hue), shade: t(n.shade), color });
+  else if (fallback) base = t('{name}（{color}）', { name: t(fallback), color });
   const sink = legibility(color);
-  return sink === 'ok' ? base : `${base}、${t(sinkText(sink))}`;
+  return sink === 'ok' ? base : t('{label}、{note}', { label: base, note: t(sinkText(sink)) });
 }
 
 /** 沈む色の説明（配布前チェックと同じ言い方）。 */

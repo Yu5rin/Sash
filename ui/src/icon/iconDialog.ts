@@ -229,7 +229,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     const sync = () => buttons.forEach((b, k) => b.setAttribute('aria-expanded', String(!panel.hidden && active === k)));
     const field = (key: ColorKey): HTMLElement[] => {
       const toggle = h('button', {
-        type: 'button', class: 'small icon-palette-toggle', title: tr('パレットから選ぶ'), 'aria-label': `${tr(COLOR_NAMES[key])}：${tr('パレットから選ぶ')}`, 'aria-expanded': 'false',
+        type: 'button', class: 'small icon-palette-toggle', title: tr('パレットから選ぶ'), 'aria-label': tr('{name}：{action}', { name: tr(COLOR_NAMES[key]), action: tr('パレットから選ぶ') }), 'aria-expanded': 'false',
         onclick: () => {
           if (!panel.hidden && active === key) panel.hidden = true;
           else {
