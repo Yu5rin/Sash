@@ -28,7 +28,7 @@ export function openDiff(): void {
   const layout = h('div', { class: 'segmented diff-layout', role: 'group', 'aria-label': t('比べ方') }, layoutBtn(true, t('左右に並べる')), layoutBtn(false, t('1 列')));
   const setLayout = (side: boolean) => {
     sideBySide = side;
-    editor?.updateOptions({ renderSideBySide: side });
+    editor?.updateOptions({ renderSideBySide: side, useInlineViewWhenSpaceIsLimited: side ? false : true });
     for (const b of Array.from(layout.querySelectorAll<HTMLElement>('button'))) {
       const on = (b.dataset['layout'] === 'side') === side;
       b.classList.toggle('active', on);

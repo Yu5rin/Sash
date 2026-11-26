@@ -34,7 +34,7 @@ public sealed class RecipeStore(string path)
     public void Save(JsonObject recipe)
     {
         ArgumentNullException.ThrowIfNull(recipe);
-        var id = IdOf(recipe) ?? throw UserErrors.Argument(L("レシピに id がありません。", "The recipe has no id."), nameof(recipe));
+        var id = IdOf(recipe) ?? throw UserErrors.Argument(L("レシピに id がありません。", "The recipe has no id."));
         lock (_lock)
         {
             Write(ListForUpdate().Where(r => IdOf(r) != id).Append(recipe));

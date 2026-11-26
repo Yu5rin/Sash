@@ -309,7 +309,7 @@ function commands(): AppCommand[] {
     ...PALETTE_ITEMS.map((tag): AppCommand => ({ id: `insert.${tag}`, group: G.insert, title: t('{name}を追加', { name: titleOf(tag) }), keywords: tag, enabled: has, run: () => void insertNearSelection(tag) })),
     { id: 'insert.recipes', group: G.insert, title: t('レシピ…'), keywords: 'recipe template レシピを挿入', enabled: () => has() && !app.store?.syncError, run: () => void openOnce('recipes', () => openRecipes(notify)) },
     { id: 'insert.saveRecipe', group: G.recipe, title: t('選択中のタブ・グループをレシピとして保存'), keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(notify) },
-    ...builtinRecipes.map((r): AppCommand => ({ id: `recipe.${r.id}`, group: G.recipe, title: t(r.title), keywords: 'recipe template', enabled: has, run: () => runAndNotify(applyRecipe(r)) })),
+    ...builtinRecipes.map((r): AppCommand => ({ id: `recipe.${r.id}`, group: G.recipe, title: t(r.title), keywords: 'recipe template', enabled: () => has() && !app.store?.syncError, run: () => runAndNotify(applyRecipe(r)) })),
     { id: 'insert.idMso', group: G.insert, title: t('idMso カタログ…'), keywords: 'idmso catalog', enabled: has, run: openIdMsoCatalog },
     { id: 'insert.imageMso', group: G.insert, title: t('imageMso カタログ…'), keywords: 'imagemso icon catalog', enabled: has, run: openImageMsoCatalog },
 
@@ -371,6 +371,8 @@ const NEEDS_SELECTION = new Set(['edit.cut', 'edit.copy', 'edit.duplicate', 'edi
 
 /** コマンドパレットで、使えないコマンドに添える理由（メニューのツールチップと同じ考え方。なければ「いまは使えません」）。 */
 function disabledReasonFor(c: AppCommand): string | undefined {
+  // 構文エラー中は、レシピ（recipe.*）も挿入できない（挿入メニューの「レシピ…」と同じ理由）
+  if (c.id.startsWith('recipe.') && has() && app.store?.syncError) return t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください');
   switch (c.id) {
     case 'edit.undo': return t('元に戻す操作がありません');
     case 'edit.redo': return t('やり直す操作がありません');

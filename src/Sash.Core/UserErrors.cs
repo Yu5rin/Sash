@@ -10,7 +10,8 @@ public static class UserErrors
     private const string Key = "Sash.UserFacing";
 
     /// <summary>利用者向けの文言を持つ ArgumentException。</summary>
-    public static ArgumentException Argument(string message, string? paramName = null) => Mark(new ArgumentException(message, paramName));
+    /// <remarks>引数名は渡さない（渡すと Message に「 (Parameter 'id')」の英語が付いて画面に出るため）。</remarks>
+    public static ArgumentException Argument(string message) => Mark(new ArgumentException(message));
 
     /// <summary>利用者向けの文言を持つ FormatException。</summary>
     public static FormatException Format(string message, Exception? inner = null) => Mark(new FormatException(message, inner));

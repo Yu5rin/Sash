@@ -187,7 +187,7 @@ public sealed partial class IconLibrary(string root)
         && !id.StartsWith(' ') && !id.EndsWith(' ')
         && !id.StartsWith('.') && !id.EndsWith('.');
 
-    private static string Checked(string id) => IsValidId(id) ? id : throw UserErrors.Argument(L($"不正な id です：{id}", $"Invalid id: {id}"), nameof(id));
+    private static string Checked(string id) => IsValidId(id) ? id : throw UserErrors.Argument(L($"不正な id です：{id}", $"Invalid id: {id}"));
 
     private string MetaPath(string id) => Path.Combine(Root, id + ".json");
 

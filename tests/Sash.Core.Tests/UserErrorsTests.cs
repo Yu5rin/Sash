@@ -48,4 +48,25 @@ public class UserErrorsTests
         Assert.False(UserErrors.IsUserFacing(new FormatException("Input string was not in a correct format.")));
         Assert.True(UserErrors.IsUserFacing(new UserFacingException("x")));
     }
+
+    [Fact]
+    public void 画面に出す文言に引数名の英語_Parameter_が付かない()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "sash-ue-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var a = Assert.Throws<ArgumentException>(() => new RecipeStore(dir).Save(new JsonObject { ["title"] = "x" }));
+            var b = Assert.Throws<ArgumentException>(() => new IconLibrary(dir).Delete("../x"));
+            var c = UserErrors.Argument("文言");
+            foreach (var ex in new[] { a, b, c })
+            {
+                Assert.DoesNotContain("Parameter", ex.Message);
+                Assert.Null(ex.ParamName);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
 }
