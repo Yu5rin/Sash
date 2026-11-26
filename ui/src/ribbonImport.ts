@@ -243,7 +243,6 @@ export function applyImport(
     const taken = new Set([...(opts.takenCallbacks ?? [])].map((n) => n.toLowerCase()));
     // 取り込む前の、取り込み先のコールバック名と keytip（重なりを調べるため）
     const existingCallbacks = new Set<string>();
-    const keytips = new Set<string>();
     for (const el of allElements(doc)) {
       for (const a of Array.from(el.attributes)) {
         if (attributes.get(a.name)?.kind === 'callback' && a.value) {
@@ -251,8 +250,6 @@ export function applyImport(
           taken.add(bareCallbackName(a.value).toLowerCase());
         }
       }
-      const k = el.getAttribute('keytip');
-      if (k) keytips.add(k.toUpperCase());
     }
     const prefixes = new Map<string, string>();
     const resolvePrefix = (p: string): string => {
@@ -333,18 +330,6 @@ export function applyImport(
           }
         }
       }
-      // keytip は、取り込み先にすでにあるものと重なると、Excel でどちらか一方しか効かない。重なるものは外す
-      const dedupeKeytips = (el: Element) => {
-        const k = el.getAttribute('keytip');
-        if (k) {
-          if (keytips.has(k.toUpperCase())) {
-            outcome.droppedKeytips.push({ id: el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName, keytip: k });
-            el.removeAttribute('keytip');
-          } else keytips.add(k.toUpperCase());
-        }
-        for (const c of childElements(el)) dedupeKeytips(c);
-      };
-      dedupeKeytips(copy);
       roots.push(copy);
       switch (src.localName) {
         case 'tab': {
@@ -412,11 +397,60 @@ export function applyImport(
           break;
       }
     }
+    // keytip は、同じ画面（タブどうし・同じタブの中のコントロールどうし）で重なると、Excel でどちらか一方しか効かない。重なるものは外す
+    const idOf = (el: Element) => el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName;
+    const dedupeIn = (el: Element, used: Set<string>) => {
+      const k = el.getAttribute('keytip');
+      if (k) {
+        if (used.has(k.toUpperCase())) {
+          outcome.droppedKeytips.push({ id: idOf(el), keytip: k });
+          el.removeAttribute('keytip');
+        } else used.add(k.toUpperCase());
+      }
+      for (const c of childElements(el)) dedupeIn(c, used);
+    };
+    const keytipsIn = (scope: Element, exclude: Element, into: Set<string>) => {
+      for (const c of childElements(scope)) {
+        if (c === exclude) continue;
+        const k = c.getAttribute('keytip');
+        if (k) into.add(k.toUpperCase());
+        keytipsIn(c, exclude, into);
+      }
+    };
+    for (const p of placed) {
+      if (p.localName === 'tab') {
+        const siblings = new Set<string>();
+        for (const x of childElements(p.parentElement!)) if (x !== p && x.getAttribute('keytip')) siblings.add(x.getAttribute('keytip')!.toUpperCase());
+        const k = p.getAttribute('keytip');
+        if (k && siblings.has(k.toUpperCase())) {
+          outcome.droppedKeytips.push({ id: idOf(p), keytip: k });
+          p.removeAttribute('keytip');
+        }
+        const used = new Set<string>();
+        for (const c of childElements(p)) dedupeIn(c, used);
+      } else {
+        const used = new Set<string>();
+        const tab = p.closest('tab');
+        if (tab) keytipsIn(tab, p, used);
+        dedupeIn(p, used);
+      }
+    }
     const byName = new Map<string, string[]>();
     for (const u of callbackUses(roots)) byName.set(u.name, [...(byName.get(u.name) ?? []), `${u.id}.${u.attr}`]);
     outcome.callbacks = [...byName].map(([name, uses]) => ({ name, uses }));
     // 付け直せなかった名前が、取り込み先のほかのコントロールと同じ Sub を指していれば、押すと既存のマクロが動く
-    outcome.sharedCallbacks = outcome.callbacks.map((c) => c.name).filter((n) => existingCallbacks.has(bareCallbackName(n).toLowerCase()));
+    // （命名規則が「Sub を共有する」のときは、規則どおりの名前は共有が意図なので警告しない）
+    const shared = new Set<string>();
+    const walkShared = (el: Element) => {
+      for (const a of Array.from(el.attributes)) {
+        if (attributes.get(a.name)?.kind !== 'callback' || !a.value || !existingCallbacks.has(bareCallbackName(a.value).toLowerCase())) continue;
+        const byRule = opts.naming?.shared === true && bareCallbackName(a.value).toLowerCase() === callbackName(opts.naming, idOf(el), a.name, el.localName).toLowerCase();
+        if (!byRule) shared.add(a.value);
+      }
+      for (const c of childElements(el)) walkShared(c);
+    };
+    for (const r of roots) walkShared(r);
+    outcome.sharedCallbacks = [...shared];
     outcome.added = placed.map((el) => pathOf(el));
     return selectMany(outcome.added);
   }, label);

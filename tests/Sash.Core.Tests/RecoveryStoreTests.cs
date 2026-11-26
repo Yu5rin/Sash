@@ -169,7 +169,7 @@ public class RecoveryStoreTests
     // ---- 2 つの Sash（プロセス）で同じブックを開いたとき（§23.2） ----
 
     private static RecoveryStore AsProcess(string root, int pid, params int[] alive) =>
-        new(root, new FixedTime(T0), pid, p => alive.Contains(p));
+        new(root, new FixedTime(T0), pid, (p, _, _) => alive.Contains(p));
 
     [Fact]
     public void 動いている別のSashの退避は_読まず_一覧に出さず_消さない()
@@ -217,10 +217,10 @@ public class RecoveryStoreTests
     {
         var root = NewRoot();
         var time = new FixedTime(T0);
-        new RecoveryStore(root, time, 100, p => true).Write(@"C:ook.xlsm", 1, [Part("<a/>")]);
+        new RecoveryStore(root, time, 100, (p, _, _) => true).Write(@"C:ook.xlsm", 1, [Part("<a/>")]);
         time.Now = T0.AddDays(RecoveryStore.RetentionDays + 5);
 
-        Assert.Empty(new RecoveryStore(root, time, 200, p => true).List());
+        Assert.Empty(new RecoveryStore(root, time, 200, (p, _, _) => true).List());
         Assert.Single(Directory.GetFiles(root, "*.json"));
     }
 
@@ -260,5 +260,55 @@ public class RecoveryStoreTests
         Assert.True(only.FileExists);
         Assert.Null(only.FileModifiedAt);
         Assert.False(only.FileNewer);
+    }
+
+    // ---- プロセス ID の使い回し（§23.8） ----
+
+    [Fact]
+    public void 同じプロセスかは_ID_開始時刻_名前のすべてが一致するときだけ()
+    {
+        using var me = System.Diagnostics.Process.GetCurrentProcess();
+        var start = me.StartTime.ToUniversalTime().Ticks;
+
+        Assert.True(RecoveryStore.IsSameProcess(me.Id, start, me.ProcessName));
+        // 同じ ID でも、開始時刻が違えば別のプロセス（ID が使い回された）
+        Assert.False(RecoveryStore.IsSameProcess(me.Id, start - TimeSpan.TicksPerMinute, me.ProcessName));
+        Assert.False(RecoveryStore.IsSameProcess(me.Id, start, "別の名前"));
+        // 存在しない ID
+        Assert.False(RecoveryStore.IsSameProcess(int.MaxValue, start, me.ProcessName));
+        // 開始時刻・名前の記録がない古い形式は、ID だけで判定する
+        Assert.True(RecoveryStore.IsSameProcess(me.Id, 0, ""));
+    }
+
+    [Fact]
+    public void 記録した開始時刻と名前が_退避に残り_使い回されたIDの退避は隠れずに復旧できる()
+    {
+        var root = NewRoot();
+        // 実際のプロセスとして書く（開始時刻と名前が入る）
+        var writer = new RecoveryStore(root, new FixedTime(T0));
+        writer.Write(@"C:\book.xlsm", 1, [Part("<a/>")]);
+        var entry = writer.Read(@"C:\book.xlsm")!;
+        Assert.True(entry.OwnerStartTicks > 0);
+        Assert.NotEmpty(entry.OwnerName);
+
+        // 別の Sash（ID 999）から見る。書いたプロセスの ID を、無関係な別のプロセスが使っている（開始時刻・名前が違う）場合は、生きているとみなさない
+        File.Move(writer.FileOf(@"C:\book.xlsm"), Path.Combine(root, Path.GetFileName(writer.FileOf(@"C:\book.xlsm")).Replace($".{Environment.ProcessId}.", ".4242.")));
+        var reader = new RecoveryStore(root, new FixedTime(T0), 999, (pid, start, name) => RecoveryStore.IsSameProcess(Environment.ProcessId, start + TimeSpan.TicksPerHour, name));
+        Assert.Equal("<a/>", reader.Read(@"C:\book.xlsm")!.Parts[0].Xml);
+        Assert.Single(reader.List());
+    }
+
+    // ---- 前回の退避から引き継げないとき（§23.8） ----
+
+    [Fact]
+    public void 引き継ぐはずの画像が前回の退避にないときは_書き込みを失敗にする()
+    {
+        var store = new RecoveryStore(NewRoot(), new FixedTime(T0));
+        // 前回の退避がない（読めない・消えた）のに、前回送ったことになっている画像 a を引き継ごうとした
+        var ex = Assert.Throws<UserFacingException>(() =>
+            store.Write(@"C:\book.xlsm", 1, [new RecoveryPart(CustomUIVersion.Office2010, "<a/>", [new RecoveryImage("b", "data:B")], [], ["a", "b"])]));
+        Assert.Contains("a", ex.Message);
+        // 書かれていない（欠けた退避を残さない）
+        Assert.Null(store.Read(@"C:\book.xlsm"));
     }
 }

@@ -31,8 +31,12 @@ async function run(): Promise<void> {
   flushEdits();
   if (!app.dirty) {
     // 自分の編集がないので、失うものがない。黙って読み直す
-    if (await openFile(s.path, { force: true })) toast({ kind: 'info', message: t('「{file}」がほかで変更されたため、読み直しました', { file: name }) });
-    return;
+    // 読み込みを待つ間に編集が入ったら、openFile は読み直しを適用せず false を返す（その場合は下の通知に回す）
+    if (await openFile(s.path, { force: true, keepIfDirty: true })) {
+      toast({ kind: 'info', message: t('「{file}」がほかで変更されたため、読み直しました', { file: name }) });
+      return;
+    }
+    if (!app.dirty || app.session !== s) return;
   }
   const key = JSON.stringify(current);
   if (notified.get(s) === key) return;

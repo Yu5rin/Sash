@@ -143,6 +143,8 @@ async function writeNow(session: Session): Promise<void> {
       // 書けたかが分からないので、次は画像も全部送り直す
       resetSent();
       reportFailure(e);
+      // ホストが前回の退避から画像を引き継げなかったときなど、全部送り直せば書ける。続けて失敗しているときは、次の編集まで待つ
+      if (failures < 3) debouncer.trigger();
     }
   });
 }

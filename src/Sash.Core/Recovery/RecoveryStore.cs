@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sash.Core.CustomUI;
 using Sash.Core.Settings;
+using static Sash.Core.Localization.Text;
 
 namespace Sash.Core.Recovery;
 
@@ -17,7 +18,9 @@ public sealed record RecoveryPart(CustomUIVersion Version, string Xml, IReadOnly
 
 /// <summary>未保存の編集の退避 1 件分（ブック 1 つにつき 1 件。上書きしていく）。</summary>
 /// <param name="OwnerPid">書いた Sash のプロセス ID（2 つの Sash で同じブックを開いても、退避を取り合わないため）。</param>
-public sealed record RecoveryEntry(string Path, DateTimeOffset SavedAt, int EditCount, IReadOnlyList<RecoveryPart> Parts, int OwnerPid = 0);
+/// <param name="OwnerStartTicks">書いたプロセスの開始時刻（UTC の Ticks）。プロセス ID が使い回されても、別のプロセスと見分けるため。</param>
+/// <param name="OwnerName">書いたプロセスの名前。</param>
+public sealed record RecoveryEntry(string Path, DateTimeOffset SavedAt, int EditCount, IReadOnlyList<RecoveryPart> Parts, int OwnerPid = 0, long OwnerStartTicks = 0, string OwnerName = "");
 
 /// <summary>一覧に出す情報（中身は読まない）。</summary>
 /// <param name="FileModifiedAt">元のファイルの更新日時。ファイルがなければ null。</param>
@@ -46,31 +49,68 @@ public sealed class RecoveryStore
     private readonly string _root;
     private readonly TimeProvider _time;
     private readonly int _pid;
-    private readonly Func<int, bool> _isAlive;
+    private readonly Func<int, long, string, bool> _isAlive;
+    private readonly long _startTicks;
+    private readonly string _name;
     private readonly Func<string, (bool Exists, DateTimeOffset? Modified)> _probe;
     private readonly TimeSpan _probeTimeout;
 
     /// <param name="ownerPid">この Sash のプロセス ID。退避のファイルはこの ID を名前に含め、自分のものだけを書き換える・消す。</param>
     /// <param name="isAlive">そのプロセスが動いているか（ほかの Sash の退避を、復旧の候補にしてよいかの判定）。</param>
     /// <param name="probe">元のファイルの有無と更新日時を調べる（つながらないネットワーク パスで待たされないよう、時間を区切って呼ぶ）。</param>
-    public RecoveryStore(string root, TimeProvider? time = null, int? ownerPid = null, Func<int, bool>? isAlive = null,
+    public RecoveryStore(string root, TimeProvider? time = null, int? ownerPid = null, Func<int, long, string, bool>? isAlive = null,
         Func<string, (bool Exists, DateTimeOffset? Modified)>? probe = null, TimeSpan? probeTimeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         _root = root;
         _time = time ?? TimeProvider.System;
         _pid = ownerPid ?? Environment.ProcessId;
-        _isAlive = isAlive ?? ProcessAlive;
+        _isAlive = isAlive ?? IsSameProcess;
+        // 自分のプロセスの開始時刻と名前（ownerPid を指定したテストでは、実際のプロセスのものではないので記録しない）
+        if (ownerPid is null)
+        {
+            try
+            {
+                using var me = System.Diagnostics.Process.GetCurrentProcess();
+                _startTicks = me.StartTime.ToUniversalTime().Ticks;
+                _name = me.ProcessName;
+            }
+            catch (Exception)
+            {
+                _name = "";
+            }
+        }
+        else
+        {
+            _name = "";
+        }
         _probe = probe ?? DefaultProbe;
         _probeTimeout = probeTimeout ?? TimeSpan.FromSeconds(2);
     }
 
-    private static bool ProcessAlive(int pid)
+    /// <summary>
+    /// 退避を書いたプロセスが、いまも動いているか。プロセス ID が使い回されて、無関係なプロセスが同じ ID を持っていることがあるので、
+    /// ID・開始時刻（1 秒の誤差まで）・名前がすべて一致するときだけ「同じプロセス」とみなす。
+    /// 開始時刻・名前が取れない（アクセス拒否など）ときは「動いていない」側に倒す（隠れ続けて復旧できなくなるよりよい）。ただし今の自分のプロセスは除く。
+    /// 開始時刻と名前の記録がない（古い形式の）退避は、ID だけで判定する。
+    /// </summary>
+    internal static bool IsSameProcess(int pid, long startTicks, string name)
     {
         try
         {
             using var p = System.Diagnostics.Process.GetProcessById(pid);
-            return !p.HasExited;
+            if (p.HasExited)
+            {
+                return false;
+            }
+
+            if (startTicks == 0 && name.Length == 0)
+            {
+                return true;
+            }
+
+            return string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)
+                && Math.Abs(p.StartTime.ToUniversalTime().Ticks - startTicks) < TimeSpan.TicksPerSecond;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -78,10 +118,11 @@ public sealed class RecoveryStore
         }
         catch (Exception)
         {
-            // 権限がなくて調べられないときは、動いているものとして扱う（ほかの Sash の退避を横取りしない側に倒す）
-            return true;
+            return pid == Environment.ProcessId;
         }
     }
+
+    private bool Alive(RecoveryEntry e) => _isAlive(e.OwnerPid, e.OwnerStartTicks, e.OwnerName);
 
     private static (bool, DateTimeOffset?) DefaultProbe(string path)
     {
@@ -142,7 +183,7 @@ public sealed class RecoveryStore
         var full = System.IO.Path.GetFullPath(path);
         var previous = TryRead(FileOf(full));
         var merged = parts.Select(p => MergeImages(p, previous?.Parts.FirstOrDefault(q => q.Version == p.Version))).ToList();
-        var entry = new RecoveryEntry(full, _time.GetUtcNow(), editCount, merged, _pid);
+        var entry = new RecoveryEntry(full, _time.GetUtcNow(), editCount, merged, _pid, _startTicks, _name);
         JsonFile.WriteAtomic(FileOf(full), JsonSerializer.Serialize(entry, Json));
     }
 
@@ -155,6 +196,15 @@ public sealed class RecoveryStore
 
         var incoming = part.AddImages.ToDictionary(i => i.Id, StringComparer.Ordinal);
         var kept = (previous?.AddImages ?? []).Where(i => !incoming.ContainsKey(i.Id) && part.AddImageIds.Contains(i.Id)).ToList();
+        // 引き継ぐはずの画像が、前回の退避にも今回の送り分にもなければ、黙って欠けた退避を書かない。失敗にして、呼び出し側に全部送り直させる
+        var missing = part.AddImageIds.Where(id => !incoming.ContainsKey(id) && !kept.Any(i => i.Id == id)).ToList();
+        if (missing.Count > 0)
+        {
+            throw new UserFacingException(L(
+                $"退避に、前回の画像が見つかりません（{string.Join('、', missing)}）。画像をすべて送り直します。",
+                $"The previous backup does not contain these images: {string.Join(", ", missing)}. All images will be sent again."));
+        }
+
         return part with { AddImages = [.. kept, .. part.AddImages.Where(i => part.AddImageIds.Contains(i.Id))], AddImageIds = null };
     }
 
@@ -173,9 +223,9 @@ public sealed class RecoveryStore
         }
 
         return OthersOf(full)
-            .Where(o => !_isAlive(o.Pid))
             .Select(o => Verified(TryRead(o.File), full))
             .OfType<RecoveryEntry>()
+            .Where(e => !Alive(e))
             .OrderByDescending(e => e.SavedAt)
             .FirstOrDefault();
     }
@@ -197,9 +247,10 @@ public sealed class RecoveryStore
                 File.Delete(own);
             }
 
-            foreach (var (file, pid) in OthersOf(path).ToList())
+            foreach (var (file, _) in OthersOf(path).ToList())
             {
-                if (!_isAlive(pid))
+                // 読めない（壊れている）ものは消してよい。読めたものは、書いたプロセスが動いていなければ消す
+                if (TryRead(file) is not { } other || !Alive(other))
                 {
                     TryDelete(file);
                 }
@@ -227,8 +278,7 @@ public sealed class RecoveryStore
         foreach (var file in Directory.EnumerateFiles(_root, "*.json"))
         {
             var entry = TryRead(file);
-            var pid = PidOf(file);
-            if (pid is { } p && p != _pid && _isAlive(p))
+            if (entry is not null && entry.OwnerPid != _pid && Alive(entry))
             {
                 continue;
             }
@@ -262,13 +312,6 @@ public sealed class RecoveryStore
             })
             .OrderByDescending(r => r.SavedAt)
             .ToList();
-    }
-
-    private static int? PidOf(string file)
-    {
-        // <照合値>.<pid>.json
-        var parts = System.IO.Path.GetFileNameWithoutExtension(file).Split('.');
-        return parts.Length == 2 && int.TryParse(parts[1], out var pid) ? pid : null;
     }
 
     /// <summary>元のファイルが、退避を書いた後に変わっているか（ファイルがない・時間内に調べられなかったときは false）。</summary>

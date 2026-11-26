@@ -106,14 +106,15 @@ export function pngSize(dataUrl: string): { width: number; height: number } | nu
 
 // ---- 画素の読み取り（ブラウザ） ----
 
-/** 調べた結果の覚え。null は「調べたが読めなかった」（未調査は、キーがない）。古いものから捨てて、閉じたファイルの画像が残り続けないようにする。 */
+/**
+ * 調べた結果の覚え。null は「調べたが読めなかった」（未調査は、キーがない）。
+ * 固定の上限は置かない（開いている画像の数より小さいと、調べた分が追い出されて「調べています」に戻るため）。
+ * 閉じたファイルの画像の分は、チェックを開くたびに pruneCache で捨てる。
+ */
 const cache = new Map<string, PixelStats | null>();
-export const PIXEL_CACHE_LIMIT = 100;
 
 export function rememberStats(key: string, value: PixelStats | null): void {
-  cache.delete(key);
   cache.set(key, value);
-  while (cache.size > PIXEL_CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
 }
 
 /** いま開いている画像以外の覚えを捨てる（ファイルを閉じたあとの分）。 */

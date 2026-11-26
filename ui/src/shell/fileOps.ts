@@ -89,7 +89,7 @@ export async function confirmDiscard(): Promise<boolean> {
 }
 
 /** ファイルを開く。path がなければファイルの選択を出す。force なら未保存の確認をしない（復元のあとなど）。 */
-export async function openFile(path?: string, opts: { force?: boolean } = {}): Promise<boolean> {
+export async function openFile(path?: string, opts: { force?: boolean; keepIfDirty?: boolean } = {}): Promise<boolean> {
   if (refuseWhileBusy()) return false;
   // 選ぶ前に聞くと、選ぶのをやめたときに確認だけが無駄になるので、ファイルを選んだあとで聞く。
   // ただしパスが決まっているとき（最近使ったファイルなど）は、読む前に聞く
@@ -105,6 +105,11 @@ export async function openFile(path?: string, opts: { force?: boolean } = {}): P
     setBusy(null);
   }
   if (!doc) return false;
+  // 読み込みを待つ間に入った編集（入力中の欄を含む）を、読み込んだ内容で上書きしない
+  if (opts.keepIfDirty) {
+    flushPendingEdits();
+    if (app.dirty) return false;
+  }
   if (!path && !opts.force && !(await confirmDiscard())) return false;
   app.open(doc);
   // 開いたらキャンバスにフォーカスを移す（ホームのボタンやファイルの選択にフォーカスが残ったままだと、

@@ -367,9 +367,9 @@ describe('画像の色の覚え（低 11）', () => {
     expect(pending.find((x) => x.id === 'themeIcons')!.note).toContain('調べています');
   });
 
-  it('覚えには上限があり、閉じたファイルの分は捨てられる', async () => {
-    for (let i = 0; i < stats.PIXEL_CACHE_LIMIT + 20; i++) stats.rememberStats(`k${i}`, null);
-    expect(stats.cacheSize()).toBe(stats.PIXEL_CACHE_LIMIT);
+  it('覚えに固定の上限はなく（開いている画像が多くても「調べています」に戻らない）、閉じたファイルの分は捨てられる', async () => {
+    for (let i = 0; i < 150; i++) stats.rememberStats(`k${i}`, null);
+    expect(stats.cacheSize()).toBeGreaterThanOrEqual(150);
     stats.rememberStats('keep', null);
     await stats.ensurePixelStats([{ id: 'k', dataUrl: 'keep', isNew: false }]);
     expect(stats.cacheSize()).toBe(1);
@@ -383,5 +383,100 @@ describe('onLoad の判定（低 12・13）', () => {
     // 本体で ribbon を使っていない（宣言の 2 行目に ribbon があるだけ）
     expect(onLoadHoldsRibbon(m("    ' TODO\r\n"), 'Ribbon_onLoad', 'm')).toBe(false);
     expect(onLoadHoldsRibbon(m('    Set gRibbon = ribbon\r\n'), 'Ribbon_onLoad', 'm')).toBe(true);
+  });
+});
+
+// ---- 再確認での修正 ----
+
+describe('黙った読み直しと、読み込み中の編集（再確認 A）', () => {
+  beforeEach(async () => {
+    app.settings.detectExternalChanges = true;
+    app.settings.autoRecovery = false;
+    app.close();
+    await sleep(0);
+    invoke.mockReset();
+  });
+
+  it('file.open を待つ間に入った編集は、読み込んだ内容で上書きせず、通知に回す', async () => {
+    openDoc();
+    invoke.mockImplementation(async (type: string) => {
+      if (type === 'file.fingerprint') return { fingerprint: { office2010: 'other' } };
+      if (type === 'file.open') {
+        edit('読み込み中の編集');
+        return { path: 'C:\\book.xlsm', parts: [{ version: 'office2010', xml: XML.replace('label="A"', 'label="ほか"'), images: [] }], fingerprint: { office2010: 'other' } };
+      }
+      return null;
+    });
+    await createExternalWatcher(0)();
+    expect(app.store!.text).toContain('label="読み込み中の編集"');
+    expect(app.store!.text).not.toContain('label="ほか"');
+    expect(document.querySelectorAll('.toast.warning')).toHaveLength(1);
+  });
+
+  it('keepIfDirty：入力中の欄（確定前）も編集として見る', async () => {
+    openDoc();
+    invoke.mockResolvedValue({ path: 'C:\\book.xlsm', parts: [{ version: 'office2010', xml: XML.replace('label="A"', 'label="ほか"'), images: [] }] });
+    setPendingEditFlusher(() => edit('入力中'));
+    expect(await openFile('C:\\book.xlsm', { force: true, keepIfDirty: true })).toBe(false);
+    expect(app.store!.text).toContain('label="入力中"');
+  });
+});
+
+describe('取り込み：命名規則が共有のとき・keytip の範囲（再確認 4・5）', () => {
+  it('Sub を共有する規則の、規則どおりの名前は、重なりの警告に出さない（規則外の名前は出す）', () => {
+    const SRC = `<customUI xmlns="${NS}"><ribbon><tabs><tab id="tabA"><group id="g"><button id="b1" onAction="Ribbon_onAction"/><button id="b2" onAction="Quick"/></group></tab></tabs></ribbon></customUI>`;
+    const TGT = `<customUI xmlns="${NS}"><ribbon><tabs><tab id="t"><group id="gg"><button id="x" onAction="Ribbon_onAction"/><button id="y" onAction="Quick"/></group></tab></tabs></ribbon></customUI>`;
+    const store = new PartStore('office2010', TGT, []);
+    const d = doc(SRC);
+    const pick = flatten(listCandidates(d, store.doc)).find((c) => c.kind === 'tab')!;
+    const out = applyImport(store, { doc: d, images: new Map() }, [pick], { renameIds: true, groupTarget: 'new', naming: { ...DEFAULT_NAMING, shared: true } })!;
+    expect(out.sharedCallbacks).toEqual(['Quick']);
+  });
+
+  it('keytip は、タブどうし・同じタブの中のコントロールどうしで比べる（別のタブの同じ keytip は重なりではない）', () => {
+    const TGT = `<customUI xmlns="${NS}"><ribbon><tabs><tab id="t1" keytip="A"><group id="g1"><button id="b1" keytip="X"/></group></tab><tab id="t2" keytip="B"><group id="g2"><button id="b2" keytip="Y"/></group></tab></tabs></ribbon></customUI>`;
+    const SRC = `<customUI xmlns="${NS}"><ribbon><tabs><tab id="n" keytip="C"><group id="gn"><button id="bn" keytip="X"/><button id="bm" keytip="X"/></group></tab><tab id="m" keytip="A"/></tabs></ribbon></customUI>`;
+    const store = new PartStore('office2010', TGT, []);
+    const d = doc(SRC);
+    const picks = flatten(listCandidates(d, store.doc)).filter((c) => c.kind === 'tab');
+    const out = applyImport(store, { doc: d, images: new Map() }, picks, { renameIds: true, groupTarget: 'new' })!;
+    // 新しいタブ n の bn の X は、t1 の b1 の X とは別の画面なので残る。n の中の bm の X は、同じタブ内で重なるので外す。タブ m の A は t1 と重なるので外す
+    expect(out.droppedKeytips).toEqual([{ id: 'bm', keytip: 'X' }, { id: 'm', keytip: 'A' }]);
+    expect(store.doc.querySelector('[id="bn"]')!.getAttribute('keytip')).toBe('X');
+  });
+
+  it('既存のタブへグループを足すときは、そのタブの中のコントロールと比べる', () => {
+    const TGT = `<customUI xmlns="${NS}"><ribbon><tabs><tab id="t1"><group id="g1"><button id="b1" keytip="X"/></group></tab></tabs></ribbon></customUI>`;
+    const SRC = `<customUI xmlns="${NS}"><ribbon><tabs><tab id="n"><group id="gn"><button id="bn" keytip="X"/><button id="bo" keytip="Z"/></group></tab></tabs></ribbon></customUI>`;
+    const store = new PartStore('office2010', TGT, []);
+    const d = doc(SRC);
+    const pick = flatten(listCandidates(d, store.doc)).find((c) => c.kind === 'group')!;
+    const out = applyImport(store, { doc: d, images: new Map() }, [pick], { renameIds: true, groupTarget: [0, 0, 0] })!;
+    expect(out.droppedKeytips).toEqual([{ id: 'bn', keytip: 'X' }]);
+  });
+});
+
+describe('退避の引き継ぎに失敗したとき（再確認 2）', () => {
+  it('ホストが引き継げず失敗を返したら、次の書き込みで画像を全部送り直す', async () => {
+    vi.useFakeTimers();
+    rec.startRecovery();
+    app.close();
+    await vi.advanceTimersByTimeAsync(0);
+    invoke.mockReset();
+    invoke.mockResolvedValue(null);
+    app.settings.autoRecovery = true;
+    openDoc();
+    app.store!.addImageAndApply({ id: 'img1', dataUrl: 'data:image/png;base64,AAAA', isNew: true }, () => undefined, '画像');
+    await vi.advanceTimersByTimeAsync(rec.RECOVERY_DELAY_MS + 50);
+    // 2 回目は前回の退避を読めずに失敗（不足 id）。その後、自動でもう一度書き、今度は画像も全部送る
+    invoke.mockImplementationOnce(async () => {
+      throw new Error('退避に前回の画像が見つかりません');
+    });
+    edit('二回目');
+    await vi.advanceTimersByTimeAsync(rec.RECOVERY_DELAY_MS * 3);
+    const writes = calls('recovery.write').map((c) => c[1] as { parts: { addImages: unknown[] }[] });
+    expect(writes.length).toBeGreaterThanOrEqual(3);
+    expect(writes[1]!.parts[0]!.addImages).toHaveLength(0);
+    expect(writes.at(-1)!.parts[0]!.addImages).toHaveLength(1);
   });
 });
