@@ -36,7 +36,6 @@ export const SASH_ICONS_2 = {
   'plating-tank': ['Industry', 'plating tank surface treatment dip bath', ['M3 9v12h18v-12', 'M3 13q2.25 -2 4.5 0t4.5 0t4.5 0t4.5 0', ln(6, 4, 18, 4), ln(12, 4, 12, 9), 'M10 9h4v8h-4z']],
   'furnace': ['Industry', 'furnace kiln heat treatment quenching flame chimney', [rr(4, 6, 16, 15, 2), ln(15, 6, 15, 3), 'M8 21v-9h8v9', 'M12 19.5a2.2 2.2 0 0 0 2.2 -2.2c0 -1.5 -1.2 -2.3 -2.2 -4c-1 1.7 -2.2 2.5 -2.2 4a2.2 2.2 0 0 0 2.2 2.2z']],
   'c-clamp': ['Industry', 'c clamp jig fixture holding vise clamping', ['M18 5H7a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h11', 'M12 21V9', 'M9 9h6', 'M9 21h6']],
-  'end-mill': ['Industry', 'end mill cutter cutting tool flute bit', [rotPoly([[10.5, 2], [13.5, 2], [13.5, 8], [10.5, 8]], 12, 12, 40), rotPoly([[8.5, 8], [15.5, 8], [15.5, 21], [8.5, 21]], 12, 12, 40), rotPoly([[8.5, 12], [15.5, 15]], 12, 12, 40, false), rotPoly([[8.5, 16.5], [15.5, 19.5]], 12, 12, 40, false)]],
   'rasp-file': ['Industry', 'file rasp deburring finishing hand tool', ['M5.5 15l9 -9l4 4l-9 9z', ln(7.5, 17, 4, 20.5), 'M10 11.5l2.5 2.5', 'M12.5 9l2.5 2.5']],
   'soldering-iron': ['Industry', 'soldering iron solder electronics', [ln(4, 21, 11, 14), 'M11 14l6 -6l3 3l-6 6z', 'M18.5 9.5q2.5 -2 2.5 -5']],
 
@@ -45,9 +44,8 @@ export const SASH_ICONS_2 = {
   'changeover': ['Industry', 'changeover setup tooling swap exchange', ['M3 13h7v7h-7z', ci(17, 7, 3.5), 'M5 10a8 8 0 0 1 7 -6.5', head(12, 3.5, 'r', 2.2), 'M19 14a8 7 0 0 1 -6 6', head(13, 20, 'l', 2.2)]],
   'outsource': ['Industry', 'outsource subcontract external factory out', ['M3 21v-9l4 3v-3l4 3v6z', 'M3 21h8', ln(12, 10, 20, 3), 'M14.5 3h5.5v5.5']],
   'in-house': ['Industry', 'in-house inhouse own production internal factory in', ['M21 21v-9l-4 3v-3l-4 3v6z', 'M21 21h-8', ln(3, 3, 10, 10), 'M10 4.5v5.5h-5.5']],
-  'bar-stock': ['Industry', 'bar stock round bar material raw steel rod cylinder', ['M18 4h-12a1.5 3 0 0 0 0 6h12', el(18, 7, 1.5, 3), 'M18 13h-12a1.5 3 0 0 0 0 6h12', el(18, 16, 1.5, 3)]],
+  'bar-stock': ['Industry', 'bar stock round bar material raw steel rod cylinder', ['M3.5 15.5L14 5', ci(16.5, 7.5, 3.5), 'M19 10L8.5 20.5', 'M3.5 15.5a3.5 3.5 0 0 0 5 5']],
   'h-beam': ['Industry', 'h beam steel girder section structural', ['M5 4h14v3.5h-14z', 'M5 16.5h14v3.5h-14z', 'M12 7.5v9']],
-  'metal-chips': ['Industry', 'metal chips swarf scrap cuttings curl', ['M3 21h18', 'M4 17l5 -3v3z', 'M9 14c0 -5 4 -8 8 -6s1 6 -2 5s-2 -3 0 -3', 'M14 20c0 -2 2.5 -3 4.5 -2s.5 3 -1.5 2.5']],
   'oil-can': ['Industry', 'oil can lubrication grease coolant oiler', ['M4 12h10l2 9h-13z', 'M9 12l-.5 -3', 'M8.5 9l11.5 -5', dot(20, 8), 'M4 14.5h-1a2 2 0 0 0 0 4h1']],
   'hydraulic-cylinder': ['Industry', 'hydraulic cylinder piston rod actuator', ['M3 8h12v8h-12z', ln(11, 8, 11, 16), ln(15, 12, 21, 12), ln(21, 10, 21, 14), ln(5, 8, 5, 6), ln(13, 8, 13, 6)]],
   'belt-pulley': ['Industry', 'belt pulley drive transmission chain', [ci(7, 15, 4), ci(18, 7, 2.5), 'M9.7 18L19.7 8.9', 'M5 11.5L16.8 4.8']],
@@ -71,14 +69,12 @@ export const SASH_ICONS_2 = {
   'pallet-jack': ['Industry', 'pallet jack hand lift hand pallet truck', ['M3 3h4', 'M5 3l2 12', 'M7 15v2h14', dot(8, 20.5), dot(19, 20.5)]],
   'chain-hoist': ['Industry', 'chain hoist hook slinging crane lift', [ln(3, 3, 21, 3), rr(8, 5, 8, 5, 1), 'M12 10v1.5 M12 13v1.5', 'M12 14.5v4a3 3 0 0 1 -6 0v-1']],
   'first-article': ['Industry', 'first article first off sample inspection first piece', ['M3 11h11v10h-11z', ln(3, 14, 14, 14), ci(18, 6.5, 4), 'M16.8 5.5l1.7 -1.2v4.5']],
-  'pinch-hazard': ['Industry', 'pinch point entanglement roller nip hazard caught', [ci(7.5, 15, 4), ci(16.5, 15, 4), ln(12, 3, 12, 9), head(12, 9, 'd', 2.2)]],
 
   // ---- ビジネスマン・オフィス ----
   'businessperson': ['Communication', 'businessperson businessman salaryman suit tie office worker', [ci(12, 6, 3), 'M4 21v-1a6 6 0 0 1 6 -6h4a6 6 0 0 1 6 6v1', 'M9.5 14l2.5 3l2.5 -3', 'M12 17l1.5 2l-1.5 2l-1.5 -2z']],
   'circulation': ['Document', 'circulation routing circular memo pass around', [rr(8, 7, 8, 10, 1.5), ln(10.5, 11, 13.5, 11), ln(10.5, 14, 13.5, 14), 'M20 12a8 8 0 1 1 -2.3 -5.7', 'M18 3v3.5h-3.5']],
   'promissory-note': ['Document', 'promissory note bill check cheque draft payment', [rr(2, 6, 20, 12, 2.5), ln(5, 10, 13, 10), ln(5, 14, 11, 14), ci(17, 12, 3)]],
   'binder': ['Document', 'binder file filing ring binder folder', [rr(5, 3, 14, 18, 2), 'M10.5 3v18', dot(7.5, 8), dot(7.5, 16), 'M13 7h3.5v4h-3.5z']],
-  'meeting-room': ['Communication', 'meeting room conference table chairs oval', [el(12, 12, 7, 3.5), dot(8, 5.5), dot(12, 4.5), dot(16, 5.5), dot(8, 18.5), dot(12, 19.5), dot(16, 18.5)]],
   'stapler': ['Document', 'stapler stationery office staple', ['M3 18h18v3h-18z', 'M3 14l16 -2l2 2', ln(3, 14, 3, 18)]],
 
   // ---- エレベーター ----
@@ -87,7 +83,6 @@ export const SASH_ICONS_2 = {
   'door-close-button': ['Industry', 'door close button elevator close doors', [ln(12, 6, 12, 18), 'M3.5 8v8l6 -4z', 'M20.5 8v8l-6 -4z']],
   'emergency-call': ['Industry', 'emergency call intercom alarm bell help elevator', [rr(3, 3, 18, 18, 3), 'M7 15h10', 'M8.5 15v-5a3.5 3.5 0 0 1 7 0v5', 'M11 17.5h2']],
   'elevator-trapped': ['Industry', 'elevator trapped stuck rescue person inside alert', ['M3 3h14v18h-14z', ci(10, 9, 2), 'M6 18a4 4 0 0 1 8 0', ln(20.5, 4, 20.5, 9), dot(20.5, 12.5)]],
-  'capacity-plate': ['Industry', 'capacity plate passengers load limit sign persons', ['M5 6h14l3 3v6l-3 3h-14l-3 -3v-6z', ci(8, 10.5, 1.5), 'M6 15l2 -2.5l2 2.5', ln(13, 10, 18, 10), ln(13, 14, 17, 14)]],
   'elevator-inspection': ['Industry', 'elevator inspection periodic check certified car door', ['M3 4h8v16h-8z', ln(7, 4, 7, 20), ci(17.5, 16, 4), 'M15.5 16l1.5 1.5l2.5 -3']],
   'counterweight': ['Industry', 'counterweight pulley rope balance elevator', [ci(12, 4, 2), 'M10 4v7', 'M4 11h7.5v9.5h-7.5z', 'M14 4v5', 'M13 9h5v10h-5z', 'M13 12.5h5 M13 15.5h5']],
   'car-panel': ['Industry', 'car operating panel floor buttons elevator buttons', [rr(6, 2, 12, 20, 2.5), dot(10, 7), dot(14, 7), dot(10, 12), dot(14, 12), dot(10, 17), dot(14, 17)]],
@@ -97,7 +92,6 @@ export const SASH_ICONS_2 = {
   // ---- エスカレーター・動く歩道 ----
   'moving-walkway': ['Industry', 'moving walkway travelator moving sidewalk conveyor passenger', ['M4 17h16a2 2 0 0 1 0 4h-16a2 2 0 0 1 0 -4z', ci(9, 5, 1.8), 'M9 7v5', 'M9 12l-2 4 M9 12l2 4', ln(14, 10, 20, 10), head(20.5, 10, 'r', 2.5)]],
   'handrail': ['Industry', 'handrail escalator rail balustrade moving handrail', ['M3 15L16 4', 'M6 19L19 8', 'M10 16v5 M16 11v10', 'M3 21h18']],
-  'stand-still': ['Industry', 'stand still do not walk escalator etiquette two people stairs', ['M3 21h4v-4h4v-4h4v-4h6', ci(9, 9.5, 1.3), 'M9 12v5', ci(17.5, 3.5, 1.3), 'M17.5 6v3']],
   'ramp': ['Industry', 'ramp slope incline barrier free access', ['M3 20h18v-12z', 'M8 18l7 -4.7', 'M11.5 12.8l3.5 .5l-.8 3.3']],
   'step-caution': ['Industry', 'step caution watch your step level difference trip hazard', ['M3 21h8v-6h10', 'M15.5 3l5.5 10h-11z', 'M15.5 7v3', dot(15.5, 11.5)]],
 };
