@@ -29,7 +29,10 @@
 .cv-header > * { flex-shrink: 0; }
 .cv-modes button { height: var(--ctl-h-sm); padding: 0 var(--sp-2); font-size: var(--fs-xs); }
 .cv-spacer { flex: 1 1 auto; }
-.cv-hint { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--stroke-control); font-size: var(--fs-2xs); color: var(--text-subtle); cursor: help; }
+.cv-hint { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; min-height: 0; padding: 0; border-radius: 50%; border: 1px solid var(--stroke-control); font-size: var(--fs-2xs); color: var(--text-subtle); cursor: pointer; }
+.cv-keyhelp[hidden] { display: none; }
+.cv-keyhelp { min-width: 320px; }
+.cv-keyhelp-list { margin: 0; padding-left: var(--sp-4); line-height: 1.7; }
 .cv-hint:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .cv-stage { position: relative; }
 .cv-empty { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); color: var(--text-subtle); }
@@ -195,7 +198,7 @@
 
 .cv-rename { width: 9em; height: 20px; padding: 0 4px; font-size: var(--fs-xs); border: 1px solid var(--focus); border-radius: var(--radius-xs); }
 
-/* コンテキストメニューの表示 */
+/* 右クリックメニューの表示 */
 .ctx-section h3 { display: flex; align-items: center; gap: var(--sp-3); }
 .ctx-card { border-color: var(--border); box-shadow: var(--shadow-menu); border-radius: var(--radius-md); }
 .ctx-card.selected { outline: 2px solid var(--sel-border); }
@@ -321,8 +324,11 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 .count-badge.info { background: var(--info); color: var(--on-info); }
 .panel-list.problems .panel-actions { padding: var(--sp-1) var(--sp-3); position: sticky; top: 0; background: var(--surface); z-index: 1; }
 .panel-list .filters { display: inline-flex; gap: var(--sp-1); }
-.panel-list .filters button { height: var(--ctl-h-sm); opacity: 0.6; }
-.panel-list .filters button.active { opacity: 1; background: var(--sel-bg); border-color: var(--sel-border); }
+.panel-list .filters { align-items: center; }
+/* 切り替えボタン：入っているときだけ選択の色（地と枠）、外したときは白地・薄い枠・薄い文字。0 件は押せない（総点検 B-2） */
+.panel-list .filters button { height: 24px; font-size: var(--fs-xs); background: var(--surface); border-color: var(--border); color: var(--text-subtle); }
+.panel-list .filters button.active { background: var(--sel-bg); border-color: var(--sel-border); color: var(--text); }
+.panel-list .filters button:disabled { color: var(--text-disabled); background: var(--surface); border-color: var(--border); }
 .panel-list .filters button.error svg { color: var(--error); }
 .panel-list .filters button.warning svg { color: var(--warning); }
 .panel-list .filters button.info svg { color: var(--info); }
@@ -502,7 +508,7 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
   box-shadow: 0 1px 2px var(--shadow-color, rgba(0, 0, 0, 0.15));
 }
 .rb-tab .rb-keytip { bottom: -4px; }
-.rb-ctl.small .rb-keytip { left: 2px; bottom: -3px; transform: none; font-size: 9px; line-height: 11px; }
+.rb-ctl.small .rb-keytip { left: 2px; bottom: -3px; transform: none; font-size: var(--fs-2xs); line-height: 12px; }
 .rb-keytip.auto { color: var(--text-subtle); font-weight: 400; border-style: dashed; background: var(--placeholder-bg); }
 .rb-keytip.builtin { color: var(--text-subtle); }
 .rb-keytip.dup { border-color: var(--error); background: var(--error); color: var(--on-error); }
@@ -619,3 +625,19 @@ input.invalid, input[aria-invalid="true"] { border-color: var(--error); box-shad
 }
 .insp-label { padding-top: 0; justify-content: center; min-height: var(--ctl-h-sm); }
 .insp-row.has-mode .insp-bool button { font-size: var(--fs-2xs); }
+
+/* ---- ハイコントラスト（Windows のコントラストテーマ。総点検 G-14） ----
+ * forced-colors では、地の色（--sel-bg）と内側の影（box-shadow）が消える。選んでいるものは outline（システムの色 Highlight）で見せる。
+ * 実機のコントラストテーマでの見え方は未確認（Windows の設定で確かめる必要がある） */
+@media (forced-colors: active) {
+  .tree-row.selected, .tree-row.multi-selected, .catalog-item.selected, .history-row.current, .menu-item.active, .ctx-item:focus, .ctx-item:focus-visible, .segmented button.active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .rb-ctl.selected, .rb-tab.selected, .rb-group.selected, .ctx-card.selected, .bs-item.selected, .bs-group.selected, .bs-category.selected, .bs-column.selected { outline: 2px solid Highlight; outline-offset: -2px; }
+  .multi-selected { outline: 2px dashed Highlight; outline-offset: -2px; }
+  .modal, .toast, .menu-popup, .ctx-menu, .command-palette { border: 1px solid CanvasText; }
+  .segmented, .segmented button + button { border-color: CanvasText; }
+  button:disabled { color: GrayText; border-color: GrayText; }
+}
+
+/* 何も選んでいないときのインスペクタ（総点検 I-4）。案内の下に、よく使う操作を縦に並べる */
+.insp-empty-card { margin: var(--sp-3); }
+.insp-quick { display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-1); width: 100%; max-width: 260px; margin-top: var(--sp-1); }

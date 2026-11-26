@@ -103,7 +103,7 @@
 
 /* ---- XML エディタ：構文エラーで同期が止まっているとき ---- */
 .xml-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
-.xml-status-msg { flex: 1 1 24ch; min-width: 0; }
+.xml-status-msg { flex: 1 1 24ch; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xml-status-actions { display: inline-flex; gap: var(--sp-2); flex-shrink: 0; }
 .xml-status-actions button[hidden] { display: none; }
 /* 画面の更新は止まっているので、ほかのペインは触れそうに見えないよう薄くする（操作自体は各所で断られる） */
