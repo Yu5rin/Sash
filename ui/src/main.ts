@@ -56,6 +56,7 @@ import { installTextFieldMenu } from './shell/textMenu';
 import { changePreview, currentPreview, fitExcelToPreview, SCALE_CHOICES, WIDTH_CHOICES, widthChoiceLabel } from './shell/previewCommands';
 import { openDistributionCheck } from './dialogs/distributionDialog';
 import { startRecovery } from './recovery';
+import { compareWithOtherBook, exportCustomUiXml, importFromOtherBook } from './importFlow';
 import { openHistoryDialog } from './dialogs/historyDialog';
 import type { CheckItem } from './distributionCheck';
 import { controlRows, toCsv, toTsv } from './controlList';
@@ -264,6 +265,8 @@ function commands(): AppCommand[] {
     { id: 'file.backup', group: G.file, title: t('バックアップから復元…'), keywords: 'backup restore 戻す', enabled: () => has() && idle() && hasFile(), run: () => void openBackupDialog() },
     { id: 'file.export', group: G.file, title: t('.sash.json として書き出す…'), keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
     { id: 'file.import', group: G.file, title: t('.sash.json を読み込む…'), keywords: 'import json', enabled: has, run: importSashFile },
+    { id: 'file.importBook', group: G.file, title: t('別のブックから取り込む…'), keywords: 'import other workbook merge copy tab group 取り込み 流用 引き継ぎ 別のブック', enabled: () => has() && idle(), run: () => void openOnce('importBookRead', importFromOtherBook) },
+    { id: 'file.exportXml', group: G.file, title: t('customUI の XML を書き出す…'), keywords: 'export xml customui 書き出し 他ツール', enabled: has, run: () => void exportCustomUiXml() },
     { id: 'file.exportControls', group: G.file, title: t('コントロール一覧を CSV で書き出す…'), keywords: 'export csv controls list 一覧 書き出し', enabled: has, run: () => void exportControlList() },
     { id: 'file.copyControls', group: G.file, title: t('コントロール一覧をコピー（Excel に貼り付け用）'), keywords: 'copy tsv controls list 一覧 クリップボード', enabled: has, run: copyControlList },
     { id: 'file.sample', group: G.file, title: t('サンプルを開く'), keywords: 'sample example サンプル 試す', enabled: idle, run: () => void openSample() },
@@ -330,6 +333,7 @@ function commands(): AppCommand[] {
     { id: 'vba.reveal', group: 'VBA', title: t('選択中のコントロールのコールバックを VBE で表示'), keywords: 'vbe vba open procedure 開く', enabled: () => has() && revealableCallback() !== null, run: () => { const n = revealableCallback(); if (n) void revealInVbe(n); } },
     { id: 'tools.replaceIds', group: G.tools, title: t('ID の一括置換…'), keywords: 'id rename replace prefix 置換', enabled: has, run: () => openIdReplaceDialog() },
     { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
+    { id: 'tools.compareBook', group: G.tools, title: t('別のブックと比べる…'), keywords: 'diff compare other workbook 比較 前任者 引き継ぎ', enabled: has, run: () => void openOnce('compareBookRead', compareWithOtherBook) },
     { id: 'vba.refresh', group: 'VBA', title: t('VBA を再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
     { id: 'vba.assign', group: 'VBA', title: t('既存のマクロを選んで割り当てる…'), keywords: 'assign macro button onaction existing マクロ 割り当て ボタン 呼び出し', enabled: () => has() && assignMacroDisabledReason() === null, run: () => { const el = app.store?.selectedElement ?? null; const attr = assignableAttr(el); if (el && attr) void runAssignMacro(el, attr); } },
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
@@ -548,6 +552,8 @@ const MENUS: MenuDef[] = [
       cmd('file.backup', undefined, { mnemonic: 'B', hint: app.session && !hasFile() ? t('サンプルにはバックアップがありません') : undefined }),
       cmd('file.export'),
       cmd('file.import'),
+      cmd('file.importBook', undefined, { mnemonic: 'M' }),
+      cmd('file.exportXml', undefined, { mnemonic: 'P' }),
       {
         label: t('コントロール一覧'), items: () => [
           cmd('file.exportControls', t('CSV ファイルに書き出す…')),
@@ -672,6 +678,7 @@ const MENUS: MenuDef[] = [
         hint: sampleHint() ?? (app.info.excelInstalled ? undefined : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)')),
       }),
       cmd('tools.diff', undefined, { mnemonic: 'D' }),
+      cmd('tools.compareBook', undefined, { mnemonic: 'B' }),
       cmd('tools.distCheck', undefined, { mnemonic: 'C' }),
       SEP,
       {

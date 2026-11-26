@@ -11,6 +11,9 @@ const FILES = [
   '../src/dialogs/recoveryDialog.ts',
   '../src/dialogs/externalChangeDialog.ts',
   '../src/shell/externalWatch.ts',
+  '../src/importFlow.ts',
+  '../src/dialogs/importDialog.ts',
+  '../src/ribbonImport.ts',
 ];
 
 const sources = import.meta.glob(['../src/**/*.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
