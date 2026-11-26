@@ -24,6 +24,8 @@ import { JA_KEYWORDS, normalize } from './iconWords';
 interface Entry {
   /** 正規化した見出し（ひらがな→カタカナ、長音なし）。 */
   key: string;
+  /** 長音（ー）を残した正規化の見出し。「ビル」と「ビール」のように、長音だけが違う別の語を区別するため。 */
+  raw: string;
   /** 英語の言葉。_ は - にそろえてある。ハイフンつきは「名前の中でその順に並ぶ単語」を表す。 */
   terms: readonly string[];
   /** 利用者に見せる見出し（概念の最初の言葉）。 */
@@ -65,10 +67,10 @@ function dictionary(): readonly Entry[] {
     const ks = keys.split('/');
     const ts = terms.split(' ').filter(Boolean).map(normTerm);
     const category = FOOD_CONCEPTS.has(ks[0]!) ? 'food' : undefined;
-    for (const k of ks) list.push({ key: stripLong(normalize(k)), terms: ts, display: ks[0]!, ...(category ? { category } : {}) });
+    for (const k of ks) list.push({ key: stripLong(normalize(k)), raw: normalize(k), terms: ts, display: ks[0]!, ...(category ? { category } : {}) });
   }
   // 昔からある小さな辞書（JA_KEYWORDS）も使う。新しい辞書にない言葉を取りこぼさないため
-  for (const [k, v] of Object.entries(JA_KEYWORDS)) list.push({ key: stripLong(normalize(k)), terms: v.map(normTerm), display: k });
+  for (const [k, v] of Object.entries(JA_KEYWORDS)) list.push({ key: stripLong(normalize(k)), raw: normalize(k), terms: v.map(normTerm), display: k });
   entries = list;
   return list;
 }
@@ -125,6 +127,8 @@ export function expandToken(token: string): ExpandedTerm[] {
   }
   // 見出しにそのまま一致するものがあれば、それだけを使う（「ログイン」で、前方が同じ「ログ」＝履歴まで広がらないように）
   if (hits.some((h) => h.quality === 1)) hits.splice(0, hits.length, ...hits.filter((h) => h.quality === 1));
+  // 長音まで同じ見出しがあれば、それだけを使う（「ビル」で建物、「ビール」で飲み物。長音を除くと同じ語になるため）。なければ長音の違いは無視する（フォルダー／フォルダ）
+  if (hits.some((h) => h.entry.raw === token)) hits.splice(0, hits.length, ...hits.filter((h) => h.entry.raw === token));
   // 入力が短いと前方一致が大量に当たるので、確かなもの・短い（近い）ものから最大 8 つの見出しだけ使う
   hits.sort((a, b) => b.quality - a.quality || a.entry.key.length - b.entry.key.length);
   for (const { entry, quality } of hits.slice(0, 8)) {
@@ -359,6 +363,15 @@ export function splitQuery(query: string): { raw: string; norm: string }[] {
   // Q&A は QA（品質保証）とは別の語。drag&drop・black&white のように、長い語をはさむ & は今までどおり分ける
   const text = query.normalize('NFKC').replace(/(?<![A-Za-z])([A-Za-z])&([A-Za-z])(?![A-Za-z])/g, '$1and$2');
   for (const chunk of text.split(/[\s、。,，・/／]+/)) {
+    // 英数字と日本語が続いた 1 語（Web会議・Excel出力）が、辞書の見出しそのものなら、分けずに 1 語として探す
+    if (/[A-Za-z0-9]/.test(chunk) && /[^\x00-\x7f]/.test(chunk)) {
+      const whole = normalize(chunk);
+      const wk = stripLong(whole);
+      if (whole && dictionary().some((e) => e.key === wk)) {
+        out.push({ raw: chunk, norm: whole });
+        continue;
+      }
+    }
     for (const part of chunk.match(/[A-Za-z0-9_-]+|[^A-Za-z0-9_\-]+/g) ?? []) {
       const norm = normalize(part);
       if (norm) out.push({ raw: part, norm });

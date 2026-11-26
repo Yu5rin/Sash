@@ -73,7 +73,7 @@ describe('ツールチップの個数（低 7）', () => {
       sash: Object.keys((sashData as { icons: object }).icons).length,
     });
     expect(fluentIcons.length + tablerIcons.length + lucideIcons.length + sashIcons.length).toBe(allIcons.length);
-    expect(approxIconCount()).toBe('8,200');
+    expect(approxIconCount()).toBe('8,300');
     expect(ICON_SET_NAMES).toBe('Fluent・Tabler・Lucide・Sash');
   });
 });
