@@ -24,7 +24,7 @@ public readonly record struct ScreenArea(int X, int Y, int Width, int Height)
 
 /// <summary>
 /// 起動時のウィンドウの位置と大きさを決める（総点検 W-1）。
-/// 保存値が今の画面に十分掛かっていれば使い、画面が変わって外れていたら既定にする。
+/// 保存値のタイトルバーの帯が今の画面（作業領域）に入っていれば使い（画面より大きければ収まるよう丸める）、外れていたら既定にする。
 /// 既定は作業領域の 90%（上限 1440×900）で中央。作業領域の幅が 1440 未満の小さな画面では最大化で開く。
 /// </summary>
 public static class WindowPlacement
@@ -37,14 +37,30 @@ public static class WindowPlacement
 
     public const int MinHeight = 600;
 
-    /// <summary>保存した位置が「画面に掛かっている」とみなす、横・縦それぞれの最小の重なり（px）。</summary>
+    /// <summary>保存した位置が「画面に掛かっている」とみなす、横の最小の重なり（px）。</summary>
     public const int MinVisible = 100;
+
+    /// <summary>タイトルバーの帯の高さ（上端から。ここが作業領域に入っていないと、窓をつかんで動かせない）。</summary>
+    public const int TitleBand = 30;
+
+    /// <summary>タイトルバーの帯が、作業領域の中に最低限これだけ（縦）入っていること。</summary>
+    public const int MinTitleVisible = 20;
 
     public static WindowBounds Resolve(WindowBounds? saved, IReadOnlyList<ScreenArea> areas, ScreenArea primary)
     {
-        if (saved is { Width: >= MinWidth, Height: >= MinHeight } s && areas.Any(a => Overlaps(s, a)))
+        if (saved is { Width: >= MinWidth, Height: >= MinHeight } s)
         {
-            return s;
+            // タイトルバーの帯がどれかの作業領域に入る位置だけを採用する（窓を掴めなくなる位置、画面の外に出た位置を避ける）。
+            // 複数あるときは、帯がいちばん多く入る作業領域を基準にする
+            var area = areas
+                .Where(a => TitleBandOverlap(s, a) is { } o && o.X >= MinVisible && o.Y >= MinTitleVisible)
+                .OrderByDescending(a => TitleBandOverlap(s, a)!.Value.X)
+                .Cast<ScreenArea?>()
+                .FirstOrDefault();
+            if (area is { } a2)
+            {
+                return Fit(s, a2);
+            }
         }
 
         var width = Math.Min(DefaultWidth, primary.Width * 9 / 10);
@@ -62,10 +78,24 @@ public static class WindowPlacement
         };
     }
 
-    private static bool Overlaps(WindowBounds b, ScreenArea a)
+    /// <summary>画面より大きい保存値は、作業領域に収まるよう丸める（横の位置は、幅を丸めたときだけ動かす。縦は作業領域に収める）。</summary>
+    private static WindowBounds Fit(WindowBounds b, ScreenArea a)
+    {
+        var width = Math.Min(b.Width, a.Width);
+        var height = Math.Min(b.Height, a.Height);
+        // 画面が MinimumSize より小さいときまでは割り込まない（その場合は作業領域いっぱい）
+        var x = b.Width > a.Width ? Math.Clamp(b.X, a.X, a.Right - width) : b.X;
+        // 下端が作業領域からはみ出す（ボタンやステータスが画面の外に出る）ときは上へ寄せる。上端は作業領域より上に出さない
+        var y = Math.Clamp(b.Y, a.Y, Math.Max(a.Y, a.Bottom - height));
+
+        return width == b.Width && height == b.Height && x == b.X && y == b.Y ? b : b with { X = x, Y = y, Width = width, Height = height };
+    }
+
+    /// <summary>タイトルバーの帯（上端から <see cref="TitleBand"/>）と作業領域の重なり（横・縦）。重ならなければ null。</summary>
+    private static (int X, int Y)? TitleBandOverlap(WindowBounds b, ScreenArea a)
     {
         var overlapX = Math.Min(b.X + b.Width, a.Right) - Math.Max(b.X, a.X);
-        var overlapY = Math.Min(b.Y + b.Height, a.Bottom) - Math.Max(b.Y, a.Y);
-        return overlapX >= MinVisible && overlapY >= MinVisible;
+        var overlapY = Math.Min(b.Y + TitleBand, a.Bottom) - Math.Max(b.Y, a.Y);
+        return overlapX > 0 && overlapY > 0 ? (overlapX, overlapY) : null;
     }
 }

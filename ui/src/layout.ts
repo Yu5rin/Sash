@@ -189,18 +189,32 @@ export interface LoadedLayout {
   bottomAuto: boolean;
 }
 
+/** 保存してあった大きさを、使える範囲に丸める。畳む前の大きさ（last）は 0 にせず、下限まで持ち上げる。 */
+function clampSaved(sizes: Sizes, mayCollapse: boolean): Sizes {
+  const out = { ...sizes };
+  for (const k of Object.keys(out) as PaneKey[]) {
+    const v = out[k];
+    if (v === 0 && mayCollapse) continue;
+    if (mayCollapse && v < COLLAPSE_BELOW) out[k] = 0;
+    else if (v < PANE_MIN[k]) out[k] = v === 0 ? DEFAULT_SIZES[k] : PANE_MIN[k];
+  }
+  return out;
+}
+
 /** 保存された文字列から読む。壊れた値・範囲外の値は既定や範囲に丸める（テストのため文字列を受ける）。 */
 export function parseLayout(text: string | null): LoadedLayout {
   try {
     const raw = JSON.parse(text ?? '{}') as Partial<Sizes> & { palette?: unknown; last?: Partial<Sizes> & { palette?: unknown } };
     const pick = (o: Partial<Sizes> | undefined): Partial<Sizes> =>
       Object.fromEntries(Object.entries(o ?? {}).filter(([k, v]) => k in DEFAULT_SIZES && typeof v === 'number' && Number.isFinite(v) && v >= 0)) as Partial<Sizes>;
-    const sizes = { ...DEFAULT_SIZES, ...pick(raw) };
+    // 旧版で保存した、下限（PANE_MIN）に満たない値は、いまの操作と同じ規則に丸める：畳むしきい値未満は畳む（0）、それ以上は下限
+    // （そのまま使うと、24〜47px のような使えない細さのペインで出てしまう）
+    const sizes = clampSaved({ ...DEFAULT_SIZES, ...pick(raw) }, true);
     // 保存に bottomAuto がない古い版の利用者は、下部パネルの大きさを既定から変えていれば「自分で変えた」とみなして自動にしない
     const rawAuto = (raw as { bottomAuto?: unknown }).bottomAuto;
     return {
       sizes,
-      last: { ...DEFAULT_SIZES, ...pick(raw.last) },
+      last: clampSaved({ ...DEFAULT_SIZES, ...pick(raw.last) }, false),
       palette: sanitizeRatio(raw.palette),
       lastPalette: sanitizeLastRatio(raw.last?.palette),
       bottomAuto: typeof rawAuto === 'boolean' ? rawAuto : sizes.bottom === DEFAULT_SIZES.bottom,

@@ -2,6 +2,7 @@
 // 操作はすべて「コマンド」として 1 か所に定義し、メニュー・ツールバー・コマンドパレット・ショートカット一覧は
 // そこから作る（どこから呼んでも同じ名前・同じショートカット・同じ有効条件になるように）。
 
+import './boot'; // 最初に評価される（想定外の例外の受け皿。後ろの import の評価中の失敗も拾うため）
 import './styles.css';
 import { app } from './app';
 import { invoke, isHosted, onHostEvent, sendDroppedFiles } from './bridge';
@@ -38,6 +39,7 @@ import { probeInsert, setEditRefusedHandler } from './shell/compat';
 import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
 import { describeElement } from './elementHelp';
 import { inTextField, runEditCommand } from './shell/editCommands';
+import { createPollGate } from './shell/pollGate';
 import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
 import { mountMenubar, type MenuDef, type MenuItemDef } from './shell/menubar';
@@ -46,7 +48,7 @@ import { openSettings } from './shell/settingsDialog';
 import { matchShortcut, splitPath } from './shell/text';
 import { applyTheme, setEditorThemeHandler, updateSettings } from './shell/theme';
 import { notify, toast } from './shell/toast';
-import { installErrorReporting, reportUnexpected } from './shell/errorReport';
+import { reportUnexpected } from './shell/errorReport';
 import { installTextFieldMenu } from './shell/textMenu';
 import { changePreview, currentPreview, fitExcelToPreview, SCALE_CHOICES, WIDTH_CHOICES, widthChoiceLabel } from './shell/previewCommands';
 import { openDistributionCheck } from './dialogs/distributionDialog';
@@ -57,8 +59,7 @@ import { clipCount, copyText, moveDisabledReason, moveSelected, moveToNewGroupSe
 import { canRevealInVbe, revealInVbe, runMacroDisabledReason, runMacroFor, runSelectedMacro } from './vbaReveal';
 import { callbacksAt } from './vba';
 
-// 想定外の例外を握りつぶさない（製品版は開発者ツールが使えない）。ほかの初期化より先に登録する
-installErrorReporting();
+// 想定外の例外の受け皿は、最初に評価される ./boot で登録している（この本文は、すべての import の評価が終わってから動くため）
 // 入力欄の右クリック（切り取り・コピー・貼り付け）。製品版は WebView2 の既定のメニューを切っている
 installTextFieldMenu();
 
@@ -274,7 +275,8 @@ function commands(): AppCommand[] {
     { id: 'edit.sizeLarge', group: G.edit, title: countTitle(t('大きく（size=large）'), sizeTargets().length), keywords: 'size large 大きさ 一括', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('large', 'other') },
     { id: 'edit.sizeNormal', group: G.edit, title: countTitle(t('小さく（size=normal）'), sizeTargets().length), keywords: 'size normal small 大きさ 一括 幅', enabled: () => sizeTargets().length > 0, run: () => setSizeSelected('normal', 'other') },
     { id: 'edit.format', group: G.edit, title: t('XML を整形'), shortcut: 'Shift+Alt+F', keywords: 'format', enabled: () => !!app.store && app.store.syncError === null, run: () => app.store?.format() },
-    // キャンバスとツリーの F2 は自分で受ける。それ以外の場所（インスペクタなど）からは、キャンバスで名前の入力に入る
+    // F2 はキャンバスとツリーが自分で受ける。入力欄（インスペクタなど）の中では奪わない（inText を付けない。入力欄の中の F2 は文字の編集のためのもの）。
+    // 入力欄の外の、パレットなど（フォーカスが要素にない所）の F2 と、メニュー・コマンドパレットからは、キャンバスで名前の入力に入る
     { id: 'edit.rename', group: G.edit, title: t('名前を変える'), shortcut: 'F2', keywords: 'rename label ラベル 名前 編集', enabled: hasSel, run: () => { if (!startRenameOf(app.store?.selection)) focusPane('inspector'); } },
     { id: 'edit.palette', group: G.help, title: t('コマンドパレット'), shortcut: 'Ctrl+K', keywords: 'command', inText: true, run: () => openCommandPalette(paletteCommands) },
 
@@ -800,12 +802,15 @@ async function refreshExcelChip(): Promise<void> {
   let next: ExcelLink;
   if (!app.info.excelInstalled) next = 'none';
   else {
-    // 同じファイルで状態が変わっていなければ、前の値のまま取り直す（印のちらつきを避ける）
     const books = await invoke('excel.openWorkbooks').catch(() => null);
     if (mine !== excelChipRequest) return;
+    // 問い合わせに失敗したときは前の表示のままにする（取れなかっただけで「開いていません」と言い切らない）。
+    // 前の表示がないときは、出さずにおく
+    if (books === null) return;
     const here = s.path.toLowerCase();
-    next = books === null ? 'closed' : books.some((b) => b.fullPath.toLowerCase() === here) ? 'open' : 'closed';
+    next = books.some((b) => b.fullPath.toLowerCase() === here) ? 'open' : 'closed';
   }
+  // 同じファイルで状態が変わっていなければ、前の値のまま取り直す（印のちらつきを避ける）
   if (excelLink === next && excelLinkPath === s.path && !chip.hidden) return;
   excelLink = next;
   excelLinkPath = s.path;
@@ -814,13 +819,17 @@ async function refreshExcelChip(): Promise<void> {
   chip.textContent = next === 'none' ? t('Excel：未検出') : next === 'open' ? t('Excel：このブックを開いています') : t('Excel：開いていません');
   chip.title = next === 'none' ? t('Excel が見つからないため、反映はファイルへの書き込みだけになります') : next === 'open' ? t('F5 で、Excel で開いているこのブックに反映します') : t('F5 でファイルに書き込みます（Excel では開かれていません）');
 }
+// 問い合わせは重ねず、窓に戻るだけの取り直しは 30 秒に 1 回まで、保存・反映の最中は送らない。
+// Excel への問い合わせは COM の待ち行列を使うので、focus のたびに投げると F5 が後ろで待たされる
+const EXCEL_CHIP_MIN_INTERVAL_MS = 30_000;
+const pollExcelChip = createPollGate(refreshExcelChip, { minIntervalMs: EXCEL_CHIP_MIN_INTERVAL_MS, busy: () => busyState() !== null });
 // 窓に戻ったとき（Excel で開いたり閉じたりして戻ってきたとき）に取り直す
-window.addEventListener('focus', () => void refreshExcelChip());
-// ファイルを開いた・閉じたとき、反映（Excel でブックを開き直す）が終わったときにも取り直す。
+window.addEventListener('focus', () => void pollExcelChip());
+// ファイルを開いた・閉じたとき、反映（Excel でブックを開き直す）が終わったときは、状態が変わったので間引かずに取り直す。
 // 入力のたびに呼ばれる updateChrome からは呼ばない（Excel への問い合わせが重いため）
-app.on('session', () => void refreshExcelChip());
+app.on('session', () => void pollExcelChip(true));
 onBusyChange(() => {
-  if (busyState() === null) void refreshExcelChip();
+  if (busyState() === null) void pollExcelChip(true);
 });
 
 // ツールバーは ←→ で移る（WAI-ARIA の toolbar と同じ。Tab ではツールバー全体を 1 つとして飛ばせる）

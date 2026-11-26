@@ -4,7 +4,7 @@
  * ■ デザイントークン一覧（ほかのビュー・styles-views.css もこの名前を使うこと）
  *   面      --bg（窓の地） --surface（ペイン・ダイアログ） --surface-2（一段沈んだ面） --surface-3（さらに沈んだ面・押下）
  *   線      --border（区切り線・カードの枠） --stroke-control（ボタン・切り替え・印・入力欄の周りの枠）
- *           --stroke-input-bottom（入力欄の下の線。背景に対して 3:1 以上） --border-strong（点線の枠・畳んだ帯のつまみ・チェックボックスの枠だけ）
+ *           --stroke-input-bottom（入力欄の下の線。背景に対して 3:1 以上） --border-strong（点線の枠・畳んだ帯のつまみ・チェックボックスの枠・切り替え（.segmented）の外枠と区切り。どれも 3:1 以上が要る所）
  *   文字    --text（本文） --text-subtle（補足の文字。背景に対して 4.5:1 以上） --text-disabled
  *   強調    --accent / --excel-green（反映・保存・挿入の主ボタンと、Excel の再現の中のタブの下線だけ） --accent-hover --accent-soft --on-accent（緑の上の文字）
  *   選択    --select（選択・フォーカス・切り替えの「入」・下部タブの下線） --sel-bg（選択した行・要素の地） --sel-border（選択の枠） --hover-bg（マウスを乗せたとき） --pressed-bg
@@ -104,8 +104,8 @@
   --shadow-modal: 0 32px 64px var(--shadow-color-strong), 0 0 8px var(--shadow-color-edge);
   --shadow-toast: 0 8px 16px var(--shadow-color), 0 0 2px var(--shadow-color-soft);
   --backdrop: light-dark(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.6));
-  --scrollbar-thumb: light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.25));
-  --scrollbar-thumb-hover: light-dark(rgba(0, 0, 0, 0.4), rgba(255, 255, 255, 0.4));
+  --scrollbar-thumb: light-dark(rgba(0, 0, 0, 0.5), rgba(255, 255, 255, 0.5)); /* 地に対して非テキスト 3:1 以上（ライト 3.8〜、ダーク 4.0〜。見直し 低13） */
+  --scrollbar-thumb-hover: light-dark(rgba(0, 0, 0, 0.65), rgba(255, 255, 255, 0.7));
 
   /* 従来の名前（既存のビューが使っている） */
   --text-muted: var(--text-subtle);
@@ -740,9 +740,9 @@ kbd { font-family: inherit; font-size: var(--fs-2xs); color: var(--text-subtle);
 .mode-switch { font-size: var(--fs-2xs); padding: 2px 5px; margin-top: 2px; justify-content: center; background: transparent; border-color: transparent; color: var(--placeholder); }
 .insp-row:hover .mode-switch { border-color: var(--border); color: var(--text-muted); }
 .mode-switch.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-.segmented { display: inline-flex; border: 1px solid var(--stroke-control); border-radius: var(--radius-sm); overflow: hidden; }
+.segmented { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; }
 .segmented button { border: none; border-radius: 0; padding: 2px 8px; font-size: var(--fs-xs); background: var(--surface); }
-.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button + button { border-left: 1px solid var(--border-strong); }
 /* 切り替えの「入」は選択の青（地 --sel-bg・文字 --text・600）。緑は Excel に関わる主な操作だけ（総点検 S-3） */
 .segmented button.active { background: var(--sel-bg); color: var(--text); font-weight: 600; box-shadow: inset 0 0 0 1px var(--sel-border); }
 .segmented.wrap { flex-wrap: wrap; }

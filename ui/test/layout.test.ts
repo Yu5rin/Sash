@@ -1,6 +1,28 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CHROME_HEIGHT, DEFAULT_PALETTE_RATIO, DEFAULT_SIZES, MIN_CENTER_WIDTH, MIN_XML_HEIGHT, PANE_MIN, fitSizes, maxSizeFor, mountLayout, paletteHeightOf, parseLayout, ratioFromHeight, sanitizeLastRatio, sanitizeRatio } from '../src/layout';
 
+describe('旧版で保存した下限未満の値（見直し 中6）', () => {
+  it('畳むしきい値（48px）未満は畳み、それ以上で下限未満なら下限にする', () => {
+    const { sizes } = parseLayout('{"left":24,"right":47,"top":50,"bottom":100}');
+    expect(sizes.left).toBe(0);
+    expect(sizes.right).toBe(0);
+    expect(sizes.top).toBe(PANE_MIN.top);
+    expect(sizes.bottom).toBe(100);
+    expect(parseLayout('{"left":120,"right":259}').sizes).toMatchObject({ left: PANE_MIN.left, right: PANE_MIN.right });
+  });
+
+  it('0（畳んだ状態）はそのまま。畳む前の大きさ（last）は 0 にせず下限以上にする', () => {
+    const l = parseLayout('{"left":0,"last":{"left":0,"right":30}}');
+    expect(l.sizes.left).toBe(0);
+    expect(l.last.left).toBe(DEFAULT_SIZES.left);
+    expect(l.last.right).toBe(PANE_MIN.right);
+  });
+
+  it('下限以上の値は変えない', () => {
+    expect(parseLayout('{"left":300,"right":400,"top":200,"bottom":96}').sizes).toEqual({ left: 300, right: 400, top: 200, bottom: 96 });
+  });
+});
+
 describe('パレットの比率の読み込み', () => {
   it('保存がなければ既定の比率になる', () => {
     expect(parseLayout(null).palette).toBe(DEFAULT_PALETTE_RATIO);

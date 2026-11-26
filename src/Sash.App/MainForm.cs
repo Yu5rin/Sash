@@ -26,6 +26,9 @@ internal sealed class MainForm : Form
     private readonly string? _updatedFrom;
     private readonly SettingsStore _settings;
     private bool _closeConfirmed;
+
+    /// <summary>最小化する前のウィンドウの状態。最小化したまま閉じても、最大化だったことを覚えておくため。</summary>
+    private FormWindowState _stateBeforeMinimize = FormWindowState.Normal;
     private bool _uiReady;
     private bool _closePending;
 
@@ -62,6 +65,13 @@ internal sealed class MainForm : Form
         MinimumSize = new Size(960, 600);
         _settings = settings;
         RestoreWindowPlacement(settings.Load().Window);
+        Resize += (_, _) =>
+        {
+            if (WindowState != FormWindowState.Minimized)
+            {
+                _stateBeforeMinimize = WindowState;
+            }
+        };
         Controls.Add(_webView);
 
         Load += async (_, _) => await InitializeWebViewAsync();
@@ -101,7 +111,8 @@ internal sealed class MainForm : Form
     {
         try
         {
-            var maximized = WindowState == FormWindowState.Maximized;
+            // 最小化したまま閉じたときは WindowState が Minimized なので、最小化する前の状態（最大化だったか）を使う
+            var maximized = WindowState == FormWindowState.Maximized || (WindowState == FormWindowState.Minimized && _stateBeforeMinimize == FormWindowState.Maximized);
             var r = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
             _settings.Update(s => s with { Window = new WindowBounds { X = r.X, Y = r.Y, Width = r.Width, Height = r.Height, Maximized = maximized } });
         }
@@ -255,6 +266,15 @@ internal sealed class MainForm : Form
         core.Settings.IsPasswordAutosaveEnabled = false;
         core.Settings.AreBrowserAcceleratorKeysEnabled = false; // F5 の再読み込みなどを無効にし、アプリのショートカットに使う
         core.WebMessageReceived += OnWebMessageReceived;
+        // 入力欄の右クリック［貼り付け］は navigator.clipboard.readText() を使う。WebView2 の既定では確認の吹き出しが出るので、
+        // 自分の画面（UiAssets.Origin、開発時は Vite のオリジン）からのクリップボードの読み取りだけ、確認なしで許す。ほかの権限は既定のまま
+        core.PermissionRequested += (_, e) =>
+        {
+            if (e.PermissionKind == CoreWebView2PermissionKind.ClipboardRead && IsOwnOrigin(e.Uri))
+            {
+                e.State = CoreWebView2PermissionState.Allow;
+            }
+        };
         core.NewWindowRequested += (_, e) => e.Handled = true;
         core.NavigationStarting += OnNavigationStarting;
         core.ProcessFailed += OnProcessFailed;
@@ -270,6 +290,18 @@ internal sealed class MainForm : Form
         core.AddWebResourceRequestedFilter($"{UiAssets.Origin}/*", CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += OnWebResourceRequested;
         core.Navigate(_startUrl);
+    }
+
+    /// <summary>権限の要求の元が、自分の画面のオリジンか。</summary>
+    private bool IsOwnOrigin(string uri)
+    {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var u))
+        {
+            return false;
+        }
+
+        var own = _allowedOrigin;
+        return u.Scheme == own.Scheme && string.Equals(u.Host, own.Host, StringComparison.OrdinalIgnoreCase) && u.Port == own.Port;
     }
 
     private void FailToStart(string message)

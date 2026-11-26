@@ -49,6 +49,59 @@ public class WindowPlacementTests
     }
 
     [Fact]
+    public void タイトルバーが画面の上に出ている保存値は使わない()
+    {
+        // 窓の大半は画面に掛かっているが、タイトルバーの帯（上端から 30px）が作業領域の外。掴めなくなる
+        var saved = new WindowBounds { X = 100, Y = -200, Width = 1200, Height = 800 };
+
+        var b = WindowPlacement.Resolve(saved, [Big], Big);
+
+        Assert.NotEqual(saved, b);
+        Assert.True(b.Y >= Big.Y);
+    }
+
+    [Fact]
+    public void タイトルバーが画面の下に出ている保存値は使わない()
+    {
+        var saved = new WindowBounds { X = 100, Y = 1030, Width = 1200, Height = 800 };
+
+        Assert.NotEqual(saved, WindowPlacement.Resolve(saved, [Big], Big));
+    }
+
+    [Fact]
+    public void 画面より大きい保存値は_作業領域に収まるよう丸める()
+    {
+        // 大きな画面で保存した 1900x1000 を、1366x728 の画面で開く
+        var saved = new WindowBounds { X = 50, Y = 20, Width = 1900, Height = 1000, Maximized = true };
+
+        var b = WindowPlacement.Resolve(saved, [Small], Small);
+
+        Assert.True(b.X >= Small.X && b.X + b.Width <= Small.Right);
+        Assert.True(b.Y >= Small.Y && b.Y + b.Height <= Small.Bottom);
+        Assert.True(b.Maximized);
+    }
+
+    [Fact]
+    public void 下端がはみ出す保存値は_上へ寄せる()
+    {
+        var saved = new WindowBounds { X = 100, Y = 600, Width = 1200, Height = 800 };
+
+        var b = WindowPlacement.Resolve(saved, [Big], Big);
+
+        Assert.Equal(Big.Bottom - 800, b.Y);
+        Assert.Equal(1200, b.Width);
+    }
+
+    [Fact]
+    public void 二枚目のモニターにタイトルバーがあれば_そのモニターに収める()
+    {
+        var second = new ScreenArea(1920, 0, 1366, 728);
+        var saved = new WindowBounds { X = 2000, Y = 10, Width = 1200, Height = 650 };
+
+        Assert.Equal(saved, WindowPlacement.Resolve(saved, [Big, second], Big));
+    }
+
+    [Fact]
     public void 端に100px未満しか掛からない保存値は使わない()
     {
         var saved = new WindowBounds { X = 1900, Y = 100, Width = 1200, Height = 800 };

@@ -410,9 +410,13 @@ export function mountMenubar(host: HTMLElement, menus: readonly MenuDef[], opts:
           handled = false;
           break;
         default: {
+          const single = e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey;
+          // マウスで開いたメニューは、フォーカスがまだメニューバーのボタンにある。項目のアクセスキーが効くよう、開いているメニューへ渡す（見直し 低9）
+          if (single && openIndex === i && levels[0] && pressMnemonic(levels[0], 0, e.key)) break;
           // メニューバーにいるときは、Alt なしでもアクセスキーで開ける
           const idx = e.key.length === 1 && !e.ctrlKey && !e.metaKey ? menus.findIndex((m) => m.mnemonic.toLowerCase() === e.key.toLowerCase()) : -1;
           if (idx >= 0) openMenu(idx, 'first');
+          else if (single && openIndex === i && levels[0]) typeAhead(levels[0], e.key);
           else handled = false;
         }
       }

@@ -217,6 +217,18 @@ export async function save(): Promise<boolean> {
 let hintShown = false;
 
 /**
+ * 待つのをやめたあとで届いた反映の結果を知らせる。成功（applied・written）だけ緑にする。
+ * needsSave は反映されていないので、緑にせず、「保存して反映」のやり直しを案内する（確認の画面は、別の操作中かもしれないここでは出さない）。
+ */
+export function reportLateApply(res: ApplyResult): void {
+  if (res.status === 'needsSave') {
+    toast({ kind: 'warning', timeout: 0, message: t('反映されていません。Excel 側に未保存の変更があります。もう一度［Excel へ反映］を押して、「保存して反映」を選んでください') });
+    return;
+  }
+  toast({ kind: res.status === 'applied' || res.status === 'written' ? 'success' : 'warning', message: res.message });
+}
+
+/**
  * Excel への反映の呼び出し。15 秒を超えたら「Excel の応答を待っています」に変えて［待つのをやめる］を出す（総点検 W-5）。
  * やめても、ホストの処理は続く。結果が届いたら、そのときに知らせ、成功なら保存済みの印も付ける
  * （結果が届くまでは付けない。反映できたか分からないため）。
@@ -232,7 +244,7 @@ async function callApply(s: NonNullable<typeof app.session>, prepared: Prepared,
       }
       const res = outcome.value;
       if ((res.status === 'applied' || res.status === 'written' || res.status === 'blocked') && app.session === s) markAllSaved(prepared, s.path);
-      toast({ kind: res.status === 'blocked' ? 'warning' : 'success', message: res.message });
+      reportLateApply(res);
     },
   });
 }

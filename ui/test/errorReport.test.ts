@@ -43,3 +43,16 @@ describe('想定外の例外の受け皿（総点検 G-5）', () => {
     expect(list.some((x) => x.includes('非同期の失敗'))).toBe(true);
   });
 });
+
+const mainSources = import.meta.glob(['../src/main.ts', '../src/boot.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+
+describe('受け皿を最初に登録する（見直し 低10）', () => {
+  it('main.ts の最初の import が ./boot で、boot は installErrorReporting だけを呼ぶ', () => {
+    const main = mainSources['../src/main.ts']!;
+    const first = main.split('\n').find((l: string) => l.startsWith('import '));
+    expect(first).toMatch(/^import '\.\/boot';/);
+    expect(mainSources['../src/boot.ts']).toMatch(/^installErrorReporting\(\);$/m);
+    // main.ts の本文で二重に登録しない
+    expect(main).not.toMatch(/^installErrorReporting\(\)/m);
+  });
+});

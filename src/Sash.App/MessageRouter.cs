@@ -135,7 +135,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
         // 利用者向けに書いた文言を持つ例外（と、OS が利用者の言語で返す入出力の文言）だけをそのまま見せる。
         // それ以外（.NET の英語や内部の言い回しの文）は見せず、ログに残して案内する
-        if (ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException or PathTooLongException or IOException or OperationCanceledException)
+        // Sash.Core が利用者向けの文言を付けた ArgumentException・FormatException（UserErrors）も同じ扱い
+        if (UserErrors.IsUserFacing(ex) || ex is InvalidOperationException or FileNotFoundException or DirectoryNotFoundException or PathTooLongException or IOException or OperationCanceledException)
         {
             return ex.Message;
         }

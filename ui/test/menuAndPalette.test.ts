@@ -25,7 +25,10 @@ describe('メニュー項目のアクセスキー（総点検 G-4）', () => {
     mountMenubar(document.getElementById('menubar')!, menus);
   });
   beforeEach(() => vi.clearAllMocks());
-  afterEach(() => key(document.querySelector('.menu-popup') ?? document.body, 'Escape'));
+  afterEach(() => {
+    key(document.querySelector('.menu-popup') ?? document.body, 'Escape');
+    vi.clearAllMocks();
+  });
 
   const openFile = () => key(window, 'KeyF', { altKey: true, code: 'KeyF' } as KeyboardEventInit);
   const popup = () => document.querySelector('.menu-popup') as HTMLElement;
@@ -54,6 +57,16 @@ describe('メニュー項目のアクセスキー（総点検 G-4）', () => {
     openFile();
     key(popup(), 'd');
     expect(disabled).not.toHaveBeenCalled();
+  });
+
+  it('マウスで開いたあと（フォーカスがメニューバーのボタンにある）でも、アクセスキーが効く（見直し 低9）', () => {
+    const button = document.querySelector('.menubar-item') as HTMLElement;
+    button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    expect(popup()).not.toBeNull();
+    expect(document.activeElement).toBe(button);
+    key(button, 'a');
+    expect(saveAs).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.menu-popup')).toBeNull();
   });
 });
 

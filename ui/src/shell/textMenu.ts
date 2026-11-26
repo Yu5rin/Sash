@@ -26,22 +26,37 @@ function pasteFailed(): void {
   toast({ kind: 'info', message: t('貼り付けできませんでした。Ctrl+V で貼り付けられます') });
 }
 
+/** execCommand を試す。無い環境・拒否された環境では false（呼び出し側が代替を使う）。 */
+function tryExec(command: string, value?: string): boolean {
+  try {
+    return typeof document.execCommand === 'function' && document.execCommand(command, false, value);
+  } catch {
+    return false;
+  }
+}
+
 /** 入力欄での切り取り・コピー・貼り付け。メニューを閉じてフォーカスが入力欄に戻ったあとに呼ぶ。 */
 export async function runTextFieldCommand(el: HTMLInputElement | HTMLTextAreaElement, command: 'cut' | 'copy' | 'paste' | 'selectAll'): Promise<void> {
+  try {
+    await runTextFieldCommandCore(el, command);
+  } catch {
+    // 想定外の失敗を「予期しないエラー」にしない。Ctrl+V などでできることを案内する
+    pasteFailed();
+  }
+}
+
+async function runTextFieldCommandCore(el: HTMLInputElement | HTMLTextAreaElement, command: 'cut' | 'copy' | 'paste' | 'selectAll'): Promise<void> {
   el.focus();
   if (command === 'selectAll') {
     el.select();
     return;
   }
   if (command !== 'paste') {
-    if (!document.execCommand(command)) {
+    if (!tryExec(command)) {
       // execCommand が使えない環境では、クリップボードへ直接書く
       const text = selectedText(el);
       if (text) await navigator.clipboard.writeText(text).catch(() => undefined);
-      if (command === 'cut' && text) {
-        el.setRangeText('', el.selectionStart ?? 0, el.selectionEnd ?? 0, 'end');
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-      }
+      if (command === 'cut' && text) insertIntoField(el, '');
     }
     return;
   }
@@ -52,8 +67,27 @@ export async function runTextFieldCommand(el: HTMLInputElement | HTMLTextAreaEle
   }
   // 1 行の入力欄に改行は入れない
   const value = el instanceof HTMLTextAreaElement ? text : text.replace(/\r?\n/g, ' ');
-  el.setRangeText(value, el.selectionStart ?? el.value.length, el.selectionEnd ?? el.value.length, 'end');
+  insertIntoField(el, value);
+}
+
+/**
+ * 入力欄の選択範囲へ文字を入れる。
+ * execCommand('insertText') は利用者が打ったのと同じ経路で、input に加えて、あとで change も出る（インスペクタは change か Enter で確定する）。
+ * 使えない環境では setRangeText で入れ、確定のために input と change を自分で送る。
+ * type=number・email は selectionStart が null で setRangeText が InvalidStateError を投げるので、value 全体の置き換えにする。
+ */
+function insertIntoField(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  if (tryExec('insertText', value)) return;
+  const s = el.selectionStart;
+  const e = el.selectionEnd;
+  if (s === null || e === null) {
+    // 範囲を持てない型（number・email）。選択されている範囲を知る手段がないので、全体を置き換える
+    el.value = value;
+  } else {
+    el.setRangeText(value, s, e, 'end');
+  }
   el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 /** メニューの項目を作る（テストのため分けてある）。 */
