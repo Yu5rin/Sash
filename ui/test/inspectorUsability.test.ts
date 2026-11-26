@@ -21,12 +21,18 @@ const XML = `<customUI xmlns="${NS}">
 
 let insp: HTMLElement;
 const noop = () => undefined;
+const quickRuns = { tab: 0, recipe: 0, root: 0 };
+const quickActions = [
+  { label: 'タブを追加', run: () => quickRuns.tab++ },
+  { label: 'レシピから作る…', run: () => quickRuns.recipe++ },
+  { label: 'customUI の設定（onLoad）を開く', run: () => quickRuns.root++ },
+];
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => undefined;
   insp = document.createElement('div');
   document.body.append(insp);
-  mountInspector(insp, { pickIdMso: noop, pickImageMso: noop, editImage: noop, pickFromLibrary: noop });
+  mountInspector(insp, { pickIdMso: noop, pickImageMso: noop, editImage: noop, pickFromLibrary: noop, quickStart: () => quickActions });
 });
 
 beforeEach(() => {
@@ -144,5 +150,31 @@ describe('I-4 列挙値の既定', () => {
     select('b2');
     const sel = insp.querySelector<HTMLSelectElement>('[data-attr="size"]')!;
     expect(sel.options[0]!.textContent).toBe('既定（normal）');
+  });
+});
+
+describe('I-4 何も選んでいないときの案内', () => {
+  it('案内と、よく使う操作のボタンが出て、押すとそれぞれの処理を呼ぶ', () => {
+    app.store!.select(null, 'canvas');
+    const buttons = Array.from(insp.querySelectorAll<HTMLButtonElement>('.insp-quick button'));
+    expect(insp.textContent).toContain('キャンバスかツリーで要素を選択してください');
+    expect(buttons.map((b) => b.textContent)).toEqual(['タブを追加', 'レシピから作る…', 'customUI の設定（onLoad）を開く']);
+    buttons.forEach((b) => b.click());
+    expect(quickRuns).toEqual({ tab: 1, recipe: 1, root: 1 });
+  });
+});
+
+describe('I-3 アイコンの候補は 1 つの Tab 停止で、中は矢印キーで移る', () => {
+  it('候補が 2 つ以上あるとき、Tab で止まるのは 1 つだけ。→ で次へ移る', async () => {
+    select('b2');
+    await new Promise((r) => setTimeout(r, 0));
+    const list = Array.from(insp.querySelectorAll<HTMLButtonElement>('button.icon-suggest'));
+    expect(list.length).toBeGreaterThanOrEqual(2);
+    expect(list.filter((b) => b.tabIndex === 0)).toHaveLength(1);
+    list[0]!.focus();
+    list[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(list[1]);
+    expect(list[1]!.tabIndex).toBe(0);
+    expect(list[0]!.tabIndex).toBe(-1);
   });
 });

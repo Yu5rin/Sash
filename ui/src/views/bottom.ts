@@ -196,6 +196,8 @@ function renderBottom(tabsHost: HTMLElement, body: HTMLElement, toast: (msg: str
         type: 'button',
         class: `small filter ${sev}${shown.has(sev) ? ' active' : ''}`,
         'aria-pressed': String(shown.has(sev)),
+        // 0 件の種類は隠すものがないので押せない
+        disabled: n === 0,
         onclick: () => {
           if (shown.has(sev)) shown.delete(sev);
           else shown.add(sev);

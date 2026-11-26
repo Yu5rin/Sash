@@ -203,13 +203,24 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
     }
     const err = store.syncError;
     statusEl.hidden = err === null;
-    statusMsg.textContent = err ? t('同期停止中：XML の構文を直すと再開します（{message}）', { message: describeXmlError(err.message) }) : '';
+    // 何が止まっているか（キャンバスとツリーへの反映）と、どうすれば再開するかを書く。長いときは 1 行で省略し、全文はツールチップに出す（総点検 X-5）
+    const text = err ? t('XML に誤りがあるため、キャンバスとツリーへの反映を止めています（{message}）。直すと自動で再開します', { message: describeXmlError(err.message) }) : '';
+    statusMsg.textContent = text;
+    statusMsg.title = text;
     jumpBtn.hidden = !err?.line;
     setSyncStopped(err !== null);
   };
 
+  let lastSession = app.session;
   app.on('session', () => {
     sync(false);
+    // 別のファイルを開いたときは、前のファイルの表示位置（スクロールとカーソル）を引き継がない（総点検 L-3）
+    if (app.session !== lastSession) {
+      editor.setScrollTop(0);
+      editor.setScrollLeft(0);
+      editor.setPosition({ lineNumber: 1, column: 1 });
+    }
+    lastSession = app.session;
     revealSelection();
   });
   app.on('store', (c) => {
