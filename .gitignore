@@ -488,3 +488,6 @@ src/Sash.App/wwwroot/
 ui/node_modules/
 ui/dist/
 artifacts/
+
+# Claude Code の一時ワークツリー（audit エージェントが使う）
+.claude/worktrees/
