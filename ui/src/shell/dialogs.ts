@@ -8,7 +8,7 @@ import { h, svg } from '../dom';
 import { lang, t } from '../i18n';
 import { restoreBackup } from './fileOps';
 import { shellIcons } from './icons';
-import { formatSize, splitPath } from './text';
+import { formatSize, normalizeForSearch, splitPath } from './text';
 import { toast } from './toast';
 
 export const REPO_URL = 'https://github.com/Yu5rin/Sash';
@@ -74,6 +74,8 @@ function extraShortcuts(): { group: string; title: string; keys: string }[] {
     // キャンバスとツリーが自分で受けるキー（メニューのコマンドにはないので、ここで載せる）
     { group: t('編集'), title: t('インスペクタでラベルを編集'), keys: 'Enter' },
     { group: t('編集'), title: t('右クリックメニューを開く'), keys: 'Shift+F10' },
+    // キャンバスの Esc は、選んでいる要素の親を選ぶ（複数選択のときは主な選択だけに戻す）。画面の「?」の案内にも同じことを書いている（総点検 C-6）
+    { group: t('編集'), title: t('親を選ぶ（複数選択のときは解除）'), keys: 'Esc' },
     { group: t('表示'), title: t('次のペインへ移る'), keys: 'F6' },
     { group: t('表示'), title: t('前のペインへ移る'), keys: 'Shift+F6' },
     { group: t('メニュー'), title: t('メニューバーへ移る'), keys: 'Alt / F10' },
@@ -95,9 +97,33 @@ export function openShortcutsDialog(commands: readonly Command[]): void {
     // 同じキーを 2 回出さない（同じ操作の別名など）
     if (!groups.get(r.group)!.some((x) => x.keys === r.keys)) groups.get(r.group)!.push(r);
   }
-  const content = h('div', { class: 'shortcut-groups' }, [...groups].map(([g, list]) =>
-    h('section', null, h('h3', null, g), h('dl', { class: 'shortcut-list' }, list.flatMap((r) => [h('dt', null, r.title), h('dd', null, h('kbd', null, r.keys))])))));
-  const m = openModal(t('キーボードショートカット'), content, { size: 'lg', key: 'shortcuts', footer: [h('button', { type: 'button', 'data-initial-focus': '', onclick: () => m.close() }, t('閉じる'))] });
+  // 左右の高さが揃わず左に空白ができるグリッドをやめ、段組み（columns）にする。各グループは段をまたがない（総点検 D-8）
+  const sections = [...groups].map(([g, list]) => {
+    const items = list.map((r) => ({ r, dt: h('dt', null, r.title), dd: h('dd', null, h('kbd', null, r.keys)) }));
+    const el = h('section', null, h('h3', null, g), h('dl', { class: 'shortcut-list' }, items.flatMap((x) => [x.dt, x.dd])));
+    return { g, items, el };
+  });
+  const filter = h('input', { type: 'search', class: 'shortcut-filter', placeholder: t('キーや操作の名前で絞り込む'), 'aria-label': t('キーや操作の名前で絞り込む'), spellcheck: false, autocomplete: 'off' }) as HTMLInputElement;
+  const empty = h('p', { class: 'muted', hidden: true }, t('一致するショートカットはありません'));
+  const apply = () => {
+    const q = normalizeForSearch(filter.value.trim());
+    let shown = 0;
+    for (const sec of sections) {
+      let any = false;
+      for (const x of sec.items) {
+        const hit = q === '' || normalizeForSearch(`${sec.g} ${x.r.title} ${x.r.keys}`).includes(q);
+        x.dt.hidden = !hit;
+        x.dd.hidden = !hit;
+        if (hit) any = true;
+      }
+      sec.el.hidden = !any;
+      if (any) shown++;
+    }
+    empty.hidden = shown > 0;
+  };
+  filter.addEventListener('input', apply);
+  const content = h('div', { class: 'shortcuts' }, filter, h('div', { class: 'shortcut-groups' }, sections.map((x) => x.el)), empty);
+  const m = openModal(t('キーボードショートカット'), content, { size: 'lg', key: 'shortcuts', footer: [h('button', { type: 'button', onclick: () => m.close() }, t('閉じる'))] });
 }
 
 /** バージョン情報。 */

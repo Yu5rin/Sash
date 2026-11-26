@@ -141,8 +141,14 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     objectUrls.push(u);
     return u;
   };
+  /** 最後に読もうとした画像の名前（読めなかったときの案内に添える）。 */
+  let lastLoadName = '';
   const reportError = (e: unknown) => {
-    const message = tr('画像を読み込めませんでした：{message}', { message: e instanceof Error ? e.message : String(e) });
+    // ブラウザの英語の文（The source image could not be decoded. など）は見せず、ログ（app.log）へ。利用者には分かる言葉で案内する（総点検 D-6）
+    void invoke('app.log', { level: 'warning', message: `画像を読み込めませんでした（${lastLoadName}）: ${e instanceof Error ? e.message : String(e)}`, stack: e instanceof Error ? e.stack : undefined }).catch(() => undefined);
+    const message = lastLoadName
+      ? tr('画像として読めませんでした。ファイルが壊れているか、対応していない形式です（{name}）', { name: lastLoadName })
+      : tr('画像として読めませんでした。ファイルが壊れているか、対応していない形式です');
     sourceHint.textContent = message;
     notify({ kind: 'error', message });
   };
@@ -310,6 +316,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   }
 
   async function loadBlob(blob: Blob, fileName: string, keepCrop = false): Promise<void> {
+    lastLoadName = fileName;
     const buf = await blob.arrayBuffer();
     const isIco = /\.ico$/i.test(fileName) || blob.type === 'image/x-icon' || blob.type === 'image/vnd.microsoft.icon';
     const entries = isIco ? parseIco(buf) : null;

@@ -39,7 +39,7 @@ describe('配布前チェック', () => {
       <splitButton id="sp"><button id="spb" label="S" /><menu id="spm"><button id="spi" label="Y" /></menu></splitButton>
     </group></tab>`);
     const s = collectChecks(input(d));
-    expect(section(s, 'noScreentip').items.map((i) => i.text)).toEqual(['A（button）', 'S（button）', 'spm（menu）']);
+    expect(section(s, 'noScreentip').items.map((i) => i.text)).toEqual(['A（ボタン）', 'S（ボタン）', 'spm（メニュー）']);
     expect(section(s, 'noIcon').items.map((i) => i.path)).toEqual([[0, 0, 0, 0, 0], [0, 0, 0, 0, 3, 0], [0, 0, 0, 0, 3, 1]]);
     expect(section(s, 'noIcon').items.every((i) => i.level === 'should')).toBe(true);
     // 見直すとよいものは、配ってよいかの件数には数えない

@@ -4,7 +4,7 @@
 import { t } from './i18n';
 import type { Problem, Severity } from './lint';
 import { allElements, displayName, pathOf, type Path } from './model';
-import { attributes } from './schema';
+import { attributes, titleOf } from './schema';
 import type { CallbackStatus } from './vba';
 
 /**
@@ -108,7 +108,8 @@ const isCustom = (el: Element) => el.hasAttribute('id') || el.hasAttribute('idQ'
 
 const describe = (el: Element) => {
   const name = displayName(el);
-  return name ? `${name}（${el.localName}）` : el.localName;
+  // 種類は日本語名で（「集計する（ボタン）」。問題の一覧と同じ。英字のタグ名は出さない。総点検 D-3）
+  return name ? `${name}（${titleOf(el.localName)}）` : titleOf(el.localName);
 };
 
 const isCallbackAttr = (name: string | undefined) => !!name && attributes.get(name)?.kind === 'callback';

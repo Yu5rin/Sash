@@ -127,6 +127,11 @@ export async function openRecipes(toast: Toast): Promise<void> {
   });
 
   const apply = async () => {
+    // 構文エラーの間は断る。ダイアログを閉じると、理由を読む前にフォーカスが行方不明になるので、閉じずに理由を出す（総点検 D-10）
+    if (app.store?.syncError) {
+      toast(t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください'), 'warning');
+      return;
+    }
     modal.close();
     try {
       const message = await applyRecipe(selected);
@@ -155,7 +160,7 @@ export async function openRecipes(toast: Toast): Promise<void> {
     footer: [
       h('button', { type: 'button', onclick: () => void remove(), class: 'footer-start', disabled: !all.some((r) => r.custom) }, t('削除')),
       h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')),
-      h('button', { type: 'button', class: 'primary', onclick: () => void apply() }, t('挿入')),
+      h('button', { type: 'button', class: 'primary', onclick: () => void apply(), disabled: !!app.store?.syncError, title: app.store?.syncError ? t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください') : '' }, t('挿入')),
     ],
   });
 }

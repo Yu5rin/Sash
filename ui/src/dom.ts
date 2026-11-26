@@ -17,6 +17,12 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props | 
       else el.setAttribute(k, v === true ? '' : String(v));
     }
   }
+  // 入力欄の既定。英字の識別子（id・Sub 名・属性値）に赤い波線や、前に入れた値の候補が出ないようにする（総点検 D-13）。
+  // 指定があればそちらを使う。なお spellcheck: false は、上の「false は飛ばす」で捨てられていたので、ここで必ず付ける
+  if (tag === 'input' || tag === 'textarea') {
+    if (!el.hasAttribute('spellcheck') && props?.['spellcheck'] !== true) el.setAttribute('spellcheck', 'false');
+    if (!el.hasAttribute('autocomplete')) el.setAttribute('autocomplete', 'off');
+  }
   for (const c of children.flat()) {
     if (c === null || c === undefined || c === false) continue;
     el.append(c);

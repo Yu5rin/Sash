@@ -4,6 +4,7 @@ import type { ToastKind } from '../shell/toast';
 import { invoke, type LibraryIconDetail, type LibraryIconDto } from '../bridge';
 import { app } from '../app';
 import type { Path } from '../model';
+import { iconTargetPath } from '../iconTarget';
 import { debounce, h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { fuzzyScore } from '../catalog/catalog';
@@ -183,7 +184,9 @@ export async function openLibrary(onPick?: LibraryPick, toast?: (m: string, k?: 
  * 選ぶ目的で開いた場合（onPick あり）は、作る入口を出さず説明だけにする。
  */
 export function buildEmptyState(closeLibrary: () => void, picking: boolean, onCreateIcon?: (target: Path) => void): HTMLElement {
-  const sel = app.store?.selection ?? null;
+  // タブ・グループなど、アイコンを持てない要素を選んでいるときも、押して断られるのではなく、先に押せない理由を見せる（総点検 C-7）
+  const store = app.store;
+  const sel = store?.selection && iconTargetPath(store.doc, store.selection) ? store.selection : null;
   const reason = tr('先にキャンバスかツリーで、アイコンを付けるボタンなどを選んでください');
   const box = h('div', { class: 'library-empty' },
     h('p', { class: 'library-empty-title' }, tr('ライブラリは空です')),
