@@ -54,6 +54,7 @@ import { reportUnexpected } from './shell/errorReport';
 import { installTextFieldMenu } from './shell/textMenu';
 import { changePreview, currentPreview, fitExcelToPreview, SCALE_CHOICES, WIDTH_CHOICES, widthChoiceLabel } from './shell/previewCommands';
 import { openDistributionCheck } from './dialogs/distributionDialog';
+import { startRecovery } from './recovery';
 import { openHistoryDialog } from './dialogs/historyDialog';
 import type { CheckItem } from './distributionCheck';
 import { controlRows, toCsv, toTsv } from './controlList';
@@ -964,6 +965,8 @@ setElementMenuHooks({
 // 幅を比べるモードで、キャンバスの高さを一時的に広げる（保存しない）
 setCanvasGrowHandler((px) => layout.growTemporarily('top', px));
 const home = mountHome($('home'), (p) => void openFile(p));
+// 未保存の編集の自動退避（§23.2）。変更のあと数秒おいて書き、保存・閉じたら消す
+startRecovery();
 
 // XML ペインの名前に F6 での移り方を添える（index.html の既定は日本語のままなので、今の言語で付け直す）
 document.querySelector('.xml-pane')?.setAttribute('aria-label', t('XML エディタ（F6 で次のペインへ）'));

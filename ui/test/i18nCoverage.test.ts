@@ -7,6 +7,8 @@ import { missingKeys } from '../src/i18n';
 const FILES = [
   '../src/macroAssign.ts',
   '../src/dialogs/macroDialog.ts',
+  '../src/recovery.ts',
+  '../src/dialogs/recoveryDialog.ts',
 ];
 
 const sources = import.meta.glob(['../src/**/*.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;

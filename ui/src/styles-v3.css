@@ -19,3 +19,10 @@
   .macro-row.selected { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 .insp-macro { margin-top: var(--sp-1); }
+
+/* ---- 未保存の編集の復旧（§23.2） ---- */
+.recovery-warn { margin: var(--sp-2) 0; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--warning-border); border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning-text); }
+.recovery-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.recovery-item { display: flex; align-items: center; gap: var(--sp-2); }
+.recovery-item .file-open { flex: 1; min-width: 0; }
+.recovery-note { margin: 0; padding: 0 var(--sp-2) var(--sp-2); }

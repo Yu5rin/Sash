@@ -18,7 +18,7 @@ type AppEvent = 'session' | 'problems' | 'store' | 'settings' | 'vba';
 
 class App {
   info: AppInfo = { version: '', excelInstalled: false };
-  settings: Settings = { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: 'ja', iconLibraryPath: '', updateCheckOnStartup: true, updateSource: '' };
+  settings: Settings = { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: 'ja', iconLibraryPath: '', updateCheckOnStartup: true, updateSource: '', autoRecovery: true, detectExternalChanges: true };
   session: Session | null = null;
   problems: Problem[] = [];
   /** Lint に問題を足す仕組み（VBA との照合など、ほかのモジュールが登録する）。 */

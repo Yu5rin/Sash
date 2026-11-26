@@ -77,6 +77,10 @@ export interface Settings {
   updateCheckOnStartup: boolean;
   /** 更新の確認先。空なら GitHub のリリース。 */
   updateSource: string;
+  /** 未保存の編集を自動で退避する（§23.2）。 */
+  autoRecovery: boolean;
+  /** 開いたあとにほかでリボンが書き換えられたかを調べる（§23.4）。 */
+  detectExternalChanges: boolean;
 }
 
 export interface UpdateCheckResult {
@@ -180,6 +184,33 @@ export interface IconPrefetchStatus {
   cancelled?: boolean;
 }
 
+/** 退避したパーツ 1 つ分（未保存の編集。§23.2）。画像は保存済みからの差分。 */
+export interface RecoveryPartDto {
+  version: CustomUIVersion;
+  xml: string;
+  addImages: { id: string; dataUrl: string }[];
+  removeImages: string[];
+}
+
+export interface RecoveryEntryDto {
+  path: string;
+  savedAt: string;
+  editCount: number;
+  parts: RecoveryPartDto[];
+  /** 元のファイルが、退避のあとで変わっている（recovery.read だけが付ける）。 */
+  fileNewer?: boolean;
+}
+
+export interface RecoverySummaryDto {
+  path: string;
+  savedAt: string;
+  editCount: number;
+  fileExists: boolean;
+  fileModifiedAt: string | null;
+  /** 元のファイルが、退避のあとで変わっている。 */
+  fileNewer: boolean;
+}
+
 /** 要求の種類ごとの payload と応答の型。 */
 export interface HostApi {
   'app.ready': { req: undefined; res: { initialFile: string | null; updatedFrom?: string | null; version?: string } };
@@ -220,6 +251,12 @@ export interface HostApi {
   'recipes.list': { req: undefined; res: unknown[] };
   'recipes.save': { req: Record<string, unknown>; res: null };
   'recipes.delete': { req: { id: string }; res: null };
+  /** 未保存の編集を退避する（§23.2）。退避は保険なので、失敗しても UI は編集を止めない。 */
+  'recovery.write': { req: { path: string; editCount: number; parts: RecoveryPartDto[] }; res: null };
+  'recovery.read': { req: { path: string }; res: RecoveryEntryDto | null };
+  'recovery.delete': { req: { path: string }; res: null };
+  /** 退避の一覧（新しい順）。古いものと壊れたものは、ホストがここで掃除する。 */
+  'recovery.list': { req: undefined; res: RecoverySummaryDto[] };
   'backup.list': { req: { path: string }; res: BackupEntry[] };
   /** バックアップの中身でファイルを置き換える。backup は戻す直前の今のファイルのバックアップ。終わったら UI は開き直す。 */
   'backup.restore': { req: { path: string; backupPath: string }; res: { backup: string | null } };
@@ -449,8 +486,19 @@ const mockVbaModules: VbaModuleDto[] = [
   { name: 'Sheet1', type: 100, code: ['Public Sub シートを更新()', 'End Sub', ''].join('\r\n') },
 ];
 
+/** ブラウザ実行中の退避の置き場（?recovery を付けると、サンプルのブックの退避が残っているものとして始める）。 */
+const mockRecoveries = new Map<string, RecoveryEntryDto>();
+if (mockParams.has('recovery')) {
+  mockRecoveries.set('C:\\sample\\集計ツール.xlam', {
+    path: 'C:\\sample\\集計ツール.xlam',
+    savedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    editCount: 12,
+    parts: [{ version: 'office2010', xml: sampleXml.replace('label="集計ツール"', 'label="集計ツール（編集中）"').replace('<button id="btnClear"', '<button id="btnPaste" label="貼り付け" imageMso="Paste" onAction="Ribbon_btnPaste_onAction" />\n          <button id="btnClear"'), addImages: [], removeImages: [] }],
+  });
+}
+
 const mock = {
-  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '' } as Settings,
+  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '', autoRecovery: true, detectExternalChanges: true } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
     const r = (v: unknown) => Promise.resolve(v as HostApi[K]['res']);
     if (mockMacroRunning && MOCK_REFUSED_WHILE_MACRO.has(type)) return Promise.reject(new Error(mockMacroBusy()));
@@ -525,6 +573,18 @@ const mock = {
         return r(true);
       case 'backup.restore':
         return r({ backup: null });
+      case 'recovery.write': {
+        const p = payload as { path: string; editCount: number; parts: RecoveryPartDto[] };
+        mockRecoveries.set(p.path, { path: p.path, savedAt: new Date().toISOString(), editCount: p.editCount, parts: p.parts });
+        return r(null);
+      }
+      case 'recovery.read':
+        return r(mockRecoveries.get((payload as { path: string }).path) ?? null);
+      case 'recovery.delete':
+        mockRecoveries.delete((payload as { path: string }).path);
+        return r(null);
+      case 'recovery.list':
+        return r([...mockRecoveries.values()].map((e): RecoverySummaryDto => ({ path: e.path, savedAt: e.savedAt, editCount: e.editCount, fileExists: true, fileModifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), fileNewer: false })));
       case 'excel.setWindowWidth': {
         // 本物のホストと同じ換算と断り方を確かめられるよう、作業領域は 1920px（100%）とみなす
         const p = payload as { width: number; scale: number };

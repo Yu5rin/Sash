@@ -6,6 +6,8 @@
 import { app } from '../app';
 import { invoke, type ApplyResult, type PartToSave } from '../bridge';
 import { ask } from '../dialogs/modal';
+import { askRecovery } from '../dialogs/recoveryDialog';
+import { applyRecovery, discardRecovery } from '../recovery';
 import { t } from '../i18n';
 import { exportSash, parseSash, partXml } from '../sashJson';
 import { isSampleSession } from '../sample';
@@ -104,7 +106,35 @@ export async function openFile(path?: string, opts: { force?: boolean } = {}): P
   const s = app.session!;
   if (s.created) toast({ kind: 'info', message: t('このブックにはリボン定義がないので、customUI14 を新しく作りました') });
   else if (s.parts.size >= 2) toast({ kind: 'info', message: t('customUI と customUI14 の両方があります。2010以降の Excel は customUI14 を優先します') });
+  await offerRecovery(s);
   return true;
+}
+
+/** 前回、保存されなかった編集の退避が残っていれば、復旧するか捨てるかを聞く（§23.2）。退避を読めなくても、開くことは止めない。 */
+async function offerRecovery(s: NonNullable<typeof app.session>): Promise<void> {
+  if (!s.path || isSampleSession()) return;
+  let entry;
+  try {
+    entry = await invoke('recovery.read', { path: s.path });
+  } catch {
+    return;
+  }
+  // 読んでいる間に別のファイルへ替わっていたら、聞かない
+  if (!entry || app.session !== s) return;
+  if (entry.parts.length === 0) {
+    await discardRecovery(s.path);
+    return;
+  }
+  const choice = await askRecovery(entry);
+  if (app.session !== s) return;
+  if (choice === 'discard') {
+    await discardRecovery(s.path);
+    toast({ kind: 'info', message: t('保存されなかった編集を捨てました') });
+    return;
+  }
+  const r = applyRecovery(entry);
+  if (r.missing.length) toast({ kind: 'warning', message: t('ファイルにないパーツがあったため、一部は復旧できませんでした') });
+  if (r.applied.length) toast({ kind: 'success', message: t('保存されなかった編集を復旧しました。内容を確かめて保存してください'), action: { label: t('元に戻す'), run: () => s.active.undo() } });
 }
 
 /** 開いているファイルを閉じてホームに戻る。 */
@@ -131,6 +161,8 @@ export async function quit(): Promise<boolean> {
   quitting = true;
   try {
     if (!(await confirmDiscard())) return false;
+    // 保存した・「保存しない」を選んだ。残す編集はないので退避を消してから終わる
+    if (app.session?.path) await discardRecovery(app.session.path);
     await invoke('app.close');
     return true;
   } catch (e) {

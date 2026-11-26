@@ -3,7 +3,9 @@
 // それだけに頼ると「Excel で開いているブック」が出てこなかった）。
 
 import { app } from '../app';
-import { invoke, type OpenWorkbook, type RecentFile } from '../bridge';
+import { invoke, type OpenWorkbook, type RecentFile, type RecoverySummaryDto } from '../bridge';
+import { formatWhen } from '../dialogs/recoveryDialog';
+import { listRecoveries } from '../recovery';
 import { h, svg } from '../dom';
 import { uiIcons } from '../icons';
 import { t } from '../i18n';
@@ -66,6 +68,7 @@ type WorkbookState = { kind: 'noExcel' } | { kind: 'loading' } | { kind: 'error'
 export function mountHome(host: HTMLElement, open: (path?: string) => void): HomeHandle {
   let recent: RecentFile[] | null = null;
   let workbooks: WorkbookState = { kind: 'loading' };
+  let recoveries: RecoverySummaryDto[] = [];
   let generation = 0;
 
   const fileButton = (path: string, opts: { missing?: boolean; badges?: HTMLElement[]; title?: string }) => {
@@ -104,6 +107,37 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
     return h('section', { class: 'card', 'aria-labelledby': 'home-recent' },
       h('div', { class: 'card-head' }, h('h2', { id: 'home-recent' }, t('最近使ったファイル'))),
       h('div', { class: 'card-body' }, body));
+  };
+
+  /** 前回、保存されなかった編集が残っているブック（§23.2）。押して開くと、復旧するかをそこで聞く。 */
+  const recoveryCard = () => {
+    const items = recoveries.map((r) => {
+      const { name, folder } = splitPath(r.path);
+      return h('li', { class: 'recovery-item' },
+        h('button', {
+          type: 'button',
+          class: 'file-open',
+          disabled: !r.fileExists,
+          title: r.fileExists ? r.path : t('{path}（見つかりません）', { path: r.path }),
+          onclick: () => open(r.path),
+        }, svg(shellIcons.file),
+        h('span', { class: 'file-text' },
+          h('span', { class: 'file-name' }, name),
+          h('span', { class: 'file-folder' }, r.fileExists ? t('{when}・{n} 回の編集', { when: formatWhen(r.savedAt), n: r.editCount }) : t('{folder}（ファイルが見つかりません）', { folder }))),
+        r.fileNewer ? h('span', { class: 'file-badges' }, h('span', { class: 'badge-soft warning' }, t('ファイルが退避のあとで変わっています'))) : null),
+        h('button', {
+          type: 'button',
+          class: 'small',
+          title: t('この退避を捨てる'),
+          'aria-label': t('{name} の退避を捨てる', { name }),
+          onclick: () => void invoke('recovery.delete', { path: r.path }).then(loadRecoveries).catch((e: Error) => toast({ kind: 'error', message: e.message })),
+        }, t('捨てる')));
+    });
+    return h('section', { class: 'card', 'aria-labelledby': 'home-recovery' },
+      h('div', { class: 'card-head' }, h('h2', { id: 'home-recovery' }, t('復旧できる編集があります'))),
+      h('div', { class: 'card-body' },
+        h('p', { class: 'muted recovery-note' }, t('前回、保存されないまま終わった編集です。ブックを開くと、復旧するかを確かめます。')),
+        h('ul', { class: 'recovery-list' }, items)));
   };
 
   const workbookCard = () => {
@@ -198,7 +232,7 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
           // 空いた右側に、Excel で開いているブック（そのまま開ける）を上げる
           workbookCard()),
         onboardingCard(),
-        h('div', { class: 'home-cards' }, recentCard())),
+        h('div', { class: 'home-cards' }, recoveries.length ? recoveryCard() : null, recentCard())),
     );
     // 一覧を描き直してもフォーカスを失わないよう、同じ文字のボタンへ戻す
     if (hadFocus !== null) Array.from(host.querySelectorAll<HTMLElement>('button')).find((b) => b.textContent === hadFocus)?.focus();
@@ -213,6 +247,11 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
 
   const loadRecent = async () => {
     recent = await invoke('file.recent').catch(() => []);
+    render();
+  };
+
+  const loadRecoveries = async () => {
+    recoveries = await listRecoveries();
     render();
   };
 
@@ -241,6 +280,7 @@ export function mountHome(host: HTMLElement, open: (path?: string) => void): Hom
     }
     void loadRecent();
     void loadWorkbooks();
+    void loadRecoveries();
   };
 
   // ↑↓ でファイルの一覧を移る（Tab だけだと「消す」ボタンも挟まって遠いため）

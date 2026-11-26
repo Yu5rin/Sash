@@ -4,6 +4,7 @@ using Sash.Core;
 using Sash.Core.CustomUI;
 using Sash.Core.Excel;
 using Sash.Core.Packaging;
+using Sash.Core.Recovery;
 using Sash.Core.Settings;
 using Sash.Core.Update;
 using Sash.Excel;
@@ -71,6 +72,10 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.setWindowWidth" => await SetWindowWidthAsync(Read<WindowWidthRequest>(body)),
                 "excel.runMacro" => await RunMacroAsync(Read<RunMacroRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
+                "recovery.write" => await RunOffUiAsync(Read<RecoveryWriteRequest>(body), RecoveryWrite),
+                "recovery.read" => await RunOffUiAsync(Read<PathRequest>(body), RecoveryRead),
+                "recovery.delete" => RecoveryDelete(Read<PathRequest>(body)),
+                "recovery.list" => await Task.Run(RecoveryList),
                 "backup.list" => BackupList(Read<PathRequest>(body)),
                 "backup.restore" => await RunOffUiAsync(Read<BackupRestoreRequest>(body), BackupRestore),
                 _ => throw new InvalidOperationException(L($"不明な要求です：{request.Type}", $"Unknown request: {request.Type}")),
@@ -522,10 +527,37 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         return null;
     }
 
+    // ---- 未保存の編集の退避（仕様書 §23.2） ----
+
+    private readonly RecoveryStore _recovery = new(AppPaths.Recovery);
+
+    /// <summary>退避を書く。退避は保険なので、書けなくても UI には失敗として返す（UI は編集を止めず、ログに残すだけ）。</summary>
+    private object? RecoveryWrite(RecoveryWriteRequest req)
+    {
+        _recovery.Write(req.Path, req.EditCount, req.Parts.Select(p => new RecoveryPart(
+            p.Version, p.Xml, p.AddImages.Select(i => new RecoveryImage(i.Id, i.DataUrl)).ToList(), p.RemoveImages)).ToList());
+        return null;
+    }
+
+    /// <summary>退避を読む。元のファイルが退避より後に変わっているか（fileNewer）も添える。</summary>
+    private object? RecoveryRead(PathRequest req) =>
+        _recovery.Read(req.Path) is { } e
+            ? new { e.Path, e.SavedAt, e.EditCount, e.Parts, FileNewer = RecoveryStore.IsFileNewer(e.Path, e.SavedAt) }
+            : null;
+
+    private object? RecoveryDelete(PathRequest req)
+    {
+        _recovery.Delete(req.Path);
+        return null;
+    }
+
+    /// <summary>退避の一覧。古いものと壊れたものは、ここで掃除する。</summary>
+    private object RecoveryList() => _recovery.List();
+
     // ---- 設定 ----
 
     private static SettingsDto ToDto(AppSettings s) =>
-        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath, s.UpdateCheckOnStartup, s.UpdateSource);
+        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath, s.UpdateCheckOnStartup, s.UpdateSource, s.AutoRecovery, s.DetectExternalChanges);
 
     private SettingsDto SetSettings(SettingsDto patch) => ToDto(SettingsLanguage.Apply(settings.Update(s => s with
     {
@@ -540,6 +572,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         Language = patch.Language is "ja" or "en" ? patch.Language : s.Language,
         UpdateCheckOnStartup = patch.UpdateCheckOnStartup ?? s.UpdateCheckOnStartup,
         UpdateSource = patch.UpdateSource is null ? s.UpdateSource : ValidSource(patch.UpdateSource),
+        AutoRecovery = patch.AutoRecovery ?? s.AutoRecovery,
+        DetectExternalChanges = patch.DetectExternalChanges ?? s.DetectExternalChanges,
     })));
 
 
@@ -818,6 +852,12 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record PartDto(CustomUIVersion Version, string Xml, IReadOnlyList<ImageDto> AddImages, IReadOnlyList<string> RemoveImages);
 
+    private sealed record RecoveryImageDto(string Id, string DataUrl);
+
+    private sealed record RecoveryPartDto(CustomUIVersion Version, string Xml, IReadOnlyList<RecoveryImageDto> AddImages, IReadOnlyList<string> RemoveImages);
+
+    private sealed record RecoveryWriteRequest(string Path, int EditCount, IReadOnlyList<RecoveryPartDto> Parts);
+
     private sealed record SaveRequest(string Path, IReadOnlyList<PartDto> Parts);
 
     private sealed record BackupRestoreRequest(string Path, string BackupPath);
@@ -870,7 +910,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         string? Language,
         string? IconLibraryPath,
         bool? UpdateCheckOnStartup,
-        string? UpdateSource);
+        string? UpdateSource,
+        bool? AutoRecovery,
+        bool? DetectExternalChanges);
 
     /// <summary>更新の確認先として使えるかを確かめる（http などはここで断る）。</summary>
     private static string ValidSource(string text)
