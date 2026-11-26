@@ -9,6 +9,8 @@ const FILES = [
   '../src/dialogs/macroDialog.ts',
   '../src/recovery.ts',
   '../src/dialogs/recoveryDialog.ts',
+  '../src/dialogs/externalChangeDialog.ts',
+  '../src/shell/externalWatch.ts',
 ];
 
 const sources = import.meta.glob(['../src/**/*.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;

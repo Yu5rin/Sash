@@ -26,3 +26,7 @@
 .recovery-item { display: flex; align-items: center; gap: var(--sp-2); }
 .recovery-item .file-open { flex: 1; min-width: 0; }
 .recovery-note { margin: 0; padding: 0 var(--sp-2) var(--sp-2); }
+
+/* ボタンが多いダイアログの足もとは、収まらなければ折り返す（§23.4） */
+.modal footer { flex-wrap: wrap; }
+.modal.ext-change { width: min(660px, 100%); }

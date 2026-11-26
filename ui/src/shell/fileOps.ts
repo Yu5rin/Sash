@@ -4,9 +4,11 @@
 // - 未保存の変更があるときは、閉じる・別のファイルを開く・終了の前に「保存する／保存しない／キャンセル」を聞く
 
 import { app } from '../app';
-import { invoke, type ApplyResult, type PartToSave } from '../bridge';
+import { invoke, type ApplyResult, type Fingerprint, type PartToSave } from '../bridge';
 import { ask } from '../dialogs/modal';
+import { askExternalChange } from '../dialogs/externalChangeDialog';
 import { askRecovery } from '../dialogs/recoveryDialog';
+import { checkExternalChange, isWatchable, refreshBaseline } from '../externalChange';
 import { applyRecovery, discardRecovery } from '../recovery';
 import { t } from '../i18n';
 import { exportSash, parseSash, partXml } from '../sashJson';
@@ -198,11 +200,39 @@ function prepare(): Prepared {
   return { parts, snapshots };
 }
 
-function markAllSaved(prepared: Prepared, path: string): void {
+/**
+ * 書き込みが終わったときの記録。fingerprint はホストが書いたあとに読み直した照合値（保存のとき）。
+ * 渡されなければ（Excel 経由の反映など）、ファイルを読み直して基準にする（自分が書いた内容を「ほかの変更」と取り違えないため。§23.4）。
+ */
+function markAllSaved(prepared: Prepared, path: string, fingerprint?: Fingerprint | null): void {
   // 書き込んでいる間に別のファイルを開いていたら、そちらには触らない
   if (app.session?.path !== path) return;
   for (const [p, snap] of prepared.snapshots) p.markSaved(snap);
   app.session.created = false;
+  if (fingerprint !== undefined) app.session.fingerprint = fingerprint;
+  else void refreshBaseline(app.session);
+}
+
+/**
+ * 書き込む前に、開いたあとにほかでリボンが変更されていないかを確かめる（§23.4）。
+ * 変わっていれば確認を出し、上書きを選んだときだけ 'go'（書き込みを続ける）。ほかの変更を読み込んだときは、読み直して 'stop'。
+ */
+async function guardExternalChange(s: NonNullable<typeof app.session>, context: 'save' | 'apply'): Promise<'go' | 'stop'> {
+  if (!isWatchable(s)) return 'go';
+  const { state } = await checkExternalChange(s);
+  if (state !== 'changed' || app.session !== s) return 'go';
+  const choice = await askExternalChange(s, context);
+  if (choice === 'overwrite') return 'go';
+  if (choice === 'reload') await reloadFromDisk(s);
+  return 'stop';
+}
+
+/** 自分の編集を捨てて、ファイルの今の内容を読み直す（ほかで変更されたとき）。 */
+export async function reloadFromDisk(s: NonNullable<typeof app.session>): Promise<boolean> {
+  if (app.session !== s) return false;
+  const ok = await openFile(s.path, { force: true });
+  if (ok) toast({ kind: 'success', message: t('ほかで変更された内容を読み込みました') });
+  return ok;
 }
 
 /** 構文エラーや Lint のエラーがあるときは、本当に書き込むかを確認する。 */
@@ -232,10 +262,13 @@ export async function save(): Promise<boolean> {
     toast({ kind: 'info', message: t('変更はありません') });
     return true;
   }
+  // ほかで書き換えられていたら、書く前に知らせる（確認の間は、ほかの保存・反映が始まらないよう、終わってからもう一度確かめる）
+  if ((await guardExternalChange(s, 'save')) === 'stop') return false;
+  if (busy !== null || app.session !== s) return false;
   setBusy('save');
   try {
     const res = await invoke('file.save', { path: s.path, parts: prepared.parts });
-    markAllSaved(prepared, s.path);
+    markAllSaved(prepared, s.path, res.fingerprint ?? null);
     toast({ kind: 'success', message: t('保存しました'), action: res.backup && /[\\/]/.test(res.backup) ? { label: t('バックアップの場所'), run: () => void invoke('update.openPage', { url: res.backup.replace(/[\\/][^\\/]+$/, '') }).catch((e: Error) => toast({ kind: 'error', message: e.message })) } : undefined });
     return true;
   } catch (e) {
@@ -298,6 +331,9 @@ export async function applyToExcel(): Promise<void> {
     );
     app.settings = await invoke('settings.set', { ribbonErrorsHintShown: true }).catch(() => app.settings);
   }
+  if (busy !== null || app.session !== s) return;
+  // 反映は、自分の編集があるときだけ、ファイルのリボンを書き換える。ほかで変更されていたら、上書きする前に知らせる
+  if (app.dirty && (await guardExternalChange(s, 'apply')) === 'stop') return;
   if (busy !== null || app.session !== s) return;
 
   setBusy('apply');

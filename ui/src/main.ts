@@ -41,6 +41,7 @@ import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, R
 import { describeElement } from './elementHelp';
 import { inTextField, runEditCommand } from './shell/editCommands';
 import { createPollGate } from './shell/pollGate';
+import { createExternalWatcher } from './shell/externalWatch';
 import { vbaChipState } from './shell/vbaChip';
 import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
@@ -867,6 +868,9 @@ const EXCEL_CHIP_MIN_INTERVAL_MS = 30_000;
 const pollExcelChip = createPollGate(refreshExcelChip, { minIntervalMs: EXCEL_CHIP_MIN_INTERVAL_MS, busy: () => busyState() !== null });
 // 窓に戻ったとき（Excel で開いたり閉じたりして戻ってきたとき）に取り直す
 window.addEventListener('focus', () => void pollExcelChip());
+// 窓に戻ったとき、開いているファイルがほかで書き換えられていないかも調べる（§23.4）
+const pollExternal = createExternalWatcher();
+window.addEventListener('focus', () => void pollExternal());
 // ファイルを開いた・閉じたとき、反映（Excel でブックを開き直す）が終わったときは、状態が変わったので間引かずに取り直す。
 // 入力のたびに呼ばれる updateChrome からは呼ばない（Excel への問い合わせが重いため）
 app.on('session', () => void pollExcelChip(true));

@@ -23,9 +23,25 @@ export interface CustomUIPartDto {
   images: ImageDto[];
 }
 
+/** ブックのリボンの内容の照合値（パーツごと。キーは office2010 / office2007）。ホストが XML を正規化して求める（§23.4）。 */
+export type Fingerprint = Record<string, string>;
+
 export interface OpenedDocument {
   path: string;
   parts: CustomUIPartDto[];
+  /** 開いた時点のリボンの内容の照合値。 */
+  fingerprint?: Fingerprint | null;
+  /** インターネットから取得した印（Zone.Identifier）が付いている（§23.5）。 */
+  webMark?: boolean;
+}
+
+/** file.read の応答（開かずにリボンの中身だけを読む。§23.3）。 */
+export interface ReadDocument {
+  path: string;
+  kind: 'workbook' | 'xml' | 'sashJson';
+  parts: CustomUIPartDto[];
+  /** kind が sashJson のときの、ファイルの中身。 */
+  json?: string | null;
 }
 
 export interface PartToSave {
@@ -222,7 +238,11 @@ export interface HostApi {
   /** 想定外の例外をホストのログ（app.log）に残す。製品版は開発者ツールが使えないため。 */
   'app.log': { req: { level: 'error' | 'warning' | 'info'; message: string; stack?: string }; res: null };
   'file.open': { req: { path?: string } | undefined; res: OpenedDocument | null };
-  'file.save': { req: { path: string; parts: PartToSave[] }; res: { backup: string } };
+  'file.save': { req: { path: string; parts: PartToSave[] }; res: { backup: string; fingerprint?: Fingerprint | null } };
+  /** ファイルの今のリボンの照合値（ほかで書き換えられたかを調べる。読めなければ null。§23.4）。 */
+  'file.fingerprint': { req: { path: string }; res: { fingerprint: Fingerprint | null } };
+  /** 開かずにリボンの中身だけを読む。path がなければファイルダイアログを出す（キャンセルなら null）。最近使ったファイルには載せない（§23.3）。 */
+  'file.read': { req: { path?: string } | undefined; res: ReadDocument | null };
   'file.exportText': { req: { defaultName: string; filter: string; content: string }; res: string | null };
   'file.recent': { req: undefined; res: RecentFile[] };
   'file.removeRecent': { req: { path: string }; res: null };
@@ -497,6 +517,55 @@ if (mockParams.has('recovery')) {
   });
 }
 
+/** 別のブック（前任者のブック）のダミー。取り込み・比較の画面の確認用。 */
+const otherBookXml = `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="Ribbon_onLoad">
+  <ribbon>
+    <tabs>
+      <tab id="tabTools" label="経理ツール" keytip="K">
+        <group id="grpSum" label="月次">
+          <button id="btnSummary" label="月次集計" size="large" image="rIdLogo" onAction="Ribbon_btnSummary_onAction" />
+          <button id="btnClose" label="締め処理" imageMso="LockCell" onAction="Ribbon_btnClose_onAction" />
+        </group>
+        <group id="grpOut" label="出力">
+          <button id="btnPdf" label="PDF 出力" imageMso="FileSaveAsPdfOrXps" onAction="Ribbon_btnPdf_onAction" />
+        </group>
+      </tab>
+      <tab id="tabAdmin" label="管理">
+        <group id="grpAdmin" label="管理">
+          <button id="btnAdmin" label="設定" imageMso="ControlProperties" onAction="Ribbon_btnAdmin_onAction" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+  <contextMenus>
+    <contextMenu idMso="ContextMenuCell">
+      <button id="ctxSum" label="月次集計" onAction="Ribbon_ctxSum_onAction" />
+    </contextMenu>
+  </contextMenus>
+</customUI>
+`;
+
+/** ダミーの画像（32px の緑の四角）の PNG（base64）。描けない環境（テスト）では空。 */
+function mockLogoPng(): string {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+    ctx.fillStyle = '#185c37';
+    ctx.fillRect(2, 2, 28, 28);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(9, 9, 14, 14);
+    return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+  } catch {
+    return '';
+  }
+}
+
+/** ?external のとき、再読み込み（file.open のやり直し）のあとはディスクの内容を取り込んだ扱いにする。 */
+let mockReloaded = false;
+let mockOpened = false;
+
 const mock = {
   settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '', autoRecovery: true, detectExternalChanges: true } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
@@ -508,7 +577,18 @@ const mock = {
       case 'app.info':
         return r({ version: 'dev', excelInstalled: mockExcel });
       case 'file.open':
-        return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }] });
+        if (mockOpened) mockReloaded = true;
+        mockOpened = true;
+        return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }], fingerprint: { office2010: 'base' }, webMark: mockParams.has('webmark') });
+      case 'file.fingerprint':
+        // ?external を付けると、開いたあとにほかで書き換えられたものとして振る舞う（保存・反映の前の確認を確かめられる）
+        return r({ fingerprint: { office2010: mockParams.has('external') && !mockReloaded ? 'changed' : 'base' } });
+      case 'file.read': {
+        const p = payload as { path?: string } | undefined;
+        // path 付き＝ファイルの今の内容を読む（ほかでの変更の差分用）。なし＝ダイアログで選んだ別のブック（取り込み・比較用）
+        if (p?.path) return r({ path: p.path, kind: 'workbook', parts: [{ version: 'office2010', xml: sampleXml.replace('label="CSV出力"', 'label="CSV 出力（変更）"').replace('<button id="btnClear"', '<button id="btnExtra" label="追加" imageMso="Paste" onAction="Ribbon_btnExtra_onAction" />\n          <button id="btnClear"'), images: [] }] });
+        return r({ path: 'C:\\sample\\前任者のツール.xlam', kind: 'workbook', parts: [{ version: 'office2010', xml: otherBookXml, images: [{ id: 'rIdLogo', contentType: 'image/png', base64: mockLogoPng() }] }] });
+      }
       case 'file.save':
         return mockDelay(1500).then(() => r({ backup: t('(ブラウザ実行中のため保存しません)') }));
       case 'file.exportText': {

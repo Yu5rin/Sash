@@ -31,6 +31,14 @@ public static class CustomUIConstants
     /// <summary>customUI パーツのコンテンツタイプ。</summary>
     public const string ContentType = "application/xml";
 
+    /// <summary>名前空間から世代を決める。customUI のものでなければ null。</summary>
+    public static CustomUIVersion? VersionOfNamespace(string? ns) => ns switch
+    {
+        Namespace2007 => CustomUIVersion.Office2007,
+        Namespace2010 => CustomUIVersion.Office2010,
+        _ => null,
+    };
+
     public static string NamespaceOf(CustomUIVersion version) => version switch
     {
         CustomUIVersion.Office2007 => Namespace2007,

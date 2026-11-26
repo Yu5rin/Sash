@@ -39,6 +39,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "file.open" => await OpenFileAsync(body),
                 // 読み書きは UI スレッドから外す。共有フォルダや大きいブックで、ウィンドウの枠が「応答なし」にならないように
                 "file.save" => await RunOffUiAsync(Read<SaveRequest>(body), SaveFile),
+                "file.fingerprint" => await RunOffUiAsync(Read<PathRequest>(body), FileFingerprint),
+                "file.read" => await ReadFileAsync(body),
                 "file.exportText" => await ExportTextAsync(Read<ExportRequest>(body)),
                 "file.recent" => RecentFiles(),
                 "file.removeRecent" => RemoveRecent(Read<PathRequest>(body)),
@@ -224,14 +226,20 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         return new
         {
             path = doc.Path,
-            parts = doc.Parts.Select(part => new
-            {
-                version = part.Version,
-                xml = part.Xml,
-                images = part.Images.Select(i => new { id = i.RelationshipId, contentType = i.ContentType, base64 = Convert.ToBase64String(i.Data) }),
-            }),
+            parts = ToPartDtos(doc),
+            // 開いた時点のリボンの内容の照合値（ほかで書き換えられたかの検知に使う。§23.4）と、インターネットから取得した印（配布前チェックの案内。§23.5）
+            fingerprint = RibbonFingerprint.Compute(doc),
+            webMark = MarkOfTheWeb.IsMarked(doc.Path),
         };
     }
+
+    private static IEnumerable<object> ToPartDtos(RibbonDocument doc) =>
+        doc.Parts.Select(part => (object)new
+        {
+            version = part.Version,
+            xml = part.Xml,
+            images = part.Images.Select(i => new { id = i.RelationshipId, contentType = i.ContentType, base64 = Convert.ToBase64String(i.Data) }),
+        });
 
     private static List<CustomUIPartChange> ToChanges(IReadOnlyList<PartDto> parts) =>
         parts.Select(p => new CustomUIPartChange(
@@ -275,7 +283,90 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
         var backup = Backups().Backup(path);
         RibbonPackage.Save(path, changes);
-        return new { backup };
+        // 書いた内容の照合値。次に「ほかで書き換えられたか」を調べるときの基準にする（読み直せなければ基準なし）
+        return new { backup, fingerprint = TryFingerprint(path) };
+    }
+
+    /// <summary>ファイルのリボンの照合値。ファイルがない・読めない（Excel が書き込み中など）ときは null（検知をあきらめるだけで、失敗にはしない）。</summary>
+    private static IReadOnlyDictionary<string, string>? TryFingerprint(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? RibbonFingerprint.Compute(RibbonPackage.Load(path)) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UserFacingException)
+        {
+            return null;
+        }
+    }
+
+    private object FileFingerprint(PathRequest req) => new { fingerprint = TryFingerprint(System.IO.Path.GetFullPath(req.Path)) };
+
+    private static readonly string[] ReadExtensions = [".xlsm", ".xlam", ".xltm", ".xlsb", ".xml", ".json"];
+
+    /// <summary>
+    /// ファイルを開かずに、リボンの中身だけを読む（別のブックから取り込む・別のブックと比べる・ほかで変更された内容を見る。§23.3・§23.4）。
+    /// 最近使ったファイルには載せない。ブック（.xlsm など）は customUI と画像、.xml は customUI の XML 1 つ、.json は Sash のリボン定義の文字列を返す。
+    /// パスがなければファイルダイアログを出す（キャンセルなら null）。
+    /// </summary>
+    private async Task<object?> ReadFileAsync(JsonElement? body)
+    {
+        var path = body?.TryGetProperty("path", out var p) == true ? p.GetString() : null;
+        if (string.IsNullOrEmpty(path))
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Filter = L(
+                    "ブック・customUI の XML・Sash のリボン定義 (*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json)|*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json|すべてのファイル (*.*)|*.*",
+                    "Workbooks, customUI XML, Sash ribbon definitions (*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json)|*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json|All files (*.*)|*.*"),
+                Title = L("リボンを読むファイルを選ぶ", "Choose a file to read the ribbon from"),
+            };
+            if (dialog.ShowDialog(owner) != DialogResult.OK)
+            {
+                return null;
+            }
+
+            path = dialog.FileName;
+        }
+
+        var target = path;
+        return await Task.Run(() => ReadFile(target));
+    }
+
+    private static object ReadFile(string path)
+    {
+        var full = System.IO.Path.GetFullPath(path);
+        if (!File.Exists(full))
+        {
+            throw new FileNotFoundException(L($"ファイルが見つかりません：{full}", $"File not found: {full}"));
+        }
+
+        var ext = System.IO.Path.GetExtension(full).ToLowerInvariant();
+        if (!ReadExtensions.Contains(ext))
+        {
+            throw new InvalidOperationException(L(".xlsm / .xlam / .xltm / .xlsb / .xml / .json のファイルを選んでください。", "Choose a .xlsm / .xlam / .xltm / .xlsb / .xml / .json file."));
+        }
+
+        if (ext is ".xml" or ".json")
+        {
+            const long MaxTextBytes = 20 * 1024 * 1024;
+            if (new FileInfo(full).Length > MaxTextBytes)
+            {
+                throw new UserFacingException(L("ファイルが大きすぎて読めません（20 MB まで）。", "The file is too large to read (up to 20 MB)."));
+            }
+
+            var text = File.ReadAllText(full);
+            if (ext == ".json")
+            {
+                return new { path = full, kind = "sashJson", parts = Array.Empty<object>(), json = text };
+            }
+
+            var version = CustomUIXml.DetectVersion(text);
+            return new { path = full, kind = "xml", parts = new object[] { new { version, xml = text, images = Array.Empty<object>() } }, json = (string?)null };
+        }
+
+        var doc = RibbonPackage.Load(full);
+        return new { path = full, kind = "workbook", parts = ToPartDtos(doc), json = (string?)null };
     }
 
     /// <summary>
