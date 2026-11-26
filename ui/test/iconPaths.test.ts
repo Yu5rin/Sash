@@ -14,6 +14,11 @@ describe('absoluteStart（先頭の m を M にする）', () => {
     expect(absoluteStart('m1 2', 'x')).toBe('M1 2');
     expect(absoluteStart('m1 2v3', 'x')).toBe('M1 2v3');
     expect(absoluteStart('M1 2 3 4', 'x')).toBe('M1 2 3 4');
+    // カンマ区切り・+ 符号・x と y の間が空白でないもの（続く座標は相対のまま）
+    expect(absoluteStart('m12 5,3 4', 'x')).toBe('M12 5l3 4');
+    expect(absoluteStart('m12,5 3,4', 'x')).toBe('M12 5l3,4');
+    expect(absoluteStart('m1+2 3', 'x')).toBe('M1 2l3');
+    expect(absoluteStart('m1 2,l3 4', 'x')).toBe('M1 2l3 4');
     expect(() => absoluteStart('x1 2', 'x')).toThrow();
   });
 

@@ -355,9 +355,9 @@ const VIA_LIMIT = 400;
 /** 入力を語に分ける。空白・読点・中黒で区切り、英数字と日本語の境目でも分ける（「CSV出力」→ csv / 出力）。 */
 export function splitQuery(query: string): { raw: string; norm: string }[] {
   const out: { raw: string; norm: string }[] = [];
-  // R&D・Q&A・M&A のように、1 文字の英字どうしをはさむ & は 1 語（RD・QA・MA）として扱う（& で分けると 1 文字ずつの検索になるため）。
-  // drag&drop・black&white のように、長い語をはさむ & は今までどおり分ける
-  const text = query.normalize('NFKC').replace(/(?<![A-Za-z])([A-Za-z])&([A-Za-z])(?![A-Za-z])/g, '$1$2');
+  // R&D・Q&A・M&A のように、1 文字の英字どうしをはさむ & は 1 語（randd・qanda・manda）として扱う（& で分けると 1 文字ずつの検索になるため）。
+  // Q&A は QA（品質保証）とは別の語。drag&drop・black&white のように、長い語をはさむ & は今までどおり分ける
+  const text = query.normalize('NFKC').replace(/(?<![A-Za-z])([A-Za-z])&([A-Za-z])(?![A-Za-z])/g, '$1and$2');
   for (const chunk of text.split(/[\s、。,，・/／]+/)) {
     for (const part of chunk.match(/[A-Za-z0-9_-]+|[^A-Za-z0-9_\-]+/g) ?? []) {
       const norm = normalize(part);

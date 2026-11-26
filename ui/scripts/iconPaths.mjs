@@ -39,12 +39,13 @@ export function tidy(d, where) {
  */
 export function absoluteStart(d, where) {
   if (d.startsWith('M')) return d;
-  const m = /^m(-?(?:\d+\.?\d*|\.\d+))[ ,]?(-?(?:\d+\.?\d*|\.\d+))(.*)$/s.exec(d);
+  const N = '([+-]?(?:\\d+\\.?\\d*|\\.\\d+))';
+  const m = new RegExp(`^m\\s*${N}[\\s,]*${N}(.*)$`, 's').exec(d);
   if (!m) throw new Error(`M か m で始まりません: ${where}`);
   const rest = m[3];
-  // 残りが（空白をはさんで）数字で始まるなら、暗黙の相対 lineto なので l を足す。正規表現が x と y のあいだの区切りで空白を食べるため、先頭の空白を許す
-  const sep = /^\s*[\d.-]/.test(rest) ? 'l' : '';
-  return `M${m[1]} ${m[2]}${sep}${rest.trimStart()}`;
+  // 残りが（空白・カンマをはさんで）数字で始まるなら、暗黙の相対 lineto なので l を足す。x と y のあいだの区切りで空白やカンマを食べるので、先頭の区切りを許す
+  const sep = /^[\s,]*[\d.+-]/.test(rest) ? 'l' : '';
+  return `M${m[1].replace('+', '')} ${m[2].replace('+', '')}${sep}${rest.replace(/^[\s,]+/, '')}`;
 }
 
 /** 図形要素（SVG の circle・rect など）を、パスの d に直す。 */

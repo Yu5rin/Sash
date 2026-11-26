@@ -80,9 +80,9 @@ describe('ツールチップの個数（低 7）', () => {
 
 describe('& のまとめ方（低〜中 5）', () => {
   it('1 文字どうしの英字をはさむ & だけを 1 語にする（R&D・Q&A・M&A）。drag&drop・black&white は分ける', () => {
-    expect(splitQuery('R&D').map((t) => t.norm)).toEqual(['rd']);
-    expect(splitQuery('Q&A').map((t) => t.norm)).toEqual(['qa']);
-    expect(splitQuery('M&A').map((t) => t.norm)).toEqual(['ma']);
+    expect(splitQuery('R&D').map((t) => t.norm)).toEqual(['randd']);
+    expect(splitQuery('Q&A').map((t) => t.norm)).toEqual(['qanda']);
+    expect(splitQuery('M&A').map((t) => t.norm)).toEqual(['manda']);
     expect(splitQuery('drag&drop').map((t) => t.norm)).toEqual(['drag', '&', 'drop']);
     expect(splitQuery('black&white').map((t) => t.norm)).toEqual(['black', '&', 'white']);
   });
@@ -90,8 +90,15 @@ describe('& のまとめ方（低〜中 5）', () => {
   it('drag&drop・black&white・Q&A は、0 件にならない', () => {
     expect(searchIconSet(allIcons, 'drag&drop').hits.length).toBeGreaterThan(0);
     expect(searchIconSet(allIcons, 'black&white').hits.length).toBeGreaterThan(0);
+    // Q&A は質疑応答（ヘルプ・質問の吹き出し）。品質保証（QA）とは別
     const qa = searchIconSet(allIcons, 'Q&A').hits.slice(0, 5).map((h) => h.icon.name);
-    expect(qa.some((n) => ['shield-check', 'certificate', 'award', 'package-check', 'clipboard-check'].includes(n))).toBe(true);
+    expect(qa.some((n) => ['help', 'message-question', 'message-circle-question'].includes(n))).toBe(true);
+    expect(qa).not.toContain('certificate');
+    expect(searchIconSet(allIcons, 'FAQ').hits.slice(0, 5).map((h) => h.icon.name)).toContain('help');
+    const ma = searchIconSet(allIcons, 'M&A').hits.slice(0, 5).map((h) => h.icon.name);
+    expect(ma.some((n) => ['handshake', 'heart-handshake', 'building-skyscraper'].includes(n))).toBe(true);
+    const qaQuality = searchIconSet(allIcons, 'QA').hits.slice(0, 5).map((h) => h.icon.name);
+    expect(qaQuality.some((n) => ['shield-check', 'certificate', 'award', 'package-check', 'clipboard-check'].includes(n))).toBe(true);
     expect(searchIconSet(allIcons, '品質保証').hits.length).toBeGreaterThan(0);
   });
 });

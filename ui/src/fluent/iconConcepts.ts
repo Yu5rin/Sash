@@ -57,7 +57,7 @@ export const CONCEPTS: readonly (readonly [string, string])[] = [
   ['円グラフ/えんぐらふ/ドーナツ/構成比/こうせいひ/割合/わりあい/比率/ひりつ/率/りつ', 'chart-pie chart-donut pie percentage chart-pie-2'],
   ['折れ線/おれせん/折れ線グラフ/推移/すいい/トレンド/時系列/じけいれつ', 'chart-line trending-up chart-area-line timeline data_line'],
   ['増加/ぞうか/上昇/じょうしょう/増える/ふえる/伸び/のび/成長/せいちょう/アップ', 'trending-up arrow-up-right growth chart-line arrow-up'],
-  ['減少/げんしょう/下降/げこう/下落/げらく/減る/へる/低下/ていか/ダウン', 'trending-down arrow-down-right chart-line arrow-down'],
+  ['減少/げんしょう/下降/下落/げらく/減る/へる/低下/ていか/ダウン', 'trending-down arrow-down-right chart-line arrow-down'],
   ['集計/しゅうけい/合計/ごうけい/総計/そうけい/累計/るいけい/トータル/サム/小計/しょうけい', 'sum sigma calculator chart-bar report table math-function'],
   ['分析/ぶんせき/アナリティクス/解析/かいせき/調査/ちょうさ/統計/とうけい/データ分析', 'analytics chart-histogram chart-infographic report-analytics chart-dots stats'],
   ['データ/でーた/情報処理/数値/すうち', 'database chart-bar table file-analytics data'],
@@ -511,7 +511,7 @@ export const CONCEPTS: readonly (readonly [string, string])[] = [
   ['検品/けんぴん/検査/けんさ/検収/けんしゅう/受入検査/うけいれけんさ/外観検査/がいかんけんさ/品質検査/ひんしつけんさ/抜き取り検査/ぬきとりけんさ', 'package-check scan-search clipboard-check caliper microscope zoom-check certificate shield-check'],
 
   // 開発・試作・検討
-  ['開発/かいはつ/研究開発/けんきゅうかいはつ/RD/アールディー/アールアンドディー/新製品開発/しんせいひんかいはつ/商品開発/しょうひんかいはつ/技術開発/ぎじゅつかいはつ', 'prototype-cube flask-conical microscope bulb rocket cube-3d-sphere circuit-board code'],
+  ['開発/かいはつ/研究開発/けんきゅうかいはつ/RD/randd/R&D/アールディー/アールアンドディー/新製品開発/しんせいひんかいはつ/商品開発/しょうひんかいはつ/技術開発/ぎじゅつかいはつ', 'prototype-cube flask-conical microscope bulb rocket cube-3d-sphere circuit-board code'],
   ['試作/しさく/試作品/しさくひん/プロトタイプ/ぷろとたいぷ/モックアップ/もっくあっぷ/試作機/しさくき/テスト機', 'prototype-cube cube box-model flask-conical test-pipe'],
   ['検討/けんとう/吟味/ぎんみ/評価/ひょうか/レビュー/れびゅー/検証/けんしょう/精査/せいさ/見直し/みなおし/考察/こうさつ/審査/しんさ/比較検討/ひかくけんとう', 'search-check clipboard-search scale list-checks file-search-corner bulb message-circle-question'],
 
@@ -524,4 +524,8 @@ export const CONCEPTS: readonly (readonly [string, string])[] = [
   ['エレベーター/えれべーたー/エレベータ/えれべーた/昇降機/しょうこうき/昇降/しょうこう/リフト/りふと/EV/イーブイ/ELV/エレベータ設備/かご/乗りかご', 'elevator elevator-car elevator-shaft elevator-call freight-lift aerial-lift escalator stairs'],
   ['エレベーター保守/えれべーたーほしゅ/巻上機/まきあげき/昇降路/しょうこうろ/乗り場/のりば/呼びボタン/よびぼたん', 'elevator-shaft elevator-call elevator-car elevator wrench'],
   ['荷物用リフト/にもつようりふと/ダムウェーター/だむうぇーたー/荷物昇降機/にもつしょうこうき/貨物用エレベーター', 'freight-lift elevator crane forklift'],
+
+  // Q&A・M&A（QA＝品質保証とは別の語）
+  ['Q&A/qanda/キューアンドエー/質疑応答/しつぎおうとう/FAQ/エフエーキュー/よくある質問/よくあるしつもん/問答/もんどう', 'help message-question message-circle-question question-mark'],
+  ['M&A/manda/エムアンドエー/買収/ばいしゅう/合併/がっぺい/企業買収/きぎょうばいしゅう/事業譲渡/じぎょうじょうと/統合/とうごう', 'handshake heart-handshake building-skyscraper building arrows-join'],
 ];

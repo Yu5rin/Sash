@@ -42,11 +42,11 @@ export const SASH_ICONS = {
   'packing-box': ['E-commerce', 'packing carton box this side up fragile shipping', ['M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2z', 'M3 8h18', 'M12 17.5v-6.5', 'M9 14.5l3 -3.5l3 3.5']],
 
   // ---- 営業・事務の書類 ----
-  'estimate-sheet': ['Document', 'estimate quotation quote sheet price yen', ['M6.5 3h7l4.5 4.5v12a1.5 1.5 0 0 1 -1.5 1.5h-10a1.5 1.5 0 0 1 -1.5 -1.5v-15a1.5 1.5 0 0 1 1.5 -1.5z', 'M13.5 3v3.5a1 1 0 0 0 1 1h3.5', 'M9.5 11.5l2.5 3l2.5 -3', 'M12 14.5v4', 'M10 16.5h4']],
-  'purchase-order': ['Document', 'purchase order placing order outgoing sheet', ['M6.5 3h7l4.5 4.5v12a1.5 1.5 0 0 1 -1.5 1.5h-10a1.5 1.5 0 0 1 -1.5 -1.5v-15a1.5 1.5 0 0 1 1.5 -1.5z', 'M13.5 3v3.5a1 1 0 0 0 1 1h3.5', 'M12 18v-6', 'M9.5 14.5l2.5 -2.5l2.5 2.5']],
-  'sales-order': ['Document', 'sales order receiving order incoming sheet', ['M6.5 3h7l4.5 4.5v12a1.5 1.5 0 0 1 -1.5 1.5h-10a1.5 1.5 0 0 1 -1.5 -1.5v-15a1.5 1.5 0 0 1 1.5 -1.5z', 'M13.5 3v3.5a1 1 0 0 0 1 1h3.5', 'M12 12v6', 'M9.5 15.5l2.5 2.5l2.5 -2.5']],
-  'delivery-note': ['Document', 'delivery note slip packing list goods', ['M6.5 3h7l4.5 4.5v12a1.5 1.5 0 0 1 -1.5 1.5h-10a1.5 1.5 0 0 1 -1.5 -1.5v-15a1.5 1.5 0 0 1 1.5 -1.5z', 'M13.5 3v3.5a1 1 0 0 0 1 1h3.5', 'M9 12h6v5h-6z', 'M9 14h6']],
-  'deadline-calendar': ['Document', 'deadline due date delivery schedule calendar flag', ['M5 6.5a1.5 1.5 0 0 1 1.5 -1.5h11a1.5 1.5 0 0 1 1.5 1.5v12a1.5 1.5 0 0 1 -1.5 1.5h-11a1.5 1.5 0 0 1 -1.5 -1.5z', 'M9 3v3.5', 'M15 3v3.5', 'M5 10.5h14', 'M9.5 18.5v-5', 'M9.5 13.5h5l-1.5 1.5l1.5 1.5h-5']],
+  'estimate-sheet': ['Document', 'estimate quotation quote sheet price yen', ['M6 2h8l6 6v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-16a2 2 0 0 1 2 -2z', 'M8.5 10l3.5 5l3.5 -5', 'M12 15v5', 'M9.5 17h5']],
+  'purchase-order': ['Document', 'purchase order placing order outgoing sheet', ['M6 2h8l6 6v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-16a2 2 0 0 1 2 -2z', 'M12 19.5v-9', 'M8.5 14l3.5 -3.5l3.5 3.5']],
+  'sales-order': ['Document', 'sales order receiving order incoming sheet', ['M6 2h8l6 6v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-16a2 2 0 0 1 2 -2z', 'M12 10.5v9', 'M8.5 16l3.5 3.5l3.5 -3.5']],
+  'delivery-note': ['Document', 'delivery note slip packing list goods', ['M6 2h8l6 6v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-16a2 2 0 0 1 2 -2z', 'M8.5 12h7v7h-7z', 'M8.5 15.5h7']],
+  'deadline-calendar': ['Document', 'deadline due date delivery schedule calendar flag', ['M5 6.5a1.5 1.5 0 0 1 1.5 -1.5h11a1.5 1.5 0 0 1 1.5 1.5v12a1.5 1.5 0 0 1 -1.5 1.5h-11a1.5 1.5 0 0 1 -1.5 -1.5z', 'M9 3v3.5', 'M15 3v3.5', 'M5 10.5h14', 'M12 13.5v2.5', 'M12 18.8v.01']],
   'business-card': ['Communication', 'business card name card contact sales meishi', ['M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2z', 'M7 10h4', 'M7 14h3', 'M14 10h3', 'M14 14h3']],
   'cost-down': ['Charts', 'cost down reduction saving coin decrease price', ['M13 8a5 5 0 1 0 -10 0a5 5 0 1 0 10 0z', 'M3 20h10', 'M18 4v11', 'M14.5 12l3.5 3.5l3.5 -3.5']],
 };
