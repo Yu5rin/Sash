@@ -1,6 +1,6 @@
 // アプリ全体の状態。開いているファイル（セッション）と、編集中のパーツ、Lint の結果を持つ。
 
-import type { AppInfo, CustomUIVersion, OpenedDocument, Settings } from './bridge';
+import type { AppInfo, CustomUIVersion, Fingerprint, OpenedDocument, Settings } from './bridge';
 import { knownIdMso } from './catalog/catalog';
 import { lint, NAMESPACES, type Problem } from './lint';
 import { missingImageMso, onMsoIconsLoaded } from './msoIcons';
@@ -12,13 +12,20 @@ export interface Session {
   active: PartStore;
   /** 元のファイルに customUI がなく、新規に作ったパーツか。 */
   created: boolean;
+  /**
+   * ファイルのリボンの内容の照合値（開いた・保存した時点のもの）。ほかで書き換えられたかを調べる基準（§23.4）。
+   * 読めなかったときは null（その間は検知しない）。
+   */
+  fingerprint: Fingerprint | null;
+  /** インターネットから取得した印が付いているファイルか（§23.5）。 */
+  webMark: boolean;
 }
 
 type AppEvent = 'session' | 'problems' | 'store' | 'settings' | 'vba';
 
 class App {
   info: AppInfo = { version: '', excelInstalled: false };
-  settings: Settings = { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: 'ja', iconLibraryPath: '', updateCheckOnStartup: true, updateSource: '' };
+  settings: Settings = { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: 'ja', iconLibraryPath: '', updateCheckOnStartup: true, updateSource: '', autoRecovery: true, detectExternalChanges: true };
   session: Session | null = null;
   problems: Problem[] = [];
   /** Lint に問題を足す仕組み（VBA との照合など、ほかのモジュールが登録する）。 */
@@ -65,7 +72,7 @@ class App {
       parts.set('office2010', store);
     }
     const active = parts.get('office2010') ?? parts.get('office2007')!;
-    this.session = { path: doc.path, parts, active, created };
+    this.session = { path: doc.path, parts, active, created, fingerprint: doc.fingerprint ?? null, webMark: doc.webMark ?? false };
     this.attach(active);
     this.emit('session');
   }

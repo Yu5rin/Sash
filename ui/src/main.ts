@@ -4,9 +4,10 @@
 
 import './boot'; // 最初に評価される（想定外の例外の受け皿。後ろの import の評価中の失敗も拾うため）
 import './styles.css';
+import './styles-v3.css';
 import { app } from './app';
 import { invoke, isHosted, onHostEvent, sendDroppedFiles } from './bridge';
-import { insertStubs, setupRibbonHolder, vba } from './callbacks';
+import { assignableAttr, insertStubs, setupRibbonHolder, vba } from './callbacks';
 import { checkForUpdates, checkOnStartup, initUpdates, notifyUpdated } from './updates';
 import { openCatalog } from './dialogs/catalogDialog';
 import { openDiff } from './dialogs/diffDialog';
@@ -29,7 +30,7 @@ import { mountBottom, showBottomTab } from './views/bottom';
 import { getCanvasMode, mountCanvas, setCanvasGrowHandler, setCanvasMode, startRenameOf, type CanvasMode } from './views/canvas';
 import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
-import { flushPendingEdits, mountInspector } from './views/inspector';
+import { flushPendingEdits, mountInspector, runAssignMacro } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
 import { filteredTreePaths, focusTreeFilter, mountTree } from './views/tree';
 import { openIdReplaceDialog } from './idReplaceDialog';
@@ -40,6 +41,7 @@ import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, R
 import { describeElement } from './elementHelp';
 import { inTextField, runEditCommand } from './shell/editCommands';
 import { createPollGate } from './shell/pollGate';
+import { createExternalWatcher } from './shell/externalWatch';
 import { vbaChipState } from './shell/vbaChip';
 import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
@@ -53,6 +55,8 @@ import { reportUnexpected } from './shell/errorReport';
 import { installTextFieldMenu } from './shell/textMenu';
 import { changePreview, currentPreview, fitExcelToPreview, SCALE_CHOICES, WIDTH_CHOICES, widthChoiceLabel } from './shell/previewCommands';
 import { openDistributionCheck } from './dialogs/distributionDialog';
+import { startRecovery } from './recovery';
+import { compareWithOtherBook, exportCustomUiXml, importFromOtherBook } from './importFlow';
 import { openHistoryDialog } from './dialogs/historyDialog';
 import type { CheckItem } from './distributionCheck';
 import { controlRows, toCsv, toTsv } from './controlList';
@@ -210,6 +214,14 @@ function iconDisabledHint(): string | undefined {
   return canMakeIcon() ? undefined : t('ボタンなど、アイコンを持てるコントロールを選ぶと使えます');
 }
 
+/** 既存のマクロを割り当てられない理由（割り当てられるなら null）。 */
+function assignMacroDisabledReason(): string | null {
+  const store = app.store;
+  if (!store?.selection) return t('ボタンなど、押したときに Sub を呼ぶコントロールを選ぶと使えます');
+  if (store.isMulti) return t('1 つだけ選ぶと使えます');
+  return assignableAttr(store.selectedElement) ? null : t('ボタンなど、押したときに Sub を呼ぶコントロールを選ぶと使えます');
+}
+
 /** 選択中の要素のコールバックのうち、VBE で表示できる最初のもの。 */
 function revealableCallback(): string | null {
   const store = app.store;
@@ -253,6 +265,8 @@ function commands(): AppCommand[] {
     { id: 'file.backup', group: G.file, title: t('バックアップから復元…'), keywords: 'backup restore 戻す', enabled: () => has() && idle() && hasFile(), run: () => void openBackupDialog() },
     { id: 'file.export', group: G.file, title: t('.sash.json として書き出す…'), keywords: 'export json git', enabled: has, run: () => void exportSashFile() },
     { id: 'file.import', group: G.file, title: t('.sash.json を読み込む…'), keywords: 'import json', enabled: has, run: importSashFile },
+    { id: 'file.importBook', group: G.file, title: t('別のブックから取り込む…'), keywords: 'import other workbook merge copy tab group 取り込み 流用 引き継ぎ 別のブック', enabled: () => has() && idle(), run: () => void openOnce('importBookRead', importFromOtherBook) },
+    { id: 'file.exportXml', group: G.file, title: t('customUI の XML を書き出す…'), keywords: 'export xml customui 書き出し 他ツール', enabled: has, run: () => void exportCustomUiXml() },
     { id: 'file.exportControls', group: G.file, title: t('コントロール一覧を CSV で書き出す…'), keywords: 'export csv controls list 一覧 書き出し', enabled: has, run: () => void exportControlList() },
     { id: 'file.copyControls', group: G.file, title: t('コントロール一覧をコピー（Excel に貼り付け用）'), keywords: 'copy tsv controls list 一覧 クリップボード', enabled: has, run: copyControlList },
     { id: 'file.sample', group: G.file, title: t('サンプルを開く'), keywords: 'sample example サンプル 試す', enabled: idle, run: () => void openSample() },
@@ -319,7 +333,9 @@ function commands(): AppCommand[] {
     { id: 'vba.reveal', group: 'VBA', title: t('選択中のコントロールのコールバックを VBE で表示'), keywords: 'vbe vba open procedure 開く', enabled: () => has() && revealableCallback() !== null, run: () => { const n = revealableCallback(); if (n) void revealInVbe(n); } },
     { id: 'tools.replaceIds', group: G.tools, title: t('ID の一括置換…'), keywords: 'id rename replace prefix 置換', enabled: has, run: () => openIdReplaceDialog() },
     { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
+    { id: 'tools.compareBook', group: G.tools, title: t('別のブックと比べる…'), keywords: 'diff compare other workbook 比較 前任者 引き継ぎ', enabled: has, run: () => void openOnce('compareBookRead', compareWithOtherBook) },
     { id: 'vba.refresh', group: 'VBA', title: t('VBA を再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
+    { id: 'vba.assign', group: 'VBA', title: t('既存のマクロを選んで割り当てる…'), keywords: 'assign macro button onaction existing マクロ 割り当て ボタン 呼び出し', enabled: () => has() && assignMacroDisabledReason() === null, run: () => { const el = app.store?.selectedElement ?? null; const attr = assignableAttr(el); if (el && attr) void runAssignMacro(el, attr); } },
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
     { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: canMakeIcon, run: () => openImageEditor() },
@@ -385,6 +401,7 @@ function disabledReasonFor(c: AppCommand): string | undefined {
     case 'insert.recipes': return has() ? t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください') : t('ファイルを開くと使えます');
     case 'file.quit': return t('ブラウザで動かしているときは使えません');
     case 'view.fitExcel': return t('画面の幅を選び、Excel が見つかっているときに使えます');
+    case 'vba.assign': return has() ? assignMacroDisabledReason() ?? undefined : t('ファイルを開くと使えます');
     case 'vba.refresh': case 'vba.insert': return has() ? t('Excel で開いているブックで使えます') : t('ファイルを開くと使えます');
     default:
   }
@@ -535,6 +552,8 @@ const MENUS: MenuDef[] = [
       cmd('file.backup', undefined, { mnemonic: 'B', hint: app.session && !hasFile() ? t('サンプルにはバックアップがありません') : undefined }),
       cmd('file.export'),
       cmd('file.import'),
+      cmd('file.importBook', undefined, { mnemonic: 'M' }),
+      cmd('file.exportXml', undefined, { mnemonic: 'P' }),
       {
         label: t('コントロール一覧'), items: () => [
           cmd('file.exportControls', t('CSV ファイルに書き出す…')),
@@ -659,11 +678,13 @@ const MENUS: MenuDef[] = [
         hint: sampleHint() ?? (app.info.excelInstalled ? undefined : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)')),
       }),
       cmd('tools.diff', undefined, { mnemonic: 'D' }),
+      cmd('tools.compareBook', undefined, { mnemonic: 'B' }),
       cmd('tools.distCheck', undefined, { mnemonic: 'C' }),
       SEP,
       {
         label: 'VBA', mnemonic: 'V', items: () => [
           cmd('tools.runMacro', t('マクロを Excel で試す'), { mnemonic: 'M', hint: runMacroHint() }),
+          cmd('vba.assign', t('既存のマクロを割り当てる…'), { mnemonic: 'A', hint: has() ? assignMacroDisabledReason() ?? undefined : undefined }),
           cmd('vba.reveal', t('コールバックを VBE で表示'), { mnemonic: 'V' }),
           cmd('vba.refresh', t('VBA を読み直して照合'), { mnemonic: 'R', hint: app.session && !hasFile() ? t('サンプルは Excel で開かれていないため、VBA と照合できません') : undefined }),
           cmd('vba.insert', t('足りないコールバックを挿入'), { mnemonic: 'I' }),
@@ -854,6 +875,9 @@ const EXCEL_CHIP_MIN_INTERVAL_MS = 30_000;
 const pollExcelChip = createPollGate(refreshExcelChip, { minIntervalMs: EXCEL_CHIP_MIN_INTERVAL_MS, busy: () => busyState() !== null });
 // 窓に戻ったとき（Excel で開いたり閉じたりして戻ってきたとき）に取り直す
 window.addEventListener('focus', () => void pollExcelChip());
+// 窓に戻ったとき、開いているファイルがほかで書き換えられていないかも調べる（§23.4）
+const pollExternal = createExternalWatcher();
+window.addEventListener('focus', () => void pollExternal());
 // ファイルを開いた・閉じたとき、反映（Excel でブックを開き直す）が終わったときは、状態が変わったので間引かずに取り直す。
 // 入力のたびに呼ばれる updateChrome からは呼ばない（Excel への問い合わせが重いため）
 app.on('session', () => void pollExcelChip(true));
@@ -952,6 +976,8 @@ setElementMenuHooks({
 // 幅を比べるモードで、キャンバスの高さを一時的に広げる（保存しない）
 setCanvasGrowHandler((px) => layout.growTemporarily('top', px));
 const home = mountHome($('home'), (p) => void openFile(p));
+// 未保存の編集の自動退避（§23.2）。変更のあと数秒おいて書き、保存・閉じたら消す
+startRecovery();
 
 // XML ペインの名前に F6 での移り方を添える（index.html の既定は日本語のままなので、今の言語で付け直す）
 document.querySelector('.xml-pane')?.setAttribute('aria-label', t('XML エディタ（F6 で次のペインへ）'));

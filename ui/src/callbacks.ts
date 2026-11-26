@@ -6,7 +6,8 @@ import { notifyIfSlow } from './shell/slowCall';
 import { ask } from './dialogs/modal';
 import { t } from './i18n';
 import { allElements, elementAt, type Path } from './model';
-import { attributes, isVbaIdentifier } from './schema';
+import { canWrapAttr, fixableMacro, planWrappers, type AssignTarget, type MacroEntry } from './macroAssign';
+import { attributes, attrsOfEl, isVbaIdentifier } from './schema';
 import { reportRefusal } from './store';
 import {
   bareCallbackName, callbackName, generateStub, matchCallbacks, parseProcedures, renameDeclaration,
@@ -293,3 +294,94 @@ app.problemProviders.push(() => {
   );
 });
 app.on('vba', () => app.scheduleLint());
+
+
+// ---- 既存のマクロを割り当てる（仕様書 §23.1） ----
+
+/** 割り当てられる属性（呼び出し用の Sub を作れるコールバック）を、要素から探す。onAction がなければ onChange。なければ null。 */
+export function assignableAttr(el: Element | null): string | null {
+  if (!el) return null;
+  for (const attr of ['onAction', 'onChange']) {
+    if (canWrapAttr(attr, el.localName) && attributes.get(attr) && elementAcceptsAttr(el, attr)) return attr;
+  }
+  return null;
+}
+
+function elementAcceptsAttr(el: Element, attr: string): boolean {
+  return attrsOfEl(el).some((d) => d.name === attr);
+}
+
+/** 呼び出し用の Sub の名前に使えない（すでにある）名前。VBA のすべての Sub・Function と、XML のほかの場所が使っているコールバック名。 */
+function takenNames(replacing: ReadonlySet<string>): Set<string> {
+  const taken = new Set<string>();
+  for (const p of (vba.modules ?? []).flatMap(parseProcedures)) taken.add(p.name.toLowerCase());
+  const doc = app.store?.doc;
+  if (doc) {
+    for (const el of allElements(doc)) {
+      for (const a of Array.from(el.attributes)) {
+        if (attributes.get(a.name)?.kind === 'callback' && a.value && !replacing.has(a.value)) taken.add(bareCallbackName(a.value).toLowerCase());
+      }
+    }
+  }
+  return taken;
+}
+
+/**
+ * macro を呼ぶだけの Sub を作って、targets の属性に割り当てる。
+ * VBA に書き込めるとき（Excel で開いている）は設定のモジュールへ挿入し、書き込めないときは Sub をクリップボードへコピーする。
+ * VBA への挿入を先に行う（失敗したら XML には触らない）。戻り値は利用者に見せる結果の文言。
+ */
+export async function assignMacro(targets: readonly { path: Path; attr: string }[], macro: MacroEntry): Promise<string> {
+  const store = app.store;
+  const s = app.session;
+  if (!store || !s) throw new Error(t('ファイルが開かれていません'));
+  if (store.syncError) throw new Error(t('XML に構文エラーがあるため、この操作はできません。先に XML エディタでエラーを直してください'));
+  const elements = targets.map((x) => ({ ...x, el: elementAt(store.doc, x.path) }));
+  if (elements.some((x) => !x.el)) throw new Error(t('割り当てる先の要素が見つかりません。選び直してください'));
+  const replacing = new Set(elements.map((x) => x.el!.getAttribute(x.attr) ?? '').filter(Boolean));
+  const plan = planWrappers(
+    elements.map((x): AssignTarget => ({ path: x.path, attr: x.attr, tag: x.el!.localName, baseName: defaultCallbackName(x.el!, x.attr) })),
+    macro,
+    takenNames(replacing),
+  );
+  const code = plan.wrappers.map((w) => w.code).join('\r\n');
+  const names = plan.wrappers.map((w) => w.name).join(t('、'));
+  const viaVba = vba.canWrite;
+  // 選んだ要素の目印（種類・id・いまの属性の値）。VBA への挿入を待つ間に、文書が書き換わる・並べ替わると、同じパスが別の要素を指す
+  const signature = (el: Element | null | undefined, attr: string) => (el ? `${el.localName}|${el.getAttribute('id') ?? ''}|${el.getAttribute('idMso') ?? ''}|${el.getAttribute(attr) ?? ''}` : null);
+  const before = elements.map((x) => signature(x.el, x.attr));
+  if (viaVba) await vbaInvoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
+  const sameElements = () => app.store === store && elements.every((x, i) => signature(elementAt(store.doc, x.path), x.attr) === before[i]);
+  if (!sameElements()) {
+    if (viaVba) await vba.refresh();
+    throw new Error(viaVba
+      ? t('呼び出し用の Sub は {module} に追加しましたが、その間に文書が変わったため、属性は付けませんでした。もう一度選び直してください', { module: app.settings.callbackModule })
+      : t('その間に文書が変わったため、属性は付けませんでした。もう一度選び直してください'));
+  }
+  const ok = store.edit('inspector', (doc) => {
+    for (const a of plan.assignments) elementAt(doc, a.path)?.setAttribute(a.attr, a.name);
+    return undefined;
+  }, t('マクロ「{macro}」を割り当て', { macro: macro.name }));
+  if (viaVba) await vba.refresh();
+  // 属性がすでに同じ名前だった（追加で名前だけ入れてあった）ときは、XML は変わらなくてよい
+  const unchanged = plan.assignments.every((a) => elementAt(store.doc, a.path)?.getAttribute(a.attr) === a.name);
+  if (!ok && !unchanged) throw new Error(viaVba ? t('呼び出し用の Sub は {module} に追加しましたが、XML を書き換えられませんでした', { module: app.settings.callbackModule }) : t('XML を書き換えられませんでした'));
+  const renamed = plan.renamed.length ? t('（名前が重なったため {list} にしました）', { list: plan.renamed.map(([a, b]) => `${a} → ${b}`).join(t('、')) }) : '';
+  if (viaVba) return t('「{macro}」を呼ぶ Sub（{names}）を {module} に追加して割り当てました{renamed}。Excel でブックを保存してください', { macro: macro.name, names, module: app.settings.callbackModule, renamed });
+  await navigator.clipboard.writeText(code).catch(() => undefined);
+  return t('呼び出し用の Sub（{names}）を割り当て、コードをクリップボードにコピーしました{renamed}。VBA の標準モジュールに貼り付けてください（{macro} が見つかる名前のとき）', { macro: macro.name, names, renamed });
+}
+
+/** コールバックの状態から、呼び出し用の Sub を作って直せる候補を返す（直せなければ null）。 */
+export function fixableMacroOf(status: CallbackStatus): MacroEntry | null {
+  const procs = (vba.modules ?? []).flatMap(parseProcedures);
+  const dup = status.procedure ? procs.filter((p) => p.name.toLowerCase() === status.procedure!.name.toLowerCase()).length > 1 : false;
+  return fixableMacro(status, (name) => vba.modules?.find((m) => m.name === name)?.type ?? 1, dup);
+}
+
+/** 「引数の不一致」を、直接書かれたマクロ名を呼ぶ Sub を作って付け替えることで直す。 */
+export async function fixWithWrapper(status: CallbackStatus): Promise<string> {
+  const macro = fixableMacroOf(status);
+  if (!macro) throw new Error(t('このコールバックは、呼び出し用の Sub を作って直せる形ではありません'));
+  return assignMacro(status.uses.map((u) => ({ path: u.path, attr: u.attr })), macro);
+}

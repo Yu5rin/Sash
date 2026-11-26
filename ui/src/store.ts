@@ -310,15 +310,20 @@ export class PartStore {
    * XML エディタに構文エラーがある間は、書きかけの XML を捨ててしまわないよう、編集を断る。
    */
   edit(source: Source, fn: EditFn, label: string = t('編集')): boolean {
-    return this.transact(source, fn, label, null);
+    return this.transact(source, fn, label, []);
   }
 
   /** 画像の追加と、その画像のコントロールへの設定を、一つの履歴にまとめて行う。edit と同じ規則で断る・取り消す。 */
   addImageAndApply(entry: ImageEntry, fn: EditFn, label: string = t('画像「{id}」の設定', { id: entry.id })): boolean {
-    return this.transact('other', fn, label, entry);
+    return this.transact('other', fn, label, [entry]);
   }
 
-  private transact(source: Source, fn: EditFn, label: string, image: ImageEntry | null): boolean {
+  /** 複数の画像の追加と、XML の編集を、一つの履歴にまとめて行う（別のブックから取り込むとき。§23.3）。edit と同じ規則で断る・取り消す。 */
+  addImagesAndEdit(entries: readonly ImageEntry[], fn: EditFn, label: string): boolean {
+    return this.transact('other', fn, label, entries);
+  }
+
+  private transact(source: Source, fn: EditFn, label: string, images: readonly ImageEntry[]): boolean {
     if (this.syncError) {
       reportRefusal(t('XML に構文エラーがあるため、この操作はできません。先に XML エディタでエラーを直してください'));
       return false;
@@ -339,9 +344,9 @@ export class PartStore {
         if (parsed.ok) this.doc = parsed.doc;
       }
     };
-    if (image) {
+    if (images.length > 0) {
       this.images = new Map(this.images);
-      this.images.set(image.id, image);
+      for (const image of images) this.images.set(image.id, image);
     }
     let result: ReturnType<EditFn>;
     try {
@@ -377,7 +382,7 @@ export class PartStore {
     selections = selection ? normalizeSelections(selections, selection) : [];
     const xml = serialize(this.doc);
     const sameSelections = selections.length === before.selections.length && selections.every((p, i) => samePath(p, before.selections[i]!));
-    if (!image && xml === beforeXml && samePath(selection, before.selection) && sameSelections) {
+    if (images.length === 0 && xml === beforeXml && samePath(selection, before.selection) && sameSelections) {
       rollback();
       return false;
     }
@@ -389,8 +394,8 @@ export class PartStore {
     this.selections = selections;
     this.anchor = selection;
     this.text = xml;
-    if (image) this.refreshIsNew();
-    this.emit(image ? ['doc', 'selection', 'images'] : ['doc', 'selection'], source);
+    if (images.length > 0) this.refreshIsNew();
+    this.emit(images.length > 0 ? ['doc', 'selection', 'images'] : ['doc', 'selection'], source);
     return true;
   }
 

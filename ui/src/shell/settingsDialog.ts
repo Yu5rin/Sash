@@ -9,7 +9,7 @@ import { lang, t, type Lang } from '../i18n';
 import { cancelMsoPrefetch, describePrefetch, loadPrefetchStatus, onPrefetchStatus, prefetchStatus, startMsoPrefetch } from '../msoIcons';
 import type { IconPrefetchStatus } from '../bridge';
 import { renderUpdateSettings } from '../updates';
-import { select, settingRow } from './form';
+import { checkbox, select, settingRow } from './form';
 import { shellIcons } from './icons';
 import { reloadForLanguage, reloadNeeded, saveLanguage } from './language';
 import { updateSettings } from './theme';
@@ -69,6 +69,11 @@ async function build(start: CategoryId): Promise<void> {
             }).catch((e: Error) => toast({ kind: 'error', message: e.message }));
           }),
           notice), t('メニューやメッセージの言語です。リボンの XML の中身は変わりません。')),
+        // 編集を守る機能（§23.2・§23.4）。実機の Excel での挙動を確かめきれていないので、切れるようにしてある
+        settingRow(t('編集の自動退避'), checkbox(t('未保存の編集を、数秒おきに自動で退避する'), s.autoRecovery, (v) => void update({ autoRecovery: v })),
+          t('保存しないまま終わっても、次にそのブックを開いたときに復旧できます。退避はこの PC の %AppData%\\Sash\\recovery に置き、保存すると消えます。')),
+        settingRow(t('外部での変更の検知'), checkbox(t('ほかで書き換えられたブックを検知する'), s.detectExternalChanges, (v) => void update({ detectExternalChanges: v })),
+          t('開いたあとに Excel や別の人がリボンを書き換えたとき、保存の前に知らせます。ファイルの中のリボンの内容（バイト列ではなく、XML と画像）で比べます。')),
         settingRow(t('バージョン'), h('div', { class: 'setting-row' }, `Sash ${app.info.version}`)),
         // Excel の有無はバージョンとは別の事柄なので、行を分ける（以前は「バージョン」の説明に混ざっていた）
         settingRow(t('Excel 連携'), h('div', { class: 'setting-row' }, app.info.excelInstalled ? t('利用できます') : t('利用できません')),

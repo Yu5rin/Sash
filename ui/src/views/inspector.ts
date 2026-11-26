@@ -3,7 +3,8 @@
 // 入力中に他のビューの変更で描き直しても、入力中の欄（文字・カーソル位置・フォーカス）はそのまま残す（不具合 5 / 6）。
 
 import { app } from '../app';
-import { defaultCallbackName, insertStubs, renameCallback, vba } from '../callbacks';
+import { assignableAttr, assignMacro, defaultCallbackName, insertStubs, renameCallback, vba } from '../callbacks';
+import { pickMacro } from '../dialogs/macroDialog';
 import { copyText, notify, runEdit } from '../clipboard';
 import { openCatalog } from '../dialogs/catalogDialog';
 import { openLibrary } from '../dialogs/libraryDialog';
@@ -13,7 +14,7 @@ import { kindIcon, uiIcons } from '../icons';
 import { identifierOf, pathOf, samePath, setAttr, suggestId, suggestIdFromLabel, usedIds, type Path } from '../model';
 import type { ImageEntry } from '../store';
 import { iconTargetOf, delegatesToInner, innerButtonOf } from '../iconTarget';
-import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, type AttrDef } from '../schema';
+import { attributes, attrsOfEl, callbackSignature, defFor, isXmlId, titleOf, type AttrDef } from '../schema';
 import { bareCallbackName, generateStub, type CallbackStatus } from '../vba';
 import { attrValueError } from '../attrValidate';
 import { lang, t } from '../i18n';
@@ -727,6 +728,18 @@ function callbackEditor(el: Element, attr: string): HTMLElement {
             },
           }, lang === 'en' ? 'Add' : '追加'),
     ),
+    // onAction など、ボタンを押したときに呼ぶ Sub は、既存のマクロから選んで割り当てられる（呼び出し用の Sub を作る。§23.1）。
+    // 入力欄は幅が狭いので、ボタンは欄の下に置く
+    assignableAttr(el) === attr
+      ? h('div', { class: 'insp-macro' },
+          h('button', {
+            type: 'button',
+            class: 'small macro-pick',
+            title: t('ブックの VBA にある既存のマクロを選び、それを呼ぶ Sub を作って割り当てます'),
+            dataset: { fkey: `${attr}:macro` },
+            onclick: () => void runAssignMacro(el, attr),
+          }, t('マクロを選ぶ…')))
+      : null,
     value ? h('code', { class: 'insp-signature' }, `Sub ${value}(${callbackSignature(attr, el.localName)})`) : null,
     value && (attr === 'getVisible' || attr === 'getEnabled') ? dynamicNote(path, attr) : null,
     stateText ? h('span', { class: `cb-state ${status!.state}`, title: status!.reason ?? '' }, stateText) : null,
@@ -1058,4 +1071,22 @@ function iconRow(el: Element, key: string): HTMLElement {
     h('label', { class: 'insp-label', title: t(d.desc) }, h('span', { class: 'insp-label-ja' }, t('アイコン')), h('span', { class: 'insp-label-raw' }, rawName)),
     h('div', { class: 'insp-value' }, sel, detail),
   );
+}
+
+/** マクロを選ぶダイアログを開き、選ばれたら呼び出し用の Sub を作って割り当てる（インスペクタ・コマンドから使う）。 */
+export async function runAssignMacro(el: Element, attr: string): Promise<void> {
+  const path = livePath(el);
+  if (!path) return;
+  const macro = await pickMacro(describeForMacro(el));
+  if (!macro) return;
+  try {
+    notify({ kind: 'success', message: await assignMacro([{ path, attr }], macro) });
+  } catch (e) {
+    notify({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+function describeForMacro(el: Element): string {
+  const name = el.getAttribute('label') || el.getAttribute('id') || el.localName;
+  return `${name}（${titleOf(el.localName)}）`;
 }

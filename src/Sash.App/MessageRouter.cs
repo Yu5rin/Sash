@@ -4,6 +4,7 @@ using Sash.Core;
 using Sash.Core.CustomUI;
 using Sash.Core.Excel;
 using Sash.Core.Packaging;
+using Sash.Core.Recovery;
 using Sash.Core.Settings;
 using Sash.Core.Update;
 using Sash.Excel;
@@ -38,6 +39,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "file.open" => await OpenFileAsync(body),
                 // 読み書きは UI スレッドから外す。共有フォルダや大きいブックで、ウィンドウの枠が「応答なし」にならないように
                 "file.save" => await RunOffUiAsync(Read<SaveRequest>(body), SaveFile),
+                "file.fingerprint" => await RunOffUiAsync(Read<PathRequest>(body), FileFingerprint),
+                "file.read" => await ReadFileAsync(body),
                 "file.exportText" => await ExportTextAsync(Read<ExportRequest>(body)),
                 "file.recent" => RecentFiles(),
                 "file.removeRecent" => RemoveRecent(Read<PathRequest>(body)),
@@ -71,6 +74,10 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
                 "excel.setWindowWidth" => await SetWindowWidthAsync(Read<WindowWidthRequest>(body)),
                 "excel.runMacro" => await RunMacroAsync(Read<RunMacroRequest>(body)),
                 "excel.labels" => ExcelInstalled ? await excel.Value.GetLabelsAsync(Read<LabelsRequest>(body).Ids) : new Dictionary<string, string>(),
+                "recovery.write" => await RunOffUiAsync(Read<RecoveryWriteRequest>(body), RecoveryWrite),
+                "recovery.read" => await RunOffUiAsync(Read<PathRequest>(body), RecoveryRead),
+                "recovery.delete" => RecoveryDelete(Read<PathRequest>(body)),
+                "recovery.list" => await Task.Run(RecoveryList),
                 "backup.list" => BackupList(Read<PathRequest>(body)),
                 "backup.restore" => await RunOffUiAsync(Read<BackupRestoreRequest>(body), BackupRestore),
                 _ => throw new InvalidOperationException(L($"不明な要求です：{request.Type}", $"Unknown request: {request.Type}")),
@@ -219,14 +226,20 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         return new
         {
             path = doc.Path,
-            parts = doc.Parts.Select(part => new
-            {
-                version = part.Version,
-                xml = part.Xml,
-                images = part.Images.Select(i => new { id = i.RelationshipId, contentType = i.ContentType, base64 = Convert.ToBase64String(i.Data) }),
-            }),
+            parts = ToPartDtos(doc),
+            // 開いた時点のリボンの内容の照合値（ほかで書き換えられたかの検知に使う。§23.4）と、インターネットから取得した印（配布前チェックの案内。§23.5）
+            fingerprint = RibbonFingerprint.Compute(doc),
+            webMark = MarkOfTheWeb.IsMarked(doc.Path),
         };
     }
+
+    private static IEnumerable<object> ToPartDtos(RibbonDocument doc) =>
+        doc.Parts.Select(part => (object)new
+        {
+            version = part.Version,
+            xml = part.Xml,
+            images = part.Images.Select(i => new { id = i.RelationshipId, contentType = i.ContentType, base64 = Convert.ToBase64String(i.Data) }),
+        });
 
     private static List<CustomUIPartChange> ToChanges(IReadOnlyList<PartDto> parts) =>
         parts.Select(p => new CustomUIPartChange(
@@ -270,7 +283,79 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
         var backup = Backups().Backup(path);
         RibbonPackage.Save(path, changes);
-        return new { backup };
+        // 書いた内容の照合値。次に「ほかで書き換えられたか」を調べるときの基準にする（読み直せなければ基準なし）
+        return new { backup, fingerprint = TryFingerprint(path) };
+    }
+
+    private static IReadOnlyDictionary<string, string>? TryFingerprint(string path) => RibbonFingerprint.TryComputeFile(path);
+
+    private object FileFingerprint(PathRequest req) => new { fingerprint = TryFingerprint(System.IO.Path.GetFullPath(req.Path)) };
+
+    private static readonly string[] ReadExtensions = [".xlsm", ".xlam", ".xltm", ".xlsb", ".xml", ".json"];
+
+    /// <summary>
+    /// ファイルを開かずに、リボンの中身だけを読む（別のブックから取り込む・別のブックと比べる・ほかで変更された内容を見る。§23.3・§23.4）。
+    /// 最近使ったファイルには載せない。ブック（.xlsm など）は customUI と画像、.xml は customUI の XML 1 つ、.json は Sash のリボン定義の文字列を返す。
+    /// パスがなければファイルダイアログを出す（キャンセルなら null）。
+    /// </summary>
+    private async Task<object?> ReadFileAsync(JsonElement? body)
+    {
+        var path = body?.TryGetProperty("path", out var p) == true ? p.GetString() : null;
+        if (string.IsNullOrEmpty(path))
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Filter = L(
+                    "ブック・customUI の XML・Sash のリボン定義 (*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json)|*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json|すべてのファイル (*.*)|*.*",
+                    "Workbooks, customUI XML, Sash ribbon definitions (*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json)|*.xlsm;*.xlam;*.xltm;*.xlsb;*.xml;*.json|All files (*.*)|*.*"),
+                Title = L("リボンを読むファイルを選ぶ", "Choose a file to read the ribbon from"),
+            };
+            if (dialog.ShowDialog(owner) != DialogResult.OK)
+            {
+                return null;
+            }
+
+            path = dialog.FileName;
+        }
+
+        var target = path;
+        return await Task.Run(() => ReadFile(target));
+    }
+
+    private static object ReadFile(string path)
+    {
+        var full = System.IO.Path.GetFullPath(path);
+        if (!File.Exists(full))
+        {
+            throw new FileNotFoundException(L($"ファイルが見つかりません：{full}", $"File not found: {full}"));
+        }
+
+        var ext = System.IO.Path.GetExtension(full).ToLowerInvariant();
+        if (!ReadExtensions.Contains(ext))
+        {
+            throw new InvalidOperationException(L(".xlsm / .xlam / .xltm / .xlsb / .xml / .json のファイルを選んでください。", "Choose a .xlsm / .xlam / .xltm / .xlsb / .xml / .json file."));
+        }
+
+        if (ext is ".xml" or ".json")
+        {
+            const long MaxTextBytes = 20 * 1024 * 1024;
+            if (new FileInfo(full).Length > MaxTextBytes)
+            {
+                throw new UserFacingException(L("ファイルが大きすぎて読めません（20 MB まで）。", "The file is too large to read (up to 20 MB)."));
+            }
+
+            var text = File.ReadAllText(full);
+            if (ext == ".json")
+            {
+                return new { path = full, kind = "sashJson", parts = Array.Empty<object>(), json = text };
+            }
+
+            var version = CustomUIXml.DetectVersion(text);
+            return new { path = full, kind = "xml", parts = new object[] { new { version, xml = text, images = Array.Empty<object>() } }, json = (string?)null };
+        }
+
+        var doc = RibbonPackage.Load(full);
+        return new { path = full, kind = "workbook", parts = ToPartDtos(doc), json = (string?)null };
     }
 
     /// <summary>
@@ -522,10 +607,37 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         return null;
     }
 
+    // ---- 未保存の編集の退避（仕様書 §23.2） ----
+
+    private readonly RecoveryStore _recovery = new(AppPaths.Recovery);
+
+    /// <summary>退避を書く。退避は保険なので、書けなくても UI には失敗として返す（UI は編集を止めず、ログに残すだけ）。</summary>
+    private object? RecoveryWrite(RecoveryWriteRequest req)
+    {
+        _recovery.Write(req.Path, req.EditCount, req.Parts.Select(p => new RecoveryPart(
+            p.Version, p.Xml, p.AddImages.Select(i => new RecoveryImage(i.Id, i.DataUrl)).ToList(), p.RemoveImages, p.AddImageIds)).ToList());
+        return null;
+    }
+
+    /// <summary>退避を読む。元のファイルが退避より後に変わっているか（fileNewer）も添える。</summary>
+    private object? RecoveryRead(PathRequest req) =>
+        _recovery.Read(req.Path) is { } e
+            ? new { e.Path, e.SavedAt, e.EditCount, e.Parts, FileNewer = _recovery.IsFileNewer(e.Path, e.SavedAt) }
+            : null;
+
+    private object? RecoveryDelete(PathRequest req)
+    {
+        _recovery.Delete(req.Path);
+        return null;
+    }
+
+    /// <summary>退避の一覧。古いものと壊れたものは、ここで掃除する。</summary>
+    private object RecoveryList() => _recovery.List();
+
     // ---- 設定 ----
 
     private static SettingsDto ToDto(AppSettings s) =>
-        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath, s.UpdateCheckOnStartup, s.UpdateSource);
+        new(s.Theme, s.XmlOnTop, s.IconSize, s.RibbonErrorsHintShown, s.CallbackPattern, s.CallbackShared, s.CallbackSharedPattern, s.CallbackModule, s.Language, string.IsNullOrWhiteSpace(s.IconLibraryPath) ? AppPaths.Icons : s.IconLibraryPath, s.UpdateCheckOnStartup, s.UpdateSource, s.AutoRecovery, s.DetectExternalChanges);
 
     private SettingsDto SetSettings(SettingsDto patch) => ToDto(SettingsLanguage.Apply(settings.Update(s => s with
     {
@@ -540,6 +652,8 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         Language = patch.Language is "ja" or "en" ? patch.Language : s.Language,
         UpdateCheckOnStartup = patch.UpdateCheckOnStartup ?? s.UpdateCheckOnStartup,
         UpdateSource = patch.UpdateSource is null ? s.UpdateSource : ValidSource(patch.UpdateSource),
+        AutoRecovery = patch.AutoRecovery ?? s.AutoRecovery,
+        DetectExternalChanges = patch.DetectExternalChanges ?? s.DetectExternalChanges,
     })));
 
 
@@ -818,6 +932,12 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record PartDto(CustomUIVersion Version, string Xml, IReadOnlyList<ImageDto> AddImages, IReadOnlyList<string> RemoveImages);
 
+    private sealed record RecoveryImageDto(string Id, string DataUrl);
+
+    private sealed record RecoveryPartDto(CustomUIVersion Version, string Xml, IReadOnlyList<RecoveryImageDto> AddImages, IReadOnlyList<string> RemoveImages, IReadOnlyList<string>? AddImageIds = null);
+
+    private sealed record RecoveryWriteRequest(string Path, int EditCount, IReadOnlyList<RecoveryPartDto> Parts);
+
     private sealed record SaveRequest(string Path, IReadOnlyList<PartDto> Parts);
 
     private sealed record BackupRestoreRequest(string Path, string BackupPath);
@@ -870,7 +990,9 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         string? Language,
         string? IconLibraryPath,
         bool? UpdateCheckOnStartup,
-        string? UpdateSource);
+        string? UpdateSource,
+        bool? AutoRecovery,
+        bool? DetectExternalChanges);
 
     /// <summary>更新の確認先として使えるかを確かめる（http などはここで断る）。</summary>
     private static string ValidSource(string text)

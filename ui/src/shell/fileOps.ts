@@ -4,8 +4,12 @@
 // - 未保存の変更があるときは、閉じる・別のファイルを開く・終了の前に「保存する／保存しない／キャンセル」を聞く
 
 import { app } from '../app';
-import { invoke, type ApplyResult, type PartToSave } from '../bridge';
+import { invoke, type ApplyResult, type Fingerprint, type PartToSave } from '../bridge';
 import { ask } from '../dialogs/modal';
+import { askExternalChange } from '../dialogs/externalChangeDialog';
+import { askRecovery } from '../dialogs/recoveryDialog';
+import { checkExternalChange, isWatchable, refreshBaseline } from '../externalChange';
+import { applyRecovery, discardCurrentRecovery, discardRecovery, readRecovery } from '../recovery';
 import { t } from '../i18n';
 import { exportSash, parseSash, partXml } from '../sashJson';
 import { isSampleSession } from '../sample';
@@ -53,6 +57,11 @@ let flushPendingEdits: () => void = () => undefined;
  * インスペクタの欄は change か Enter で確定するので、入力したまま Ctrl+S / F5 / × を押すと、
  * その値が書き込む内容にも「未保存の変更」にも入らない。ビューを直接読み込まずに済むよう、外から渡す。
  */
+/** 入力中でまだ確定していない欄を確定する（窓に戻ったときの検知など、外から編集の有無を見る前に呼ぶ）。 */
+export function flushEdits(): void {
+  flushPendingEdits();
+}
+
 export function setPendingEditFlusher(fn: () => void): void {
   flushPendingEdits = fn;
 }
@@ -80,7 +89,7 @@ export async function confirmDiscard(): Promise<boolean> {
 }
 
 /** ファイルを開く。path がなければファイルの選択を出す。force なら未保存の確認をしない（復元のあとなど）。 */
-export async function openFile(path?: string, opts: { force?: boolean } = {}): Promise<boolean> {
+export async function openFile(path?: string, opts: { force?: boolean; keepIfDirty?: boolean } = {}): Promise<boolean> {
   if (refuseWhileBusy()) return false;
   // 選ぶ前に聞くと、選ぶのをやめたときに確認だけが無駄になるので、ファイルを選んだあとで聞く。
   // ただしパスが決まっているとき（最近使ったファイルなど）は、読む前に聞く
@@ -96,6 +105,11 @@ export async function openFile(path?: string, opts: { force?: boolean } = {}): P
     setBusy(null);
   }
   if (!doc) return false;
+  // 読み込みを待つ間に入った編集（入力中の欄を含む）を、読み込んだ内容で上書きしない
+  if (opts.keepIfDirty) {
+    flushPendingEdits();
+    if (app.dirty) return false;
+  }
   if (!path && !opts.force && !(await confirmDiscard())) return false;
   app.open(doc);
   // 開いたらキャンバスにフォーカスを移す（ホームのボタンやファイルの選択にフォーカスが残ったままだと、
@@ -104,7 +118,36 @@ export async function openFile(path?: string, opts: { force?: boolean } = {}): P
   const s = app.session!;
   if (s.created) toast({ kind: 'info', message: t('このブックにはリボン定義がないので、customUI14 を新しく作りました') });
   else if (s.parts.size >= 2) toast({ kind: 'info', message: t('customUI と customUI14 の両方があります。2010以降の Excel は customUI14 を優先します') });
+  await offerRecovery(s);
   return true;
+}
+
+/** 前回、保存されなかった編集の退避が残っていれば、復旧するか捨てるかを聞く（§23.2）。退避を読めなくても、開くことは止めない。 */
+async function offerRecovery(s: NonNullable<typeof app.session>): Promise<void> {
+  if (!s.path || isSampleSession()) return;
+  let entry;
+  try {
+    // 書く・消すと同じ待ち行列で読む（開き直した直後に、捨てたはずの退避を読んで復旧を聞かないように）
+    entry = await readRecovery(s.path);
+  } catch {
+    return;
+  }
+  // 読んでいる間に別のファイルへ替わっていたら、聞かない
+  if (!entry || app.session !== s) return;
+  if (entry.parts.length === 0) {
+    await discardRecovery(s.path);
+    return;
+  }
+  const choice = await askRecovery(entry);
+  if (app.session !== s) return;
+  if (choice === 'discard') {
+    await discardRecovery(s.path);
+    toast({ kind: 'info', message: t('保存されなかった編集を捨てました') });
+    return;
+  }
+  const r = applyRecovery(entry);
+  if (r.missing.length) toast({ kind: 'warning', message: t('ファイルにないパーツがあったため、一部は復旧できませんでした') });
+  if (r.applied.length) toast({ kind: 'success', message: t('保存されなかった編集を復旧しました。内容を確かめて保存してください'), action: { label: t('元に戻す'), run: () => { for (const store of r.stores) store.undo(); } } });
 }
 
 /** 開いているファイルを閉じてホームに戻る。 */
@@ -131,6 +174,8 @@ export async function quit(): Promise<boolean> {
   quitting = true;
   try {
     if (!(await confirmDiscard())) return false;
+    // 保存した・「保存しない」を選んだ。残す編集はないので退避を消してから終わる
+    await discardCurrentRecovery();
     await invoke('app.close');
     return true;
   } catch (e) {
@@ -166,11 +211,41 @@ function prepare(): Prepared {
   return { parts, snapshots };
 }
 
-function markAllSaved(prepared: Prepared, path: string): void {
+/**
+ * 書き込みが終わったときの記録。fingerprint はホストが書いたあとに読み直した照合値（保存のとき）。
+ * 渡されなければ（Excel 経由の反映など）、ファイルを読み直して基準にする（自分が書いた内容を「ほかの変更」と取り違えないため。§23.4）。
+ */
+function markAllSaved(prepared: Prepared, path: string, fingerprint?: Fingerprint | null): void {
   // 書き込んでいる間に別のファイルを開いていたら、そちらには触らない
   if (app.session?.path !== path) return;
   for (const [p, snap] of prepared.snapshots) p.markSaved(snap);
   app.session.created = false;
+  if (fingerprint !== undefined) app.session.fingerprint = fingerprint;
+  // 自分が書き込んだときだけ基準を取り直す。書き込むものがなかったとき（編集なしの反映）に取り直すと、
+  // ほかの変更を照合しないまま「基準」にしてしまい、次の保存で黙って上書きする
+  else if (prepared.parts.length > 0) void refreshBaseline(app.session);
+}
+
+/**
+ * 書き込む前に、開いたあとにほかでリボンが変更されていないかを確かめる（§23.4）。
+ * 変わっていれば確認を出し、上書きを選んだときだけ 'go'（書き込みを続ける）。ほかの変更を読み込んだときは、読み直して 'stop'。
+ */
+async function guardExternalChange(s: NonNullable<typeof app.session>, context: 'save' | 'apply'): Promise<'go' | 'stop'> {
+  if (!isWatchable(s)) return 'go';
+  const { state } = await checkExternalChange(s);
+  if (state !== 'changed' || app.session !== s) return 'go';
+  const choice = await askExternalChange(s, context);
+  if (choice === 'overwrite') return 'go';
+  if (choice === 'reload') await reloadFromDisk(s);
+  return 'stop';
+}
+
+/** 自分の編集を捨てて、ファイルの今の内容を読み直す（ほかで変更されたとき）。 */
+export async function reloadFromDisk(s: NonNullable<typeof app.session>): Promise<boolean> {
+  if (app.session !== s) return false;
+  const ok = await openFile(s.path, { force: true });
+  if (ok) toast({ kind: 'success', message: t('ほかで変更された内容を読み込みました') });
+  return ok;
 }
 
 /** 構文エラーや Lint のエラーがあるときは、本当に書き込むかを確認する。 */
@@ -200,10 +275,13 @@ export async function save(): Promise<boolean> {
     toast({ kind: 'info', message: t('変更はありません') });
     return true;
   }
+  // ほかで書き換えられていたら、書く前に知らせる（確認の間は、ほかの保存・反映が始まらないよう、終わってからもう一度確かめる）
+  if ((await guardExternalChange(s, 'save')) === 'stop') return false;
+  if (busy !== null || app.session !== s) return false;
   setBusy('save');
   try {
     const res = await invoke('file.save', { path: s.path, parts: prepared.parts });
-    markAllSaved(prepared, s.path);
+    markAllSaved(prepared, s.path, res.fingerprint ?? null);
     toast({ kind: 'success', message: t('保存しました'), action: res.backup && /[\\/]/.test(res.backup) ? { label: t('バックアップの場所'), run: () => void invoke('update.openPage', { url: res.backup.replace(/[\\/][^\\/]+$/, '') }).catch((e: Error) => toast({ kind: 'error', message: e.message })) } : undefined });
     return true;
   } catch (e) {
@@ -266,6 +344,9 @@ export async function applyToExcel(): Promise<void> {
     );
     app.settings = await invoke('settings.set', { ribbonErrorsHintShown: true }).catch(() => app.settings);
   }
+  if (busy !== null || app.session !== s) return;
+  // 反映は、自分の編集があるときだけ、ファイルのリボンを書き換える。ほかで変更されていたら、上書きする前に知らせる
+  if (app.dirty && (await guardExternalChange(s, 'apply')) === 'stop') return;
   if (busy !== null || app.session !== s) return;
 
   setBusy('apply');

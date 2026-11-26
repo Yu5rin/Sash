@@ -8,6 +8,9 @@ internal static class AppPaths
 
     public static string Backups => Path.Combine(Root, "backups");
 
+    /// <summary>未保存の編集の退避（仕様書 §23.2）。</summary>
+    public static string Recovery => Path.Combine(Root, "recovery");
+
     public static string Icons => Path.Combine(Root, "icons");
 
     public static string Settings => Path.Combine(Root, "settings.json");

@@ -6,6 +6,7 @@ import { vba } from '../callbacks';
 import { collectChecks, suggestionCount, summaryLevel, summaryText, type CheckItem, type CheckLevel, type CheckSection, type FitInput } from '../distributionCheck';
 import { h, svg } from '../dom';
 import { t } from '../i18n';
+import { ensurePixelStats, imageInfoMap } from '../imageStats';
 import { uiIcons } from '../icons';
 import { getFitReport, widthLabel } from '../views/ribbonFit';
 import { openModal } from './modal';
@@ -35,6 +36,9 @@ export function currentChecks(): CheckSection[] {
     vbaNote: vba.statusMessage(),
     imageIds: [...store.images.keys()],
     fit: currentFitInput(),
+    modules: vba.status === 'ok' ? vba.modules : null,
+    images: imageInfoMap([...store.images.values()]),
+    webMark: app.session?.webMark ?? false,
   });
 }
 
@@ -61,7 +65,10 @@ export function openDistributionCheck(opts: DistributionDialogOptions): void {
         h('h3', null, h('span', null, s.title), h('span', { class: `dist-count${s.items.some((i) => i.level === 'must' && i.severity === 'error') ? ' error' : s.items.some((i) => i.level === 'must') || (s.unverified ?? 0) > 0 ? ' must' : ''}` }, (s.unverified ?? 0) > 0 ? t('未確認 {n}', { n: s.unverified! }) : String(count))),
         s.note ? h('p', { class: 'dist-note muted' }, s.note) : null,
         count === 0 ? null : h('ul', { class: 'dist-items' }, s.items.map((item) =>
-          h('li', null, h('button', {
+          h('li', null, item.target === 'none'
+            // 移る先のない案内は、押せるものに見えないよう、ボタンにしない
+            ? h('div', { class: `dist-item static ${item.level}` }, svg(itemIcon(item)), h('span', { class: 'dist-text' }, item.text), item.detail ? h('span', { class: 'dist-detail' }, item.detail) : null)
+            : h('button', {
             type: 'button',
             class: `dist-item ${item.level}${item.severity === 'error' ? ' error' : ''}`,
             title: item.target === 'callbacks' ? t('コールバックの一覧を開く') : item.target === 'images' ? t('アイコンの一覧を開く') : t('この要素を選ぶ'),
@@ -74,6 +81,10 @@ export function openDistributionCheck(opts: DistributionDialogOptions): void {
     body.replaceChildren(header, ...list);
   };
   render();
+  // 画像の色合い（暗いテーマで沈むか）は、画像を描いて調べる。調べ終えたら描き直す
+  void ensurePixelStats([...(app.store?.images.values() ?? [])]).then((changed) => {
+    if (changed && body.isConnected) render();
+  });
   const rerender = () => {
     if (body.isConnected) render();
   };

@@ -48,6 +48,12 @@ public sealed record AppSettings
     /// <summary>更新の確認先。空なら GitHub のリリース。社内の共有フォルダや https の latest.json も指定できる。</summary>
     public string UpdateSource { get; init; } = "";
 
+    /// <summary>未保存の編集を %AppData%\Sash\recovery に自動で退避する（仕様書 §23.2）。</summary>
+    public bool AutoRecovery { get; init; } = true;
+
+    /// <summary>開いたあとにほかでリボンが書き換えられたかを調べる（仕様書 §23.4）。</summary>
+    public bool DetectExternalChanges { get; init; } = true;
+
     /// <summary>前回終了時のウィンドウの位置と大きさ。null なら既定（WindowPlacement）。UI の設定画面からは変えない。</summary>
     public WindowBounds? Window { get; init; }
 

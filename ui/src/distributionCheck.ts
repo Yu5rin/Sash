@@ -5,7 +5,8 @@ import { t } from './i18n';
 import type { Problem, Severity } from './lint';
 import { allElements, displayName, pathOf, type Path } from './model';
 import { attributes, titleOf } from './schema';
-import type { CallbackStatus } from './vba';
+import type { ImageInfo } from './imageStats';
+import { bareCallbackName, parseParams, parseProcedures, procedureCode, RIBBON_HOLDER_MODULE_NAME, stripComment, type CallbackStatus, type VbaModule } from './vba';
 
 /**
  * 確認の重さ。
@@ -15,8 +16,8 @@ import type { CallbackStatus } from './vba';
  */
 export type CheckLevel = 'must' | 'should' | 'info';
 
-/** 項目を押したときに移る先。element は要素を選ぶ、callbacks・images は下部パネルのその一覧を開く。 */
-export type CheckTarget = 'element' | 'callbacks' | 'images';
+/** 項目を押したときに移る先。element は要素を選ぶ、callbacks・images は下部パネルのその一覧を開く、none は移る先のない案内。 */
+export type CheckTarget = 'element' | 'callbacks' | 'images' | 'none';
 
 export interface CheckItem {
   level: CheckLevel;
@@ -28,7 +29,10 @@ export interface CheckItem {
   severity?: Severity;
 }
 
-export type CheckSectionId = 'errors' | 'warnings' | 'callbacks' | 'fit' | 'keytips' | 'longLabels' | 'unusedImages' | 'noScreentip' | 'noIcon' | 'dynamicText';
+export type CheckSectionId =
+  | 'errors' | 'warnings' | 'callbacks' | 'fit' | 'keytips' | 'longLabels' | 'unusedImages' | 'noScreentip' | 'noIcon' | 'dynamicText'
+  // 0.3.0 で足した分（§23.5）
+  | 'commonNames' | 'ribbonHolder' | 'themeIcons' | 'bigImages' | 'macroBlock';
 
 export interface CheckSection {
   id: CheckSectionId;
@@ -74,6 +78,12 @@ export interface CheckInput {
   imageIds: readonly string[];
   /** キャンバスが測った結果。まだ測っていない（幅を選んでいない）なら null。 */
   fit: FitInput | null;
+  /** VBA のモジュール（照合できているとき。onLoad の中身と Invalidate の有無を見る）。 */
+  modules?: readonly VbaModule[] | null;
+  /** 画像の大きさ・バイト数・色合い（id → 情報。色合いは調べ終えたものだけ）。 */
+  images?: ReadonlyMap<string, ImageInfo>;
+  /** このブックに、インターネットから取得した印が付いている（ホストが調べる）。 */
+  webMark?: boolean;
 }
 
 /** ヒント・アイコンの有無を調べるボタンの類。 */
@@ -115,6 +125,65 @@ const describe = (el: Element) => {
 const isCallbackAttr = (name: string | undefined) => !!name && attributes.get(name)?.kind === 'callback';
 
 const samePath = (a: Path, b: Path) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+
+// ---- 0.3.0 で足した確認（§23.5） ----
+
+/**
+ * ほかのアドインと重なりやすい id（接頭辞のない、種類を表す語＋番号だけ。btn1・Button2・tab_1 など）。
+ * ブック固有の接頭辞が付いている id（acct_btnSum など）は対象にしない（誤って出すと煩わしいので、判定は控えめにする）。
+ */
+export const GENERIC_ID = /^(btn|button|cmd|command|tab|grp|group|menu|mnu|chk|check|checkbox|tgl|toggle|dd|ddn|drop|dropdown|combo|cbo|edit|txt|gal|gallery|lbl|label)[_-]?\d*$/i;
+
+/** 重なりやすいコールバック名（Button1_Click・OnAction・Macro1 など。標準の命名規則で作った Ribbon_… は、規則で別の名前にできるので対象にしない）。 */
+export const GENERIC_CALLBACK = /^(Button\d*_Click|On(Action|Change|Load)\d*|Callback\d*|Macro\d*|Test\d*|Sub\d*|Run|Main|Click\d*)$/i;
+
+const normalizeLabel = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[\s_-]+/g, '');
+
+/** Excel のタブ名や、アドインがよく付けるタブ名（同じ名前のタブが並ぶと、どれがどれか分からなくなる）。 */
+const COMMON_TAB_LABELS: ReadonlySet<string> = new Set([
+  'ホーム', '挿入', '数式', 'データ', '校閲', '表示', '開発', 'ヘルプ', 'アドイン', 'ツール', 'マクロ', 'カスタム', '新しいタブ', 'その他', '設定',
+  'home', 'insert', 'formulas', 'data', 'review', 'view', 'developer', 'help', 'addins', 'tools', 'macros', 'custom', 'newtab', 'settings', 'other', 'tab1', 'tab2', 'tab3',
+].map(normalizeLabel));
+
+export const isGenericId = (id: string) => GENERIC_ID.test(id);
+export const isGenericCallback = (name: string) => GENERIC_CALLBACK.test(bareCallbackName(name));
+export const isCommonTabLabel = (label: string) => COMMON_TAB_LABELS.has(normalizeLabel(label));
+
+/** id の重なりを調べる対象の要素（ほかのアドインと同じ名前空間で見分けられる、タブ・グループ・コントロール）。 */
+const ID_CHECKED: ReadonlySet<string> = new Set(['tab', 'group', 'button', 'toggleButton', 'checkBox', 'dropDown', 'comboBox', 'editBox', 'menu', 'dynamicMenu', 'splitButton', 'gallery', 'labelControl']);
+
+/** 大きすぎる画像の目安。Office のリボンのアイコンは 32px（高 DPI でも 64px）までで足りる。 */
+export const BIG_IMAGE_PX = 64;
+export const BIG_IMAGE_BYTES = 50 * 1024;
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Sub の中身（宣言と End Sub を除き、コメントを除いたもの）。 */
+function procedureBody(module: VbaModule, name: string): { body: string; param: string | undefined } | null {
+  const proc = parseProcedures(module).find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (!proc) return null;
+  const lines = procedureCode(module, proc).split(/\r?\n/);
+  // 宣言は、行継続（行末の " _"）で複数行になることがある。宣言の最後の行までを本体から除く
+  let declEnd = 0;
+  while (declEnd < lines.length - 1 && /\s_\s*$/.test(stripComment(lines[declEnd]!))) declEnd++;
+  return { body: lines.slice(declEnd + 1, -2).map(stripComment).join('\n'), param: parseParams(proc.params)[0]?.name };
+}
+
+/** onLoad の Sub が、受け取った ribbon（IRibbonUI）を使っているか（変数に保持する・保持する Sub へ渡すなど）。 */
+export function onLoadHoldsRibbon(modules: readonly VbaModule[], procName: string, moduleName: string): boolean | null {
+  const module = modules.find((m) => m.name === moduleName);
+  const found = module ? procedureBody(module, procName) : null;
+  if (!found || !found.param) return null;
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRe(found.param)}(?![\\p{L}\\p{N}_])`, 'iu').test(found.body);
+}
+
+/** VBA に Invalidate の呼び出しがあるか。IRibbonUI を保持する共通コード（modRibbonCore）の中の定義は数えない（定義だけで、呼んでいないため）。 */
+export function hasInvalidateCall(modules: readonly VbaModule[], coreModule: string): boolean {
+  return modules.some((m) => m.name !== coreModule && m.code.split(/\r?\n/).some((line) => /\bInvalidate\w*/i.test(stripComment(line))));
+}
+
+const kb = (bytes: number) => Math.max(1, Math.round(bytes / 1024));
 
 /** 分類ごとに集める。並びは重い順（must を含むもの → should → info）。 */
 export function collectChecks(input: CheckInput): CheckSection[] {
@@ -238,6 +307,122 @@ export function collectChecks(input: CheckInput): CheckSection[] {
     items: elements.flatMap((el) =>
       DYNAMIC_TEXT_ATTRS.filter((a) => el.hasAttribute(a)).map((a): CheckItem => ({ level: 'info', text: `${a}="${el.getAttribute(a)}"`, detail: describe(el), path: pathOf(el), target: 'element' })),
     ),
+  });
+
+  // 10. ほかのアドインと重なりやすい名前（id・タブ名・コールバック名）。見直し止まり（重なると別のブックのマクロが呼ばれることがある）
+  const nameItems: CheckItem[] = [];
+  for (const el of elements) {
+    const id = el.getAttribute('id');
+    if (id && ID_CHECKED.has(el.localName) && isGenericId(id)) {
+      nameItems.push({ level: 'should', text: t('id「{id}」は、ほかのアドインと重なりやすい名前です', { id }), detail: describe(el), path: pathOf(el), target: 'element' });
+    }
+    const label = el.getAttribute('label');
+    if (el.localName === 'tab' && id && label && isCommonTabLabel(label)) {
+      nameItems.push({ level: 'should', text: t('タブ名「{label}」は、Excel やほかのアドインのタブと紛らわしい名前です', { label }), detail: describe(el), path: pathOf(el), target: 'element' });
+    }
+  }
+  const generic = new Map<string, { path: Path; uses: string[] }>();
+  for (const el of elements) {
+    for (const a of Array.from(el.attributes)) {
+      if (!isCallbackAttr(a.localName) || !a.value || !isGenericCallback(a.value)) continue;
+      const use = `${el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName}.${a.localName}`;
+      const prev = generic.get(a.value);
+      if (prev) prev.uses.push(use);
+      else generic.set(a.value, { path: pathOf(el), uses: [use] });
+    }
+  }
+  for (const [name, g] of generic) {
+    nameItems.push({ level: 'should', text: t('コールバック名「{name}」は、ほかのアドインと重なりやすい名前です', { name }), detail: g.uses.join(', '), path: g.path, target: 'element' });
+  }
+  sections.push({
+    id: 'commonNames',
+    title: t('ほかのアドインと重なりやすい名前'),
+    note: t('同じ名前の Sub や id が、同時に開いたほかのアドインにあると、別のブックのマクロが呼ばれたり、リボンが混ざったりすることがあります。［ツール］→［ID の一括置換］で、ブック固有の接頭辞（例：acct_）を付けられます。'),
+    items: nameItems,
+  });
+
+  // 11. onLoad と Invalidate の入れ忘れ。get〜 の動的な属性は、Invalidate を呼ばないと最初の 1 回しか決まらない。
+  // Invalidate するには、onLoad で受け取った ribbon を保持しておく必要がある
+  const dynamicAttrs = new Set<string>();
+  for (const el of elements) for (const a of Array.from(el.attributes)) if (isCallbackAttr(a.localName) && a.localName.startsWith('get')) dynamicAttrs.add(a.localName);
+  const holderItems: CheckItem[] = [];
+  const onLoadName = doc.documentElement.getAttribute('onLoad');
+  if (dynamicAttrs.size > 0) {
+    const attrs = [...dynamicAttrs].slice(0, 4).join(', ') + (dynamicAttrs.size > 4 ? ' …' : '');
+    if (!onLoadName) {
+      holderItems.push({ level: 'should', text: t('get〜 の動的な属性（{attrs}）を使っていますが、customUI に onLoad がありません。Invalidate で更新できません', { attrs }), path: [], target: 'element' });
+    } else if (input.vbaChecked && input.modules) {
+      const st = input.statuses.find((x) => x.uses.some((u) => u.attr === 'onLoad'));
+      if (st?.state === 'implemented' && st.procedure && onLoadHoldsRibbon(input.modules, st.procedure.name, st.procedure.module) === false) {
+        holderItems.push({ level: 'should', text: t('onLoad の Sub「{name}」が、受け取った ribbon を保持していません。Invalidate で更新できません', { name: st.name }), detail: `${st.procedure.module} ${st.procedure.line}行目`, path: st.uses[0]!.path, target: 'callbacks' });
+      }
+      if (!hasInvalidateCall(input.modules, RIBBON_HOLDER_MODULE_NAME)) {
+        holderItems.push({ level: 'should', text: t('VBA に Invalidate を呼ぶところがありません。get〜 の値は、読み込んだときの 1 回だけ決まります'), target: 'callbacks' });
+      }
+    }
+  }
+  sections.push({
+    id: 'ribbonHolder',
+    title: t('onLoad と Invalidate の入れ忘れ'),
+    note: dynamicAttrs.size === 0
+      ? t('get〜 の動的な属性を使っていないので、確かめる必要はありません。')
+      : input.vbaChecked
+        ? t('［ツール］→［VBA］→［onLoad と Invalidate の雛形を挿入］で入れられます。')
+        : `${t('VBA と照合していないため、onLoad の中身と Invalidate の呼び出しは確かめていません。')} ${t('［ツール］→［VBA］→［onLoad と Invalidate の雛形を挿入］で入れられます。')}`,
+    items: holderItems,
+  });
+
+  // 12・13. 画像：テーマで見えにくいもの（色合い）と、大きすぎるもの（寸法・バイト数）。リボンから使っている画像だけを見る
+  // （使っていない画像は「使っていない画像」の分類に出る）
+  const themeItems: CheckItem[] = [];
+  const bigItems: CheckItem[] = [];
+  for (const id of usedImages) {
+    const info = input.images?.get(id);
+    if (!info) continue;
+    const st = info.stats;
+    if (st && st.opaque >= 16) {
+      if (st.solidBackground) {
+        themeItems.push({ level: 'should', text: st.solidBackground === 'light' ? t('画像「{id}」は白い背景が透明になっていません。暗いテーマでは白い四角に見えます', { id }) : t('画像「{id}」は黒い背景が透明になっていません。明るいテーマでは黒い四角に見えます', { id }), detail: id, target: 'images' });
+      } else if (st.meanLuma < 60 && st.darkShare >= 0.85) {
+        themeItems.push({ level: 'should', text: t('画像「{id}」は暗い単色に近く、Office の黒・濃い灰色のテーマで背景に沈みます', { id }), detail: id, target: 'images' });
+      } else if (st.meanLuma > 215 && st.lightShare >= 0.85) {
+        themeItems.push({ level: 'should', text: t('画像「{id}」は白に近い単色で、Office の白・明るいテーマで背景に沈みます', { id }), detail: id, target: 'images' });
+      }
+    }
+    const tooWide = (info.width ?? 0) > BIG_IMAGE_PX || (info.height ?? 0) > BIG_IMAGE_PX;
+    const tooHeavy = info.bytes > BIG_IMAGE_BYTES;
+    if (tooWide || tooHeavy) {
+      const parts: string[] = [];
+      if (tooWide) parts.push(t('{w}×{h} px', { w: info.width ?? 0, h: info.height ?? 0 }));
+      if (tooHeavy) parts.push(t('{size} KB', { size: kb(info.bytes) }));
+      bigItems.push({ level: 'should', text: t('画像「{id}」が大きすぎます（{detail}）。アイコンは 32px（高 DPI でも 64px）で足ります', { id, detail: parts.join(t('、')) }), detail: id, target: 'images' });
+    }
+  }
+  sections.push({
+    id: 'themeIcons',
+    title: t('テーマで見えにくいアイコン'),
+    note: input.images && [...usedImages].some((id) => { const im = input.images!.get(id); return im && !(im.examined ?? !!im.stats); })
+      ? t('画像の色を調べています…')
+      : t('Office には白・明るい灰色・濃い灰色・黒のテーマがあります。黒や白だけのアイコンは、背景と同じ色になって見えなくなります。透明な背景に、どのテーマでも読める色で描いてください。'),
+    items: themeItems,
+  });
+  sections.push({
+    id: 'bigImages',
+    title: t('大きすぎる画像'),
+    note: t('目安：{px}px より大きい、または {kb} KB より大きい画像。ブックが重くなり、リボンの描画も遅くなります。', { px: BIG_IMAGE_PX, kb: Math.round(BIG_IMAGE_BYTES / 1024) }),
+    items: bigItems,
+  });
+
+  // 14. 配布先でマクロがブロックされること（検査できないので、案内だけ。件数は出さない）
+  const blockItems: CheckItem[] = [{ level: 'info', text: t('メールやダウンロードで受け取ったブックは、Windows がマクロをブロックすることがあります'), target: 'none' }];
+  if (input.webMark) {
+    blockItems.unshift({ level: 'should', text: t('いま開いているこのブックには、インターネットから取得した印が付いています。Excel で開くと保護ビューになり、マクロ（リボンのボタン）が動きません'), detail: t('ファイルのプロパティの［許可する］で解除できます'), target: 'none' });
+  }
+  sections.push({
+    id: 'macroBlock',
+    title: t('配布先でのマクロのブロック'),
+    note: t('インターネットやメールから取得したファイルには、Windows が「インターネットから取得した」印（Mark of the Web）を付けます。印のあるブックは、Office がマクロを既定で止めるため、配布先でリボンのボタンが動かない・アドインが読み込まれないことがあります。共有フォルダから各自の PC へコピーして使ってもらう、ファイルのプロパティの［許可する］で解除してもらう、または［信頼できる場所］に置いてもらってください。Sash から、これを確かめたり解除したりはできません。'),
+    items: blockItems,
   });
 
   // エラー（Excel でリボンが出なくなるもの）は、照合の未確認よりも前に出す

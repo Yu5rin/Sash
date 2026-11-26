@@ -371,6 +371,11 @@ export function ensureBackstage(doc: Document): Element {
   return ensureChild(doc.documentElement, 'backstage');
 }
 
+/** customUI > ribbon > contextualTabs を必要なら作って返す（tabs の後ろに置く）。 */
+export function ensureContextualTabs(doc: Document): Element {
+  return ensureChild(ensureChild(doc.documentElement, 'ribbon'), 'contextualTabs');
+}
+
 /** customUI > contextMenus を必要なら作って返す（backstage の後ろ、末尾に置く）。 */
 export function ensureContextMenus(doc: Document): Element {
   return ensureChild(doc.documentElement, 'contextMenus');

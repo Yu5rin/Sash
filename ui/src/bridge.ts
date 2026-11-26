@@ -23,9 +23,25 @@ export interface CustomUIPartDto {
   images: ImageDto[];
 }
 
+/** ブックのリボンの内容の照合値（パーツごと。キーは office2010 / office2007）。ホストが XML を正規化して求める（§23.4）。 */
+export type Fingerprint = Record<string, string>;
+
 export interface OpenedDocument {
   path: string;
   parts: CustomUIPartDto[];
+  /** 開いた時点のリボンの内容の照合値。 */
+  fingerprint?: Fingerprint | null;
+  /** インターネットから取得した印（Zone.Identifier）が付いている（§23.5）。 */
+  webMark?: boolean;
+}
+
+/** file.read の応答（開かずにリボンの中身だけを読む。§23.3）。 */
+export interface ReadDocument {
+  path: string;
+  kind: 'workbook' | 'xml' | 'sashJson';
+  parts: CustomUIPartDto[];
+  /** kind が sashJson のときの、ファイルの中身。 */
+  json?: string | null;
 }
 
 export interface PartToSave {
@@ -77,6 +93,10 @@ export interface Settings {
   updateCheckOnStartup: boolean;
   /** 更新の確認先。空なら GitHub のリリース。 */
   updateSource: string;
+  /** 未保存の編集を自動で退避する（§23.2）。 */
+  autoRecovery: boolean;
+  /** 開いたあとにほかでリボンが書き換えられたかを調べる（§23.4）。 */
+  detectExternalChanges: boolean;
 }
 
 export interface UpdateCheckResult {
@@ -180,6 +200,33 @@ export interface IconPrefetchStatus {
   cancelled?: boolean;
 }
 
+/** 退避したパーツ 1 つ分（未保存の編集。§23.2）。画像は保存済みからの差分。 */
+export interface RecoveryPartDto {
+  version: CustomUIVersion;
+  xml: string;
+  addImages: { id: string; dataUrl: string }[];
+  removeImages: string[];
+}
+
+export interface RecoveryEntryDto {
+  path: string;
+  savedAt: string;
+  editCount: number;
+  parts: RecoveryPartDto[];
+  /** 元のファイルが、退避のあとで変わっている（recovery.read だけが付ける）。 */
+  fileNewer?: boolean;
+}
+
+export interface RecoverySummaryDto {
+  path: string;
+  savedAt: string;
+  editCount: number;
+  fileExists: boolean;
+  fileModifiedAt: string | null;
+  /** 元のファイルが、退避のあとで変わっている。 */
+  fileNewer: boolean;
+}
+
 /** 要求の種類ごとの payload と応答の型。 */
 export interface HostApi {
   'app.ready': { req: undefined; res: { initialFile: string | null; updatedFrom?: string | null; version?: string } };
@@ -191,7 +238,11 @@ export interface HostApi {
   /** 想定外の例外をホストのログ（app.log）に残す。製品版は開発者ツールが使えないため。 */
   'app.log': { req: { level: 'error' | 'warning' | 'info'; message: string; stack?: string }; res: null };
   'file.open': { req: { path?: string } | undefined; res: OpenedDocument | null };
-  'file.save': { req: { path: string; parts: PartToSave[] }; res: { backup: string } };
+  'file.save': { req: { path: string; parts: PartToSave[] }; res: { backup: string; fingerprint?: Fingerprint | null } };
+  /** ファイルの今のリボンの照合値（ほかで書き換えられたかを調べる。読めなければ null。§23.4）。 */
+  'file.fingerprint': { req: { path: string }; res: { fingerprint: Fingerprint | null } };
+  /** 開かずにリボンの中身だけを読む。path がなければファイルダイアログを出す（キャンセルなら null）。最近使ったファイルには載せない（§23.3）。 */
+  'file.read': { req: { path?: string } | undefined; res: ReadDocument | null };
   'file.exportText': { req: { defaultName: string; filter: string; content: string }; res: string | null };
   'file.recent': { req: undefined; res: RecentFile[] };
   'file.removeRecent': { req: { path: string }; res: null };
@@ -220,6 +271,12 @@ export interface HostApi {
   'recipes.list': { req: undefined; res: unknown[] };
   'recipes.save': { req: Record<string, unknown>; res: null };
   'recipes.delete': { req: { id: string }; res: null };
+  /** 未保存の編集を退避する（§23.2）。退避は保険なので、失敗しても UI は編集を止めない。 */
+  'recovery.write': { req: { path: string; editCount: number; parts: RecoveryPartDto[] }; res: null };
+  'recovery.read': { req: { path: string }; res: RecoveryEntryDto | null };
+  'recovery.delete': { req: { path: string }; res: null };
+  /** 退避の一覧（新しい順）。古いものと壊れたものは、ホストがここで掃除する。 */
+  'recovery.list': { req: undefined; res: RecoverySummaryDto[] };
   'backup.list': { req: { path: string }; res: BackupEntry[] };
   /** バックアップの中身でファイルを置き換える。backup は戻す直前の今のファイルのバックアップ。終わったら UI は開き直す。 */
   'backup.restore': { req: { path: string; backupPath: string }; res: { backup: string | null } };
@@ -442,8 +499,97 @@ const mockMacroBusy = () => `${t('Excel でマクロを実行中です（Excel �
 /** 実行中に断る要求（ホストの MessageRouter.ThrowIfMacroRunning を呼ぶもの）。 */
 const MOCK_REFUSED_WHILE_MACRO: ReadonlySet<string> = new Set(['excel.apply', 'vba.read', 'vba.insert', 'vba.replaceLine', 'vba.reveal', 'excel.setWindowWidth', 'icons.prefetchStart']);
 
+/** ?excel のときの VBA のダミー（マクロを割り当てる画面の確認用）。 */
+const mockVbaModules: VbaModuleDto[] = [
+  { name: 'modMain', type: 1, code: ['Public Sub 集計()', 'End Sub', '', 'Public Sub データ出力()', 'End Sub', '', 'Private Sub 内部処理()', 'End Sub', '', 'Public Sub 期間を指定(ByVal 開始 As Date)', 'End Sub', '', 'Public Function 件数() As Long', 'End Function', ''].join('\r\n') },
+  { name: 'modUtil', type: 1, code: ['Public Sub 集計()', 'End Sub', '', 'Public Sub 書式を整える()', 'End Sub', ''].join('\r\n') },
+  { name: 'Sheet1', type: 100, code: ['Public Sub シートを更新()', 'End Sub', ''].join('\r\n') },
+];
+
+/** ブラウザ実行中の退避の置き場（?recovery を付けると、サンプルのブックの退避が残っているものとして始める）。 */
+const mockRecoveries = new Map<string, RecoveryEntryDto>();
+if (mockParams.has('recovery')) {
+  mockRecoveries.set('C:\\sample\\集計ツール.xlam', {
+    path: 'C:\\sample\\集計ツール.xlam',
+    savedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    editCount: 12,
+    parts: [{ version: 'office2010', xml: sampleXml.replace('label="集計ツール"', 'label="集計ツール（編集中）"').replace('<button id="btnClear"', '<button id="btnPaste" label="貼り付け" imageMso="Paste" onAction="Ribbon_btnPaste_onAction" />\n          <button id="btnClear"'), addImages: [], removeImages: [] }],
+  });
+}
+
+/** 別のブック（前任者のブック）のダミー。取り込み・比較の画面の確認用。 */
+const otherBookXml = `<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="Ribbon_onLoad">
+  <ribbon>
+    <tabs>
+      <tab id="tabTools" label="経理ツール" keytip="K">
+        <group id="grpSum" label="月次">
+          <button id="btnSummary" label="月次集計" size="large" image="rIdLogo" onAction="Ribbon_btnSummary_onAction" />
+          <button id="btnClose" label="締め処理" imageMso="LockCell" onAction="Ribbon_btnClose_onAction" />
+        </group>
+        <group id="grpOut" label="出力">
+          <button id="btnPdf" label="PDF 出力" imageMso="FileSaveAsPdfOrXps" onAction="Ribbon_btnPdf_onAction" />
+        </group>
+      </tab>
+      <tab id="tabAdmin" label="管理">
+        <group id="grpAdmin" label="管理">
+          <button id="btnAdmin" label="設定" imageMso="ControlProperties" onAction="Ribbon_btnAdmin_onAction" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+  <contextMenus>
+    <contextMenu idMso="ContextMenuCell">
+      <button id="ctxSum" label="月次集計" onAction="Ribbon_ctxSum_onAction" />
+    </contextMenu>
+  </contextMenus>
+</customUI>
+`;
+
+/** ダミーの画像（32px の緑の四角）の PNG（base64）。描けない環境（テスト）では空。 */
+function mockLogoPng(): string {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+    ctx.fillStyle = '#185c37';
+    ctx.fillRect(2, 2, 28, 28);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(9, 9, 14, 14);
+    return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+  } catch {
+    return '';
+  }
+}
+
+/** ?badimages の画像。黒一色（透明な背景）・白い背景つき・128px の大きい画像。描けない環境（テスト）では空。 */
+function mockBadImages(): { id: string; contentType: string; base64: string }[] {
+  const make = (w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): string => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      draw(ctx);
+      return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+    } catch {
+      return '';
+    }
+  };
+  return [
+    { id: 'darkIcon', contentType: 'image/png', base64: make(32, 32, (c) => { c.fillStyle = '#111'; c.fillRect(6, 6, 20, 20); }) },
+    { id: 'whiteBgIcon', contentType: 'image/png', base64: make(32, 32, (c) => { c.fillStyle = '#fff'; c.fillRect(0, 0, 32, 32); c.fillStyle = '#185c37'; c.fillRect(8, 8, 16, 16); }) },
+    { id: 'bigIcon', contentType: 'image/png', base64: make(128, 128, (c) => { c.fillStyle = '#c42b1c'; c.fillRect(16, 16, 96, 96); }) },
+  ];
+}
+
+/** ?external のとき、再読み込み（file.open のやり直し）のあとはディスクの内容を取り込んだ扱いにする。 */
+let mockReloaded = false;
+let mockOpened = false;
+
 const mock = {
-  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '' } as Settings,
+  settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '', autoRecovery: true, detectExternalChanges: true } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
     const r = (v: unknown) => Promise.resolve(v as HostApi[K]['res']);
     if (mockMacroRunning && MOCK_REFUSED_WHILE_MACRO.has(type)) return Promise.reject(new Error(mockMacroBusy()));
@@ -453,7 +599,24 @@ const mock = {
       case 'app.info':
         return r({ version: 'dev', excelInstalled: mockExcel });
       case 'file.open':
-        return r({ path: 'C:\\sample\\集計ツール.xlam', parts: [{ version: 'office2010', xml: sampleXml, images: [] }] });
+        if (mockOpened) mockReloaded = true;
+        mockOpened = true;
+        // ?badimages を付けると、暗い単色・白い背景つき・大きすぎる画像を使っているブックとして開く（配布前チェックの確認用）
+        return r({
+          path: 'C:\\sample\\集計ツール.xlam',
+          parts: [mockParams.has('badimages') ? { version: 'office2010', xml: sampleXml.replace('<group id="grpMode"', '<group id="grpIcons" label="アイコン"><button id="icoDark" label="黒" image="darkIcon" screentip="s" onAction="Ribbon_btnQuick_onAction" /><button id="icoWhiteBg" label="白地" image="whiteBgIcon" screentip="s" onAction="Ribbon_btnQuick_onAction" /><button id="icoBig" label="大" image="bigIcon" screentip="s" onAction="Ribbon_btnQuick_onAction" /></group>\n        <group id="grpMode"'), images: mockBadImages() } : { version: 'office2010', xml: sampleXml, images: [] }],
+          fingerprint: { office2010: 'base' },
+          webMark: mockParams.has('webmark'),
+        });
+      case 'file.fingerprint':
+        // ?external を付けると、開いたあとにほかで書き換えられたものとして振る舞う（保存・反映の前の確認を確かめられる）
+        return r({ fingerprint: { office2010: mockParams.has('external') && !mockReloaded ? 'changed' : 'base' } });
+      case 'file.read': {
+        const p = payload as { path?: string } | undefined;
+        // path 付き＝ファイルの今の内容を読む（ほかでの変更の差分用）。なし＝ダイアログで選んだ別のブック（取り込み・比較用）
+        if (p?.path) return r({ path: p.path, kind: 'workbook', parts: [{ version: 'office2010', xml: sampleXml.replace('label="CSV出力"', 'label="CSV 出力（変更）"').replace('<button id="btnClear"', '<button id="btnExtra" label="追加" imageMso="Paste" onAction="Ribbon_btnExtra_onAction" />\n          <button id="btnClear"'), images: [] }] });
+        return r({ path: 'C:\\sample\\前任者のツール.xlam', kind: 'workbook', parts: [{ version: 'office2010', xml: otherBookXml, images: [{ id: 'rIdLogo', contentType: 'image/png', base64: mockLogoPng() }] }] });
+      }
       case 'file.save':
         return mockDelay(1500).then(() => r({ backup: t('(ブラウザ実行中のため保存しません)') }));
       case 'file.exportText': {
@@ -512,9 +675,24 @@ const mock = {
       case 'library.list':
         return r({ root: t('(ブラウザ実行中)'), icons: [] });
       case 'vba.read':
-        return r({ status: 'noExcel', modules: [] });
+        // ?excel を付けると、Excel で開いているブックの VBA（引数なしの Sub・Private・引数あり・Function・シートのもの）があるものとして動かせる
+        return r(mockExcel ? { status: 'ok', modules: mockVbaModules } : { status: 'noExcel', modules: [] });
+      case 'vba.insert':
+        return r(true);
       case 'backup.restore':
         return r({ backup: null });
+      case 'recovery.write': {
+        const p = payload as { path: string; editCount: number; parts: RecoveryPartDto[] };
+        mockRecoveries.set(p.path, { path: p.path, savedAt: new Date().toISOString(), editCount: p.editCount, parts: p.parts });
+        return r(null);
+      }
+      case 'recovery.read':
+        return r(mockRecoveries.get((payload as { path: string }).path) ?? null);
+      case 'recovery.delete':
+        mockRecoveries.delete((payload as { path: string }).path);
+        return r(null);
+      case 'recovery.list':
+        return r([...mockRecoveries.values()].map((e): RecoverySummaryDto => ({ path: e.path, savedAt: e.savedAt, editCount: e.editCount, fileExists: true, fileModifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), fileNewer: false })));
       case 'excel.setWindowWidth': {
         // 本物のホストと同じ換算と断り方を確かめられるよう、作業領域は 1920px（100%）とみなす
         const p = payload as { width: number; scale: number };
