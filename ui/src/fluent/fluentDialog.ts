@@ -1,4 +1,4 @@
-// アイコン集（Fluent UI System Icons と Tabler Icons）から選ぶダイアログ。Excel がなくても、見栄えのよいアイコンをボタンに付けられるようにする。
+// アイコン集（Fluent UI System Icons・Tabler Icons・Lucide・Sash のオリジナル）から選ぶダイアログ。Excel がなくても、見栄えのよいアイコンをボタンに付けられるようにする。
 // 選んだアイコンは色を付けた SVG にして返す。PNG にするのはアイコンエディタの役目（出力サイズで描き直し、バッジなどの加工もそこでできる）。
 // このモジュールとデータは使うときに動的 import で読む（最初の画面の読み込みを重くしないため）。
 // 検索は概念の辞書による絞り込み（iconSearch.ts）。「お金」「配送」「ねこ」のようなあいまいな言葉で探せる。
@@ -9,7 +9,7 @@ import { openModal, openOnce } from '../dialogs/modal';
 import { notify } from '../clipboard';
 import { lang, t } from '../i18n';
 import {
-  buildSvg, COLOR_PRESETS, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor,
+  buildSvg, COLOR_PRESETS, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor, setFilePrefix, setLabel,
   type FluentIcon, type FluentVariant, type IconSet,
 } from './fluent';
 import { CATEGORIES } from './iconCategories';
@@ -52,7 +52,7 @@ function loadRemembered(): Remembered {
     return {
       variant: v.variant === 'filled' ? 'filled' : 'regular',
       color: safeColor(v.color ?? DEFAULT_COLOR),
-      set: v.set === 'fluent' || v.set === 'tabler' ? v.set : 'all',
+      set: v.set === 'fluent' || v.set === 'tabler' || v.set === 'lucide' || v.set === 'sash' ? v.set : 'all',
     };
   } catch {
     return { variant: 'regular', color: DEFAULT_COLOR, set: 'all' };
@@ -65,11 +65,6 @@ function saveRemembered(r: Remembered): void {
   } catch {
     // 覚えられなくても選ぶことはできる
   }
-}
-
-/** 出どころの表示名（固有名詞なので訳さない）。 */
-function setLabel(set: IconSet): string {
-  return set === 'tabler' ? 'Tabler' : 'Fluent';
 }
 
 /** 開く。選んだら onPick を呼んで閉じる。 */
@@ -92,7 +87,7 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     h('button', { type: 'button', dataset: { variant: v }, 'aria-pressed': String(state.variant === v), class: state.variant === v ? 'active' : '', onclick: () => setVariant(v) }, v === 'regular' ? t('線') : t('塗り')),
   );
   const variantSwitch = h('div', { class: 'segmented', role: 'group', 'aria-label': t('アイコンのスタイル') }, variantButtons);
-  const setButtons = (['all', 'fluent', 'tabler'] as const).map((v) =>
+  const setButtons = (['all', 'fluent', 'tabler', 'lucide', 'sash'] as const).map((v) =>
     h('button', { type: 'button', dataset: { set: v }, 'aria-pressed': String(state.set === v), class: state.set === v ? 'active' : '', onclick: () => setSet(v) }, v === 'all' ? t('すべて') : setLabel(v)),
   );
   const setSwitch = h('div', { class: 'segmented', role: 'group', 'aria-label': t('アイコン集の出どころ') }, setButtons);
@@ -124,7 +119,7 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     previewName,
     previewRow,
     h('p', { class: 'muted small' }, t('「使う」を押すとアイコンエディタが開き、出力サイズの PNG にして設定します。バッジなどの加工もそこでできます。')),
-    h('p', { class: 'muted small fluent-credit' }, t('アイコン：Microsoft Fluent UI System Icons と Tabler Icons（MIT License）')),
+    h('p', { class: 'muted small fluent-credit' }, t('アイコン：Fluent UI System Icons・Tabler Icons（MIT）、Lucide（ISC）、Sash のオリジナル')),
   );
 
   const useButton = h('button', { type: 'button', class: 'primary', disabled: true, onclick: () => confirm() }, t('使う'));
@@ -331,8 +326,8 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     const set = iconSet(selected);
     const pick: FluentPick = {
       blob: new Blob([markup], { type: 'image/svg+xml' }),
-      // Tabler と Fluent に同じ名前（home など）があるので、Tabler のファイル名には出どころを付ける
-      fileName: `${set === 'tabler' ? 'tabler-' : ''}${selected.name}_${state.variant}.svg`,
+      // 集どうしに同じ名前（home など）があるので、Fluent 以外のファイル名には出どころを付ける
+      fileName: `${setFilePrefix(set)}${selected.name}_${state.variant}.svg`,
       name: selected.name,
       set,
       variant: state.variant,

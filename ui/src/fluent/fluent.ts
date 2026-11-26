@@ -1,4 +1,4 @@
-// アイコン集（Fluent UI System Icons と Tabler Icons、どちらも MIT License）のデータの扱い。SVG の組み立てとデータの読み込みだけを持つ純粋な処理にして、テストできるようにする。
+// アイコン集（Fluent UI System Icons・Tabler Icons・Lucide・Sash のオリジナル）のデータの扱い。SVG の組み立てとデータの読み込みだけを持つ純粋な処理にして、テストできるようにする。
 // 名前は Fluent 時代のまま（FluentIcon など）だが、Tabler も同じ型で持つ（set で出どころを区別する）。これまでの import を壊さないため。
 // データ（fluentIcons.json 2.6MB、tablerIcons.json 1.7MB）は大きいので、最初の画面の読み込みに含めないよう、使うときに動的 import で読む。
 // データの作り方は scripts/build-fluent-icons.mjs・scripts/build-tabler-icons.mjs、ライセンス文は LICENSE-*.txt。
@@ -18,7 +18,22 @@ export interface FluentData {
 }
 
 /** アイコンの出どころ。 */
-export type IconSet = 'fluent' | 'tabler';
+export type IconSet = 'fluent' | 'tabler' | 'lucide' | 'sash';
+
+/** 出どころの表示名（固有名詞なので訳さない）。Sash はこのアプリのオリジナル。 */
+export function setLabel(set: IconSet): string {
+  return set === 'tabler' ? 'Tabler' : set === 'lucide' ? 'Lucide' : set === 'sash' ? 'Sash' : 'Fluent';
+}
+
+/** 元画像のファイル名に付ける出どころ。同じ名前（home など）が複数の集にあるので、Fluent 以外には付ける。 */
+export function setFilePrefix(set: IconSet): string {
+  return set === 'fluent' ? '' : `${set}-`;
+}
+
+/** 線（stroke）で描くアイコン集か。Tabler・Lucide・Sash は同じ作り（24×24・線幅 2・丸い端の線）で、Fluent だけが塗りのパス。 */
+export function isStrokeSet(set: IconSet): boolean {
+  return set !== 'fluent';
+}
 
 export interface FluentIcon {
   /** パッケージでの名前（Fluent は arrow_clockwise、Tabler は arrow-up-circle のように、区切りが違う）。 */
@@ -42,7 +57,7 @@ export interface FluentIcon {
   tablerCategory?: string;
 }
 
-/** Tabler のデータ（tablerIcons.json）。 */
+/** Tabler のデータ（tablerIcons.json）。Lucide・Sash のデータ（lucideIcons.json・sashIcons.json）も同じ形。 */
 export interface TablerData {
   source: string;
   version: string;
@@ -69,15 +84,15 @@ export function toIcons(data: FluentData): FluentIcon[] {
   return Object.entries(data.icons).map(([name, e]) => ({ name, words: name.split('_'), regular: e[0], filled: e[1], size: e[2] ?? 24, set: 'fluent' as const }));
 }
 
-/** Tabler のデータをアイコンにする。タグは検索の手がかりとして、空白で分けて持つ。 */
-export function toTablerIcons(data: TablerData): FluentIcon[] {
+/** Tabler（と同じ形の Lucide・Sash）のデータをアイコンにする。タグは検索の手がかりとして、空白で分けて持つ。 */
+export function toTablerIcons(data: TablerData, set: Exclude<IconSet, 'fluent'> = 'tabler'): FluentIcon[] {
   return Object.entries(data.icons).map(([name, e]) => ({
     name,
     words: name.split('-'),
     regular: e[2],
     filled: e[3],
     size: 24,
-    set: 'tabler' as const,
+    set,
     tags: e[1] ? e[1].split(' ') : [],
     tablerCategory: data.categories[e[0]] ?? '',
   }));
@@ -129,7 +144,7 @@ export function buildSvg(icon: FluentIcon, variant: FluentVariant, color: string
   const paint = paintOf(color);
   const s = px ?? icon.size;
   const head = `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${icon.size} ${icon.size}"`;
-  if (iconSet(icon) === 'tabler' && variant === 'regular') {
+  if (isStrokeSet(iconSet(icon)) && variant === 'regular') {
     const parts: string[] = [];
     for (const raw of list) {
       const mark = raw.startsWith('#') || raw.startsWith('@') ? raw[0] : '';
@@ -160,6 +175,8 @@ export interface IconSetData {
   version: string;
   /** Tabler のパッケージの版。 */
   tablerVersion: string;
+  /** Lucide のパッケージの版。 */
+  lucideVersion: string;
 }
 
 let cache: Promise<{ icons: FluentIcon[]; version: string }> | null = null;
@@ -180,14 +197,21 @@ export function loadFluentIcons(): Promise<{ icons: FluentIcon[]; version: strin
 }
 
 /**
- * Fluent と Tabler を合わせたアイコン集を読み込む（初回だけ）。ピッカーを開いたときと、ラベルから候補を出すときにだけ呼ぶ
- * （データは合わせて 4MB ほどあるので、起動時の読み込みに含めない）。
+ * Fluent・Tabler・Lucide・Sash のオリジナルを合わせたアイコン集を読み込む（初回だけ）。ピッカーを開いたときと、ラベルから候補を出すときにだけ呼ぶ
+ * （データは合わせて 4.3MB ほどあるので、起動時の読み込みに含めない。Lucide と Sash は小さいが、別のチャンクにして並べて読む）。
  */
 export function loadIconSet(): Promise<IconSetData> {
-  setCache ??= Promise.all([loadFluentIcons(), import('./tablerIcons.json')])
-    .then(([fluent, tabler]) => {
-      const data = (tabler as unknown as { default: TablerData }).default;
-      return { icons: [...fluent.icons, ...toTablerIcons(data)], version: fluent.version, tablerVersion: data.version };
+  setCache ??= Promise.all([loadFluentIcons(), import('./tablerIcons.json'), import('./lucideIcons.json'), import('./sashIcons.json')])
+    .then(([fluent, tabler, lucide, sash]) => {
+      const t = (tabler as unknown as { default: TablerData }).default;
+      const l = (lucide as unknown as { default: TablerData }).default;
+      const s = (sash as unknown as { default: TablerData }).default;
+      return {
+        icons: [...fluent.icons, ...toTablerIcons(t), ...toTablerIcons(l, 'lucide'), ...toTablerIcons(s, 'sash')],
+        version: fluent.version,
+        tablerVersion: t.version,
+        lucideVersion: l.version,
+      };
     })
     .catch((e: unknown) => {
       setCache = null;

@@ -14,7 +14,7 @@
 // 速さのために、アイコンの数が増えても重くならないよう、単語 → アイコンの索引を最初に1度だけ作る（単語の全探索をしない）。
 // 前方一致は、並べておいた単語の一覧を二分探索して、当たる範囲だけを見る。
 
-import type { FluentIcon, FluentVariant, IconSet } from './fluent';
+import { isStrokeSet, type FluentIcon, type FluentVariant, type IconSet } from './fluent';
 import { categoryBit, CATEGORIES, categorize } from './iconCategories';
 import { CONCEPTS } from './iconConcepts';
 import { JA_KEYWORDS, normalize } from './iconWords';
@@ -149,8 +149,10 @@ export interface Index {
   sortKey: string[];
   wordCount: Uint8Array;
   setRank: Uint8Array;
-  isTabler: Uint8Array;
+  isStroke: Uint8Array;
 }
+
+const SET_RANK: Readonly<Record<IconSet, number>> = { sash: 0, fluent: 1, tabler: 2, lucide: 3 };
 
 const indexCache = new WeakMap<readonly FluentIcon[], Index>();
 
@@ -177,16 +179,17 @@ export function buildIndex(icons: readonly FluentIcon[]): Index {
     sortKey: new Array<string>(n),
     wordCount: new Uint8Array(n),
     setRank: new Uint8Array(n),
-    isTabler: new Uint8Array(n),
+    isStroke: new Uint8Array(n),
   };
   for (let i = 0; i < n; i++) {
     const icon = icons[i]!;
-    const tabler = icon.set === 'tabler';
+    const set = icon.set ?? 'fluent';
     idx.nameKey[i] = `-${icon.words.join('-')}-`;
     idx.sortKey[i] = icon.name.replace(/\d+/g, (m) => m.padStart(4, '0'));
     idx.wordCount[i] = Math.min(255, icon.words.length);
-    idx.setRank[i] = tabler ? 1 : 0;
-    idx.isTabler[i] = tabler ? 1 : 0;
+    // 同じ点のときの並び：Sash のオリジナル（目的を絞って描いたもの）> Fluent > Tabler > Lucide
+    idx.setRank[i] = SET_RANK[set];
+    idx.isStroke[i] = isStrokeSet(set) ? 1 : 0;
     icon.words.forEach((w, pos) => push(idx.nameWords, w, i * 8 + Math.min(pos, 7)));
     (icon.tags ?? []).forEach((tag, pos) => {
       const p = Math.min(pos, 127);

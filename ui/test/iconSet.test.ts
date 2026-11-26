@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import fluentData from '../src/fluent/fluentIcons.json';
 import tablerData from '../src/fluent/tablerIcons.json';
+import lucideData from '../src/fluent/lucideIcons.json';
+import { lucideIcons, sashIcons } from './helpers/allIcons';
 import tablerLicense from '../src/fluent/LICENSE-tabler-icons.txt?raw';
 import { THIRD_PARTY_LICENSES } from '../src/shell/licenses';
 import {
@@ -114,9 +116,10 @@ describe('Tabler の SVG の組み立て', () => {
 });
 
 describe('データの読み込み', () => {
-  it('Fluent と Tabler を合わせて読み込み、2回目は同じ結果を返す', async () => {
+  it('4 つのアイコン集を合わせて読み込み、2回目は同じ結果を返す', async () => {
     const a = await loadIconSet();
-    expect(a.icons.length).toBe(fluent.length + tabler.length);
+    expect(a.icons.length).toBe(fluent.length + tabler.length + lucideIcons.length + sashIcons.length);
+    expect(a.lucideVersion).toBe((lucideData as unknown as TablerData).version);
     expect(a.tablerVersion).toBe((tablerData as unknown as TablerData).version);
     expect(a.icons.some((i) => iconSet(i) === 'fluent')).toBe(true);
     expect(a.icons.some((i) => iconSet(i) === 'tabler')).toBe(true);

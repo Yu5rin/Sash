@@ -1,6 +1,7 @@
 // アイコン集のカテゴリ（ピッカーの絞り込みチップ）と、アイコンへの割り当て。純粋な処理にして、テストできるようにする。
 //
 // 割り当ての考え方：
+// - Lucide と Sash のオリジナルは、取り込むときに Tabler のカテゴリ名（と、ものづくり用の Industry）を付けてあるので、Tabler と同じ読み替えを使う。
 // - Tabler は元データにカテゴリ（Animals・Vehicles など 40 種）があるので、まず自分のカテゴリに読み替える。
 // - Fluent にはカテゴリがないので、名前の最初の単語（arrow_・document_・vehicle_ …）で振り分ける。
 // - どちらも、名前の単語による追加の割り当てをする。1 つのアイコンが複数のカテゴリに入ってよい
@@ -20,6 +21,7 @@ export interface IconCategory {
 
 export const CATEGORIES: readonly IconCategory[] = [
   { id: 'business', ja: 'ビジネス', words: ['business', 'office', 'work'] },
+  { id: 'industry', ja: 'ものづくり・工場', words: ['industry', 'manufacturing', 'factory', 'tool'] },
   { id: 'document', ja: '文書・ファイル', words: ['document', 'file', 'folder'] },
   { id: 'arrow', ja: '矢印', words: ['arrow', 'arrows'] },
   { id: 'shape', ja: '図形', words: ['shape', 'shapes'] },
@@ -58,7 +60,7 @@ const TABLER_CATEGORY: Readonly<Record<string, string>> = {
   'Sport': 'leisure', 'Currencies': 'business', 'Development': 'ui', 'Database': 'device', 'Weather': 'nature',
   'Photography': 'device', 'Mood': 'people', 'Nature': 'nature', 'Games': 'leisure', 'Computers': 'device', 'Laundry': 'other',
   'Charts': 'business', 'Symbols': 'symbol', 'Badges': 'symbol', 'Version control': 'ui', 'Animals': 'animal',
-  'Electrical': 'device', 'Gender': 'symbol', 'Gestures': 'people', 'Extensions': 'ui', 'Zodiac': 'symbol', 'Logic': 'symbol',
+  'Industry': 'industry', 'Electrical': 'device', 'Gender': 'symbol', 'Gestures': 'people', 'Extensions': 'ui', 'Zodiac': 'symbol', 'Logic': 'symbol',
 };
 
 /** Fluent の名前の最初の単語 → カテゴリ。ここにないものは「操作・画面」（Fluent は画面部品が多い）。 */
@@ -94,6 +96,12 @@ const WORD_RULES: readonly { id: string; words: ReadonlySet<string> }[] = [
       'schedule meeting agenda goal flag-3 stamp signature id-badge businessplan speakerphone').split(' ')),
   },
   {
+    // ものづくり・工場・工具。Tabler・Fluent のアイコンも、名前の単語でここに入る（Lucide・Sash は取り込み時にカテゴリを付けてある）
+    id: 'industry',
+    words: new Set(('factory forklift crane tool tools hammer wrench screwdriver toolbox drill engine nut robot conveyor lathe pallet welding assembly microscope flask ' +
+      'hard-hat helmet cog container bearing valve motor mold caliper building-factory building-warehouse truck-loading plug circuit').split(' ')),
+  },
+  {
     id: 'document',
     words: new Set('file files document folder folders notes note notebook article clipboard paper book books archive report newspaper news script sticker-2 template contract'.split(' ')),
   },
@@ -110,7 +118,7 @@ const WORD_RULES: readonly { id: string; words: ReadonlySet<string> }[] = [
   {
     id: 'food',
     words: new Set(('coffee tea beer wine pizza burger bread cake apple food drink cup mug bowl egg salad soup ice-cream cookie candy chocolate cheese meat sausage carrot banana lemon grape ' +
-      'melon mushroom pepper salt milk bottle glass cocktail champagne whisk chef kitchen cooker bake dumpling noodles rice sushi toast croissant baguette avocado cherry nut pretzel popcorn ' +
+      'melon mushroom pepper salt milk bottle glass cocktail champagne whisk chef kitchen cooker bake dumpling noodles rice sushi toast croissant baguette avocado cherry pretzel popcorn ' +
       'lollipop donut cupcake teapot bubble microwave grill fork spoon chopsticks wheat').split(' ')),
   },
   {
@@ -151,8 +159,10 @@ export function categorize(icon: Pick<FluentIcon, 'name' | 'words' | 'set' | 'ta
   let mask = 0;
   const first = icon.words[0] ?? '';
   const joined = `-${icon.words.join('-')}-`;
-  if (icon.set === 'tabler') {
-    mask |= categoryBit(TABLER_CATEGORY[icon.tablerCategory ?? ''] ?? 'other');
+  if (icon.set && icon.set !== 'fluent') {
+    // Tabler の元データで Food に入っている nut は六角ナット（部品）。食べ物ではなくものづくりに入れる
+    const own = icon.set === 'tabler' && icon.name === 'nut' ? 'industry' : TABLER_CATEGORY[icon.tablerCategory ?? ''];
+    mask |= categoryBit(own ?? 'other');
   } else {
     mask |= categoryBit(FLUENT_FIRST_WORD[icon.words.slice(0, 2).join('_')] ?? FLUENT_FIRST_WORD[first] ?? 'ui');
   }
@@ -161,6 +171,6 @@ export function categorize(icon: Pick<FluentIcon, 'name' | 'words' | 'set' | 'ta
     if (matchesRule(icon.words, joined, rule.words)) mask |= categoryBit(rule.id);
   }
   // 矢印・図形のアイコンは、他の言葉（arrow-left-right など）で別のカテゴリに入れない（ノイズになるため）
-  if ((mask & categoryBit('arrow')) !== 0 && icon.set !== 'tabler') mask = categoryBit('arrow');
+  if ((mask & categoryBit('arrow')) !== 0 && (!icon.set || icon.set === 'fluent')) mask = categoryBit('arrow');
   return mask === 0 ? categoryBit('other') : mask;
 }

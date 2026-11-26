@@ -15,7 +15,7 @@ Sashは、Excelのマクロブックとアドイン（.xlsm / .xlam、ほかに 
 - **インスペクタとLint**：コントロールごとに使える属性だけを表示し、入力中に検証
 - **Excelへのワンクリック反映（F5）**：保存・クローズ・書き込み・再オープンを自動化。xlamのアドインにも対応
 - **アイコン作成**：PNG / JPG / BMP / GIF / WebP / SVG / ICO / EXE / DLL / クリップボードから、リボン用PNGを作成して設定
-- **アイコン集**：同梱の Fluent UI System Icons と Tabler Icons（合わせて約8,000種。ビジネス・動物・乗り物・食べ物・アルファベットなど）から、「お金」「配送」「ねこ」のようなあいまいな日本語でも絞り込み、色を選んで、そのままボタンのアイコンにできる（Excel がなくても使える）
+- **アイコン集**：同梱の Fluent UI System Icons・Tabler Icons・Lucide と、Sash のオリジナル（合わせて約8,200種。ビジネス・ものづくり・物流・動物・乗り物・食べ物・アルファベットなど）から、「お金」「配送」「ねこ」のようなあいまいな日本語でも絞り込み、色を選んで、そのままボタンのアイコンにできる（Excel がなくても使える）
 - **コールバック管理**：正しいシグネチャでVBAスタブを生成し、未実装や不一致を検出。既存のマクロを選ぶと、それを呼ぶ Sub を作ってボタンに割り当てる
 - **カタログ**：idMso / imageMso をあいまい検索
 - **レシピ**：よく使う構成をXMLとVBAのセットで挿入
@@ -112,7 +112,9 @@ dotnet publish src/Sash.App -p:PublishProfile=win-x64
 
 idMso の一覧（`ui/src/catalog/excelControls.json`）は、Microsoft の [office-fluent-ui-command-identifiers](https://github.com/OfficeDev/office-fluent-ui-command-identifiers)（MIT License）の Excel 分から作成しています。ライセンス文は `ui/src/catalog/` に同梱しています。
 
-アイコン集のデータは、次の2つから作成しています。ライセンス文は、どちらも `ui/src/fluent/` に同梱し、アプリの「バージョン情報」→「サードパーティのライセンス」からも読めます。Office の imageMso の画像は同梱していません。
+アイコン集のデータは、次の4つから作成しています。ライセンス文は、いずれも `ui/src/fluent/` に同梱し、アプリの「バージョン情報」→「サードパーティのライセンス」からも読めます。Office の imageMso の画像は同梱していません。
 
 - `ui/src/fluent/fluentIcons.json`：Microsoft の [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons)（MIT License、npm パッケージ `@fluentui/svg-icons`）。ライセンス文は `LICENSE-fluentui-system-icons.txt`。作り直すときは `ui` で `npm run fluent-icons`
 - `ui/src/fluent/tablerIcons.json`：[Tabler Icons](https://github.com/tabler/tabler-icons)（MIT License、Copyright (c) 2020-2026 Paweł Kuna、npm パッケージ `@tabler/icons`）。ブランドのロゴは除いています。ライセンス文は `LICENSE-tabler-icons.txt`。作り直すときは `ui` で `npm run tabler-icons`
+- `ui/src/fluent/lucideIcons.json`：[Lucide](https://github.com/lucide-icons/lucide)（ISC License、一部は Feather 由来の MIT License、npm パッケージ `lucide-static`）から、業務で使う約180種を選んだもの。ライセンス文は `LICENSE-lucide.txt`。作り直すときは `ui` で `npm run lucide-icons`
+- `ui/src/fluent/sashIcons.json`：Sash のために新しく描いたオリジナルのアイコン（エレベーター・旋盤・金型・パレット・見積書など）。他のアイコン集の図形を写したものではありません。ライセンスは Sash と同じ MIT License（`LICENSE-sash-icons.txt`）。元の図は `ui/scripts/sash-icons.mjs`。作り直すときは `ui` で `npm run sash-icons`

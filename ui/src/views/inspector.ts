@@ -19,7 +19,7 @@ import { bareCallbackName, generateStub, type CallbackStatus } from '../vba';
 import { attrValueError } from '../attrValidate';
 import { lang, t } from '../i18n';
 import { imageMsoNames, labels as msoLabels } from '../catalog/catalog';
-import { buildSvg, DEFAULT_COLOR, displayName as fluentName, iconSet, loadIconSet, type FluentIcon } from '../fluent/fluent';
+import { buildSvg, DEFAULT_COLOR, displayName as fluentName, iconSet, loadIconSet, setFilePrefix, type FluentIcon } from '../fluent/fluent';
 import { hasSuggestTerms, suggestFluent, suggestImageMso } from '../iconSuggest';
 import { msoIcon, onMsoIconsLoaded } from '../msoIcons';
 import { openMenu } from './contextMenu';
@@ -904,7 +904,7 @@ function openFluentCandidate(path: Path, icon: FluentIcon): void {
   const markup = buildSvg(icon, 'regular', DEFAULT_COLOR);
   if (!markup) return;
   openIconDialog(path, undefined, undefined, {
-    fluent: { blob: new Blob([markup], { type: 'image/svg+xml' }), fileName: `${iconSet(icon) === 'tabler' ? 'tabler-' : ''}${icon.name}_regular.svg`, name: icon.name, set: iconSet(icon), variant: 'regular', color: DEFAULT_COLOR },
+    fluent: { blob: new Blob([markup], { type: 'image/svg+xml' }), fileName: `${setFilePrefix(iconSet(icon))}${icon.name}_regular.svg`, name: icon.name, set: iconSet(icon), variant: 'regular', color: DEFAULT_COLOR },
   });
 }
 
@@ -1029,7 +1029,7 @@ function iconRow(el: Element, key: string): HTMLElement {
         h('button', {
           type: 'button',
           class: 'small',
-          title: t('同梱のアイコン集（Fluent・Tabler、約 8,000 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます'),
+          title: t('同梱のアイコン集（Fluent・Tabler・Lucide・Sash、約 8,200 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます'),
           onclick: () =>
             openFluentIcons(
               (pick) => {

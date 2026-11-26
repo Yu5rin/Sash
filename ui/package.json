@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "fluent-icons": "node scripts/build-fluent-icons.mjs",
-    "tabler-icons": "node scripts/build-tabler-icons.mjs"
+    "tabler-icons": "node scripts/build-tabler-icons.mjs",
+    "lucide-icons": "node scripts/build-lucide-icons.mjs",
+    "sash-icons": "node scripts/build-sash-icons.mjs"
   },
   "devDependencies": {
     "@fluentui/svg-icons": "1.1.347",
@@ -17,6 +19,7 @@
     "browserslist": "4.29.6",
     "jsdom": "26.1.0",
     "lightningcss": "1.33.0",
+    "lucide-static": "1.81.0",
     "typescript": "5.9.3",
     "vite": "7.2.4",
     "vitest": "3.2.4"

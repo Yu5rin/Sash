@@ -412,6 +412,7 @@ export const en: Readonly<Record<string, string>> = {
   // ---- アイコン集（Fluent UI System Icons） ----
   'アイコン集（Fluent）': 'Icon set (Fluent)',
   'アイコン集': 'Icon set',
+  'アイコン集（自作）': 'Icon set (original)',
   'アイコン集（Fluent）から選ぶ': 'Choose from the icon set (Fluent)',
   '同梱のアイコン集（Fluent UI System Icons）から選ぶ。Excel がなくても使えます': 'Choose from the bundled icon set (Fluent UI System Icons). Works without Excel',
   'アイコン集を読み込めませんでした：{message}': 'Could not load the icon set: {message}',
@@ -438,11 +439,12 @@ export const en: Readonly<Record<string, string>> = {
   'アイコン：Microsoft Fluent UI System Icons（MIT License）': 'Icons: Microsoft Fluent UI System Icons (MIT License)',
   // アイコン集：Tabler の追加、概念による検索、カテゴリ（fluent/fluentDialog.ts・fluent/iconCategories.ts）
   'アイコン集から選ぶ': 'Choose from the icon set',
-  '同梱のアイコン集（Fluent・Tabler、約 8,000 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます': 'Choose from the bundled icon sets (Fluent and Tabler, about 8,000 icons). Search business, animals, vehicles, food, letters and more with vague words. Works without Excel',
+  '同梱のアイコン集（Fluent・Tabler・Lucide・Sash、約 8,200 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます': 'Choose from the bundled icon sets (Fluent, Tabler, Lucide and Sash, about 8,200 icons). Search business, animals, vehicles, food, letters and more with vague words. Works without Excel',
   'アイコンを検索（例：お金、配送、ねこ、A）': 'Search icons (e.g. money, delivery, cat, A)',
   'アイコン集の出どころ': 'Icon set source',
   'カテゴリで絞り込む': 'Filter by category',
   'ビジネス': 'Business',
+  'ものづくり・工場': 'Manufacturing & tools',
   '文書・ファイル': 'Documents & files',
   '矢印': 'Arrows',
   '図形': 'Shapes',
@@ -464,7 +466,9 @@ export const en: Readonly<Record<string, string>> = {
   '近い言葉：': 'Related words:',
   'すべての語に合うものがないので、いずれかに合うものを出しています': 'Nothing matches every word, so icons matching any of them are shown',
   'アイコン：Microsoft Fluent UI System Icons と Tabler Icons（MIT License）': 'Icons: Microsoft Fluent UI System Icons and Tabler Icons (MIT License)',
+  'アイコン：Fluent UI System Icons・Tabler Icons（MIT）、Lucide（ISC）、Sash のオリジナル': 'Icons: Fluent UI System Icons and Tabler Icons (MIT), Lucide (ISC), and original Sash icons',
   // バージョン情報（shell/dialogs.ts）に足す一文。先に訳だけ用意しておく
+  'アイコン集は、Microsoft の Fluent UI System Icons・Tabler Icons（MIT License）・Lucide（ISC License）と、Sash のオリジナルのアイコンです。': 'The icon sets are Microsoft\'s Fluent UI System Icons, Tabler Icons (MIT License), Lucide (ISC License), and original Sash icons.',
   'アイコン集は、Microsoft の Fluent UI System Icons と Tabler Icons（MIT License）を元にしています。': 'The icon sets are based on Microsoft\'s Fluent UI System Icons and Tabler Icons (MIT License).',
   'アイコン集は、Microsoft の Fluent UI System Icons（MIT License）を元にしています。': 'The icon set is based on Microsoft\'s Fluent UI System Icons (MIT License).',
   // キャンバス：幅のプレビュー（views/canvas.ts・ribbonFit.ts・ribbonTips.ts）
