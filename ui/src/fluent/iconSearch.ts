@@ -112,23 +112,37 @@ export function expandToken(token: string): ExpandedTerm[] {
     }
     put(q.replace(/_/g, '-'), 1, '');
   }
-  const hits: { entry: Entry; quality: number }[] = [];
+  const hits: { entry: Entry; quality: number; rawOk: boolean }[] = [];
   for (const e of dictionary()) {
     const k = e.key;
     let quality = 0;
-    if (k === q) quality = 1;
-    else if (!ascii) {
+    // 長音（ー）を残した形でも当たるか（「ビルの階」の「ビル」は、「ビール」ではなく建物の見出しに当たる）
+    let rawOk = false;
+    if (k === q) {
+      quality = 1;
+      rawOk = e.raw === token;
+    } else if (!ascii) {
       // 入力の途中（「はいそ」→配送）、言い回しの付いた語（「保存する」）、語の中に見出しを含むもの（「売上集計」）
-      if (q.length >= 2 && k.startsWith(q)) quality = 0.8;
-      else if (k.length >= 2 && q.startsWith(k)) quality = 0.9;
-      else if (k.length >= 2 && q.length > k.length && q.includes(k)) quality = 0.75;
+      if (q.length >= 2 && k.startsWith(q)) {
+        quality = 0.8;
+        rawOk = e.raw.startsWith(token);
+      } else if (k.length >= 2 && q.startsWith(k)) {
+        quality = 0.9;
+        rawOk = token.startsWith(e.raw);
+      } else if (k.length >= 2 && q.length > k.length && q.includes(k)) {
+        quality = 0.75;
+        rawOk = token.includes(e.raw);
+      }
     }
-    if (quality > 0) hits.push({ entry: e, quality });
+    if (quality > 0) hits.push({ entry: e, quality, rawOk });
   }
   // 見出しにそのまま一致するものがあれば、それだけを使う（「ログイン」で、前方が同じ「ログ」＝履歴まで広がらないように）
   if (hits.some((h) => h.quality === 1)) hits.splice(0, hits.length, ...hits.filter((h) => h.quality === 1));
   // 長音まで同じ見出しがあれば、それだけを使う（「ビル」で建物、「ビール」で飲み物。長音を除くと同じ語になるため）。なければ長音の違いは無視する（フォルダー／フォルダ）
   if (hits.some((h) => h.entry.raw === token)) hits.splice(0, hits.length, ...hits.filter((h) => h.entry.raw === token));
+  // 前方・後方・語の中に見出しが当たるときも同じ：長音まで同じ見出しが当たる語（key）では、その見出しだけを使う（本社ビル・ビルの階にビールが混ざらない）
+  const rawKeys = new Set(hits.filter((h) => h.rawOk).map((h) => h.entry.key));
+  if (rawKeys.size > 0) hits.splice(0, hits.length, ...hits.filter((h) => h.rawOk || !rawKeys.has(h.entry.key)));
   // 入力が短いと前方一致が大量に当たるので、確かなもの・短い（近い）ものから最大 8 つの見出しだけ使う
   hits.sort((a, b) => b.quality - a.quality || a.entry.key.length - b.entry.key.length);
   for (const { entry, quality } of hits.slice(0, 8)) {

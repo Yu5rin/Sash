@@ -60,23 +60,32 @@ export function absolute(d: string): string[] {
 
 
 /**
- * パスを、平行移動と、絶対／相対の書き方の違いに左右されない形（各命令の座標を、いまの点からの差にして、0.5 単位に丸めたもの）の
- * 部分パス（M ごと）の一覧にする。1 単位ずらして写したもの・相対座標で書き直したものも、同じ形になる。
- * 3 命令に満たない単純な線は、どの集にもあるので除く。
+ * パスを、部分パス（M ごと）の比べる形の一覧にする。
+ * - M を含めて 4 命令以上（M のあとに 3 命令以上）：平行移動と、絶対／相対の書き方の違いに左右されない形
+ *   （各命令の座標をいまの点からの差にして、0.5 単位に丸めたもの）。1 単位ずらした写しや、相対座標に書き直した写しも同じ形になる。
+ * - M を含めて 3 命令（M のあとに 2 命令。矢じり・山形）：絶対座標のまま完全一致（ありふれた山形が、ずらしただけで誤って一致しないように）。
+ * - それより短い単純な線は、どの集にもあるので除く。
  */
-export function shapes(d: string, minCommands = 3): string[] {
+export function shapes(d: string): string[] {
   const r = (v: number) => String(Math.round(v * 2) / 2);
-  const out: string[][] = [];
+  const subs: { abs: string[]; rel: string[] }[] = [];
   let cx = 0, cy = 0, sx = 0, sy = 0;
   for (const c of absolute(d)) {
     const [cmd, ...nums] = c.split(' ');
     const a = nums.map(Number);
-    if (cmd === 'Z') { out[out.length - 1]?.push('Z'); cx = sx; cy = sy; continue; }
+    if (cmd === 'Z') { subs[subs.length - 1]?.abs.push('Z'); subs[subs.length - 1]?.rel.push('Z'); cx = sx; cy = sy; continue; }
     const n = a.length;
-    if (cmd === 'M') { out.push([]); sx = a[0]!; sy = a[1]!; cx = sx; cy = sy; continue; }
+    if (cmd === 'M') { subs.push({ abs: [c], rel: [] }); sx = a[0]!; sy = a[1]!; cx = sx; cy = sy; continue; }
     const rel = a.map((v, k) => (cmd === 'A' ? (k < 5 ? v : k === 5 ? v - cx : v - cy) : v - (k % 2 === 0 ? cx : cy)));
-    (out[out.length - 1] ??= []).push(`${cmd} ${rel.map(r).join(' ')}`);
+    const cur = (subs[subs.length - 1] ??= { abs: [], rel: [] });
+    cur.abs.push(c);
+    cur.rel.push(`${cmd} ${rel.map(r).join(' ')}`);
     cx = a[n - 2]!; cy = a[n - 1]!;
   }
-  return out.filter((s) => s.length >= minCommands).map((s) => s.join('|'));
+  const out: string[] = [];
+  for (const s of subs) {
+    if (s.rel.length >= 3) out.push(`R:${s.rel.join('|')}`);
+    else if (s.rel.length === 2) out.push(`A:${s.abs.join('|')}`);
+  }
+  return out;
 }

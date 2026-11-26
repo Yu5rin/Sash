@@ -137,4 +137,18 @@ describe('Sash のオリジナルは、既存の集の図形を写していな�
     for (const i of sashIcons) for (const d of asList(i.regular)) for (const s of shapes(d.replace(/^[#@]/, ''))) if (others.has(s)) same.push(`${i.name}: ${s.slice(0, 40)}`);
     expect(same).toEqual([]);
   });
+
+  it('突き合わせの仕組み自体が効く：Tabler の矢じり（M を含めて 3 命令）の写しと、1 単位ずらした長い部分パスの写しを見つける', () => {
+    const others = new Set<string>();
+    for (const i of tablerIcons) for (const v of ['regular', 'filled'] as const) for (const d of asList(i[v])) for (const s of shapes(d.replace(/^[#@]/, ''))) others.add(s);
+    // Tabler square-arrow-down の矢じり。そのまま写したものは一致する
+    expect(shapes('M8 12l4 4l4-4').every((x) => others.has(x))).toBe(true);
+    expect(shapes('M8 12l4 4l4-4')).toHaveLength(1);
+    // 4 命令以上の部分パス（ここでは Tabler home の屋根のように、よくある形ではなく丸い角の枠）は、1 単位ずらしても同じ形になる
+    const frame = 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z';
+    const shifted = 'M6 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z';
+    expect(shapes(shifted)).toEqual(shapes(frame));
+    // 絶対座標でも相対座標でも同じ形
+    expect(shapes('M5 3H19a2 2 0 0 1 2 2V19a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2z')).toEqual(shapes(frame));
+  });
 });

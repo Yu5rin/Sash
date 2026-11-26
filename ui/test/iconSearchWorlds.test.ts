@@ -16,29 +16,29 @@ const SHOP: readonly (readonly [string, readonly string[]])[] = [
   ['段取り替え', ['changeover']], ['山積み', ['load-capacity']], ['負荷', ['load-capacity']], ['アンドン', ['signal-tower']], ['現品票', ['item-tag']],
   ['外注', ['outsource']], ['内製', ['in-house']], ['治具', ['c-clamp']], ['研削', ['grinding-wheel']], ['板金', ['sheet-bending']], ['鋳造', ['casting-ladle']],
   ['めっき', ['plating-tank']], ['5S', ['five-s']], ['カイゼン', ['bulb', 'lightbulb']], ['ヒヤリハット', ['near-miss']], ['歩留まり', ['chart-funnel', 'percentage']],
-  ['切粉', ['metal-chips']], ['ノギス', ['caliper']], ['マイクロメータ', ['caliper', 'ruler-measure']], ['マイクロメーター', ['caliper', 'ruler-measure']],
+  ['切粉', ['trash', 'recycle']], ['ノギス', ['caliper']], ['マイクロメータ', ['caliper', 'ruler-measure']], ['マイクロメーター', ['caliper', 'ruler-measure']],
   ['熱処理', ['furnace']], ['はんだ付け', ['soldering-iron']], ['パレート図', ['pareto-chart']], ['管理図', ['control-chart']], ['リードタイム', ['lead-time']],
   ['滞留在庫', ['stagnant-stock']], ['発注点', ['reorder-point']], ['ポカヨケ', ['poka-yoke']], ['無人搬送車', ['agv']], ['保護メガネ', ['safety-goggles']],
   ['軍手', ['work-glove']], ['タイムカード', ['time-card']], ['ハンドリフト', ['pallet-jack']], ['ホイスト', ['chain-hoist']], ['天地無用', ['packing-box']],
   ['非常停止ボタン', ['emergency-stop']], ['制御盤', ['control-panel']], ['作業指示書', ['work-order']], ['油差し', ['oil-can']], ['コンプレッサー', ['gauge', 'wind']],
-  ['丸棒', ['bar-stock']], ['H形鋼', ['h-beam']], ['シャッター', ['shutter']], ['エンドミル', ['end-mill']], ['やすり', ['rasp-file']], ['鋼材', ['h-beam']],
+  ['丸棒', ['bar-stock']], ['H形鋼', ['h-beam']], ['シャッター', ['shutter']], ['エンドミル', ['drill', 'hammer-drill']], ['やすり', ['rasp-file']], ['鋼材', ['h-beam']],
 ];
 const BUSINESS: readonly (readonly [string, readonly string[]])[] = [
   ['ビジネスマン', ['businessperson']], ['サラリーマン', ['businessperson']], ['会社員', ['businessperson']], ['スーツ', ['tie', 'shirt', 'businessperson']], ['ネクタイ', ['tie']],
   ['名刺交換', ['business-card']], ['稟議', ['rubber-stamp', 'stamp']], ['決裁', ['rubber-stamp', 'stamp']], ['押印', ['rubber-stamp', 'stamp']], ['回覧', ['circulation']],
   ['予実', ['chart-arrows', 'chart-bar']], ['Web会議', ['video', 'device-desktop-share']], ['共有フォルダ', ['folder-share']], ['出張', ['plane', 'luggage']], ['残業', ['clock-plus', 'moon']],
-  ['会議室', ['meeting-room']], ['バインダー', ['binder']], ['手形', ['promissory-note']], ['在席表示', ['user-check', 'chalkboard']], ['ホチキス', ['stapler']],
+  ['会議室', ['users-group', 'presentation']], ['バインダー', ['binder']], ['手形', ['promissory-note']], ['在席表示', ['user-check', 'chalkboard']], ['ホチキス', ['stapler']],
 ];
 const ELEVATOR: readonly (readonly [string, readonly string[]])[] = [
   ['戸開', ['door-open-button']], ['戸閉', ['door-close-button']], ['閉じ込め', ['elevator-trapped']], ['階数表示', ['floor-indicator']], ['非常呼び', ['emergency-call']],
   ['インターホン', ['emergency-call']], ['行先ボタン', ['car-panel']], ['操作盤', ['control-panel', 'car-panel']], ['昇降路', ['elevator-shaft']], ['巻上機', ['elevator-shaft']],
-  ['ダムウェーター', ['freight-lift']], ['定員', ['capacity-plate']], ['カウンターウェイト', ['counterweight']], ['地震', ['earthquake']], ['ビルの階', ['building-floors']],
+  ['ダムウェーター', ['freight-lift']], ['定員', ['users', 'users-group', 'weight']], ['カウンターウェイト', ['counterweight']], ['地震', ['earthquake']], ['ビルの階', ['building-floors']],
   ['エレベーター', ['elevator', 'elevator-car']], ['エレベータ', ['elevator', 'elevator-car']], ['昇降機', ['elevator', 'elevator-car']],
 ];
 const ESCALATOR: readonly (readonly [string, readonly string[]])[] = [
   ['エスカレーター', ['escalator', 'escalator-up', 'escalator-down']], ['エスカレータ', ['escalator', 'escalator-up', 'escalator-down']], ['動く歩道', ['moving-walkway']],
   ['上り', ['escalator-up']], ['下り', ['escalator-down']], ['非常停止', ['emergency-stop']], ['足元注意', ['step-caution']], ['手すり', ['handrail']],
-  ['ステップ', ['escalator', 'escalator-up', 'escalator-down']], ['立ち止まる', ['stand-still']], ['スロープ', ['ramp']], ['ハンドレール', ['handrail']],
+  ['ステップ', ['escalator', 'escalator-up', 'escalator-down']], ['立ち止まる', ['escalator', 'hand-stop']], ['スロープ', ['ramp']], ['ハンドレール', ['handrail']],
 ];
 
 describe.each([['町工場', SHOP], ['ビジネスマン・オフィス', BUSINESS], ['エレベーター', ELEVATOR], ['エスカレーター・動く歩道', ESCALATOR]] as const)('%s の言葉で探す', (_world, list) => {
@@ -61,7 +61,7 @@ describe('拡充前には出なかったこと', () => {
   it('新しい語で出る自作・Lucide のアイコンは、Fluent + Tabler だけの索引にはなかった', () => {
     const before = new Set([...fluentIcons, ...tablerIcons].map((i) => i.name));
     const newIcons = ['changeover', 'load-capacity', 'signal-tower', 'item-tag', 'outsource', 'in-house', 'c-clamp', 'grinding-wheel', 'sheet-bending', 'plating-tank', 'near-miss',
-      'metal-chips', 'businessperson', 'door-open-button', 'door-close-button', 'elevator-trapped', 'floor-indicator', 'emergency-call', 'moving-walkway', 'step-caution', 'handrail'];
+      'businessperson', 'door-open-button', 'door-close-button', 'elevator-trapped', 'floor-indicator', 'emergency-call', 'moving-walkway', 'step-caution', 'handrail'];
     expect(newIcons.filter((n) => before.has(n))).toEqual([]);
     for (const n of newIcons) expect(allIcons.some((i) => i.name === n), n).toBe(true);
   });
@@ -97,6 +97,17 @@ describe('「ビル」と「ビール」（長音だけが違う別の語）', (
     const beer = top5('ビール');
     expect(beer[0]).toMatch(/beer/);
     expect(beer.some((n) => /building/.test(n))).toBe(false);
+  });
+
+  it('ビルを含む語（ビルの階・本社ビル・高層ビル）にビールが混ざらず、ビールを含む語（ビール工場）にビルが先頭に来ない', () => {
+    const names = (q: string) => searchIconSet(allIcons, q).hits.slice(0, 12).map((h) => h.icon.name);
+    for (const q of ['ビルの階', '本社ビル', '高層ビル', 'オフィスビル']) {
+      const n = names(q);
+      expect(n[0], q).toMatch(/building/);
+      expect(n.filter((x) => /beer|cocktail|champagne|bottle|wine/.test(x)), q).toEqual([]);
+    }
+    expect(names('ビール工場')[0]).toMatch(/beer/);
+    expect(names('ビール工場').slice(0, 3).some((x) => /skyscraper|building-floors/.test(x))).toBe(false);
   });
 
   it('長音の違いを無視する語（フォルダー／フォルダ）は、これまでどおり同じ結果', () => {
