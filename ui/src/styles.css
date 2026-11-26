@@ -270,6 +270,10 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .title-center { display: flex; align-items: center; justify-content: center; gap: var(--sp-2); min-width: 0; }
 .file-chip { display: inline-flex; align-items: center; gap: 6px; max-width: min(520px, 100%); min-width: 0; height: var(--ctl-h-sm); padding: 0 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }
 .file-chip[hidden] { display: none; }
+.file-chip.sample { background: var(--info-bg); border-color: var(--info-border); color: var(--info-text); }
+/* Excel とのつながりの印（ファイル名の右）。文字 12px・高さ 22px・角丸 11px */
+.excel-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border-radius: 11px; border: 1px solid var(--border); font-size: var(--fs-xs); color: var(--text-subtle); white-space: nowrap; }
+.excel-chip[hidden] { display: none; }
 .file-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-chip-dirty { width: 8px; height: 8px; border-radius: 50%; background: var(--text-subtle); flex-shrink: 0; }
 .file-chip-dirty[hidden] { display: none; }
@@ -284,6 +288,7 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .menubar-item.open { background: var(--pressed-bg); }
 .menubar-item:focus-visible { outline-offset: -2px; }
 .mnemonic { text-decoration: none; }
+.menu-popup .mnemonic { text-decoration: underline; }
 .mnemonic-paren { color: var(--text-subtle); margin-left: 1px; }
 /* キーボードで入ったときだけアクセスキーに下線を引く（日本語の「(F)」は常に見せる） */
 .menubar.show-mnemonics .mnemonic { text-decoration: underline; }
@@ -540,6 +545,9 @@ kbd { font-family: inherit; font-size: 11px; color: var(--text-subtle); border: 
 .palette-results { list-style: none; margin: 0; padding: var(--sp-1); max-height: 420px; overflow: auto; }
 .palette-results li { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 10px; border-radius: var(--radius-sm); cursor: pointer; }
 .palette-results li.active { background: var(--sel-bg); }
+.palette-results li.disabled { cursor: default; }
+.palette-results li.disabled .cmd-title, .palette-results li.disabled .cmd-group { color: var(--text-disabled); }
+.cmd-reason { margin-left: auto; max-width: 50%; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-subtle); }
 .palette-results li.palette-results-empty { cursor: default; color: var(--text-subtle); justify-content: center; min-height: 64px; }
 .palette-results li.palette-results-head { cursor: default; min-height: 24px; font-size: 11px; font-weight: 600; color: var(--text-subtle); }
 .cmd-group { font-size: 11px; color: var(--text-subtle); width: 76px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

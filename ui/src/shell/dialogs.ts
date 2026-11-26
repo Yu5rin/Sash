@@ -72,9 +72,6 @@ export function openBackupDialog(): Promise<void> {
 function extraShortcuts(): { group: string; title: string; keys: string }[] {
   return [
     // キャンバスとツリーが自分で受けるキー（メニューのコマンドにはないので、ここで載せる）
-    { group: t('編集'), title: t('上へ移動'), keys: 'Alt+↑' },
-    { group: t('編集'), title: t('下へ移動'), keys: 'Alt+↓' },
-    { group: t('編集'), title: t('ラベルを編集'), keys: 'F2' },
     { group: t('編集'), title: t('インスペクタでラベルを編集'), keys: 'Enter' },
     { group: t('編集'), title: t('右クリックメニューを開く'), keys: 'Shift+F10' },
     { group: t('表示'), title: t('次のペインへ移る'), keys: 'F6' },

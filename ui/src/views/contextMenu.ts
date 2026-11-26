@@ -197,7 +197,7 @@ export function openElementMenu(x: number, y: number, path: Path, source: Source
     { label: t('コピー'), shortcut: 'Ctrl+C', disabled: isRoot, run: () => runCommand('copy', source) },
     { label: t('貼り付け'), shortcut: 'Ctrl+V', disabled: !hasClip(), run: () => runCommand('paste', source) },
     { label: t('複製'), shortcut: 'Ctrl+D', disabled: isRoot || !canDuplicateEl(el), run: () => runCommand('duplicate', source) },
-    { label: t('削除'), shortcut: 'Delete', disabled: isRoot, run: () => runCommand('delete', source) },
+    { label: t('削除'), shortcut: 'Del', disabled: isRoot, run: () => runCommand('delete', source) },
     'sep',
     {
       label: t('前に挿入'),
@@ -256,7 +256,7 @@ function openMultiMenu(x: number, y: number, source: Source, restoreFocus?: HTML
     { label: t('{n} 個をコピー', { n }), shortcut: 'Ctrl+C', run: () => runCommand('copy', source) },
     { label: clips > 1 ? t('{n} 個を貼り付け', { n: clips }) : t('貼り付け'), shortcut: 'Ctrl+V', disabled: !hasClip(), run: () => runCommand('paste', source) },
     { label: t('{n} 個を複製', { n }), shortcut: 'Ctrl+D', disabled: dupReason !== null, reason: dupReason ?? undefined, run: () => runCommand('duplicate', source) },
-    { label: t('{n} 個を削除', { n }), shortcut: 'Delete', run: () => runCommand('delete', source) },
+    { label: t('{n} 個を削除', { n }), shortcut: 'Del', run: () => runCommand('delete', source) },
     'sep',
     { label: t('上へ移動'), shortcut: 'Alt+↑', disabled: up !== null, reason: up ?? undefined, run: () => moveSelected(-1, source) },
     { label: t('下へ移動'), shortcut: 'Alt+↓', disabled: down !== null, reason: down ?? undefined, run: () => moveSelected(1, source) },
