@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import fluentData from '../src/fluent/fluentIcons.json';
-import tablerData from '../src/fluent/tablerIcons.json';
-import { toIcons, toTablerIcons, type FluentData, type FluentIcon, type TablerData } from '../src/fluent/fluent';
+import type { FluentIcon } from '../src/fluent/fluent';
 import { CATEGORIES, categorize, categoryBit } from '../src/fluent/iconCategories';
 import { CONCEPTS } from '../src/fluent/iconConcepts';
 import { buildIndex, CONCEPT_COUNT, conceptsInText, expandToken, relatedConcepts, searchIconSet, searchTerms, splitQuery } from '../src/fluent/iconSearch';
 import { normalize } from '../src/fluent/iconWords';
 import { hasSuggestTerms, suggestFluent } from '../src/iconSuggest';
+import { allIcons } from './helpers/allIcons';
 
-const all: FluentIcon[] = [...toIcons(fluentData as unknown as FluentData), ...toTablerIcons(tablerData as unknown as TablerData)];
+const all: FluentIcon[] = allIcons;
 
 const names = (q: string, n = 10, opts: Parameters<typeof searchIconSet>[2] = {}) => searchIconSet(all, q, opts).hits.slice(0, n).map((h) => h.icon.name);
 const has = (icon: FluentIcon, cat: string) => (categorize(icon) & categoryBit(cat)) !== 0;

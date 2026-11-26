@@ -24,6 +24,8 @@ import { JA_KEYWORDS, normalize } from './iconWords';
 interface Entry {
   /** 正規化した見出し（ひらがな→カタカナ、長音なし）。 */
   key: string;
+  /** 長音（ー）を残した正規化の見出し。「ビル」と「ビール」のように、長音だけが違う別の語を区別するため。 */
+  raw: string;
   /** 英語の言葉。_ は - にそろえてある。ハイフンつきは「名前の中でその順に並ぶ単語」を表す。 */
   terms: readonly string[];
   /** 利用者に見せる見出し（概念の最初の言葉）。 */
@@ -65,10 +67,10 @@ function dictionary(): readonly Entry[] {
     const ks = keys.split('/');
     const ts = terms.split(' ').filter(Boolean).map(normTerm);
     const category = FOOD_CONCEPTS.has(ks[0]!) ? 'food' : undefined;
-    for (const k of ks) list.push({ key: stripLong(normalize(k)), terms: ts, display: ks[0]!, ...(category ? { category } : {}) });
+    for (const k of ks) list.push({ key: stripLong(normalize(k)), raw: normalize(k), terms: ts, display: ks[0]!, ...(category ? { category } : {}) });
   }
   // 昔からある小さな辞書（JA_KEYWORDS）も使う。新しい辞書にない言葉を取りこぼさないため
-  for (const [k, v] of Object.entries(JA_KEYWORDS)) list.push({ key: stripLong(normalize(k)), terms: v.map(normTerm), display: k });
+  for (const [k, v] of Object.entries(JA_KEYWORDS)) list.push({ key: stripLong(normalize(k)), raw: normalize(k), terms: v.map(normTerm), display: k });
   entries = list;
   return list;
 }
@@ -110,21 +112,37 @@ export function expandToken(token: string): ExpandedTerm[] {
     }
     put(q.replace(/_/g, '-'), 1, '');
   }
-  const hits: { entry: Entry; quality: number }[] = [];
+  const hits: { entry: Entry; quality: number; rawOk: boolean }[] = [];
   for (const e of dictionary()) {
     const k = e.key;
     let quality = 0;
-    if (k === q) quality = 1;
-    else if (!ascii) {
+    // 長音（ー）を残した形でも当たるか（「ビルの階」の「ビル」は、「ビール」ではなく建物の見出しに当たる）
+    let rawOk = false;
+    if (k === q) {
+      quality = 1;
+      rawOk = e.raw === token;
+    } else if (!ascii) {
       // 入力の途中（「はいそ」→配送）、言い回しの付いた語（「保存する」）、語の中に見出しを含むもの（「売上集計」）
-      if (q.length >= 2 && k.startsWith(q)) quality = 0.8;
-      else if (k.length >= 2 && q.startsWith(k)) quality = 0.9;
-      else if (k.length >= 2 && q.length > k.length && q.includes(k)) quality = 0.75;
+      if (q.length >= 2 && k.startsWith(q)) {
+        quality = 0.8;
+        rawOk = e.raw.startsWith(token);
+      } else if (k.length >= 2 && q.startsWith(k)) {
+        quality = 0.9;
+        rawOk = token.startsWith(e.raw);
+      } else if (k.length >= 2 && q.length > k.length && q.includes(k)) {
+        quality = 0.75;
+        rawOk = token.includes(e.raw);
+      }
     }
-    if (quality > 0) hits.push({ entry: e, quality });
+    if (quality > 0) hits.push({ entry: e, quality, rawOk });
   }
   // 見出しにそのまま一致するものがあれば、それだけを使う（「ログイン」で、前方が同じ「ログ」＝履歴まで広がらないように）
   if (hits.some((h) => h.quality === 1)) hits.splice(0, hits.length, ...hits.filter((h) => h.quality === 1));
+  // 長音まで同じ見出しがあれば、それだけを使う（「ビル」で建物、「ビール」で飲み物。長音を除くと同じ語になるため）。なければ長音の違いは無視する（フォルダー／フォルダ）
+  if (hits.some((h) => h.entry.raw === token)) hits.splice(0, hits.length, ...hits.filter((h) => h.entry.raw === token));
+  // 前方・後方・語の中に見出しが当たるときも同じ：長音まで同じ見出しが当たる語（key）では、その見出しだけを使う（本社ビル・ビルの階にビールが混ざらない）
+  const rawKeys = new Set(hits.filter((h) => h.rawOk).map((h) => h.entry.key));
+  if (rawKeys.size > 0) hits.splice(0, hits.length, ...hits.filter((h) => h.rawOk || !rawKeys.has(h.entry.key)));
   // 入力が短いと前方一致が大量に当たるので、確かなもの・短い（近い）ものから最大 8 つの見出しだけ使う
   hits.sort((a, b) => b.quality - a.quality || a.entry.key.length - b.entry.key.length);
   for (const { entry, quality } of hits.slice(0, 8)) {
@@ -149,8 +167,9 @@ export interface Index {
   sortKey: string[];
   wordCount: Uint8Array;
   setRank: Uint8Array;
-  isTabler: Uint8Array;
 }
+
+const SET_RANK: Readonly<Record<IconSet, number>> = { sash: 0, fluent: 1, tabler: 2, lucide: 3 };
 
 const indexCache = new WeakMap<readonly FluentIcon[], Index>();
 
@@ -177,16 +196,15 @@ export function buildIndex(icons: readonly FluentIcon[]): Index {
     sortKey: new Array<string>(n),
     wordCount: new Uint8Array(n),
     setRank: new Uint8Array(n),
-    isTabler: new Uint8Array(n),
   };
   for (let i = 0; i < n; i++) {
     const icon = icons[i]!;
-    const tabler = icon.set === 'tabler';
+    const set = icon.set ?? 'fluent';
     idx.nameKey[i] = `-${icon.words.join('-')}-`;
     idx.sortKey[i] = icon.name.replace(/\d+/g, (m) => m.padStart(4, '0'));
     idx.wordCount[i] = Math.min(255, icon.words.length);
-    idx.setRank[i] = tabler ? 1 : 0;
-    idx.isTabler[i] = tabler ? 1 : 0;
+    // 同じ点のときの並び：Sash のオリジナル（目的を絞って描いたもの）> Fluent > Tabler > Lucide
+    idx.setRank[i] = SET_RANK[set];
     icon.words.forEach((w, pos) => push(idx.nameWords, w, i * 8 + Math.min(pos, 7)));
     (icon.tags ?? []).forEach((tag, pos) => {
       const p = Math.min(pos, 127);
@@ -355,7 +373,19 @@ const VIA_LIMIT = 400;
 /** 入力を語に分ける。空白・読点・中黒で区切り、英数字と日本語の境目でも分ける（「CSV出力」→ csv / 出力）。 */
 export function splitQuery(query: string): { raw: string; norm: string }[] {
   const out: { raw: string; norm: string }[] = [];
-  for (const chunk of query.normalize('NFKC').split(/[\s、。,，・/／]+/)) {
+  // R&D・Q&A・M&A のように、1 文字の英字どうしをはさむ & は 1 語（randd・qanda・manda）として扱う（& で分けると 1 文字ずつの検索になるため）。
+  // Q&A は QA（品質保証）とは別の語。drag&drop・black&white のように、長い語をはさむ & は今までどおり分ける
+  const text = query.normalize('NFKC').replace(/(?<![A-Za-z])([A-Za-z])&([A-Za-z])(?![A-Za-z])/g, '$1and$2');
+  for (const chunk of text.split(/[\s、。,，・/／]+/)) {
+    // 英数字と日本語が続いた 1 語（Web会議・Excel出力）が、辞書の見出しそのものなら、分けずに 1 語として探す
+    if (/[A-Za-z0-9]/.test(chunk) && /[^\x00-\x7f]/.test(chunk)) {
+      const whole = normalize(chunk);
+      const wk = stripLong(whole);
+      if (whole && dictionary().some((e) => e.key === wk)) {
+        out.push({ raw: chunk, norm: whole });
+        continue;
+      }
+    }
     for (const part of chunk.match(/[A-Za-z0-9_-]+|[^A-Za-z0-9_\-]+/g) ?? []) {
       const norm = normalize(part);
       if (norm) out.push({ raw: part, norm });

@@ -15,6 +15,10 @@ export interface ModalHandle {
 export interface ModalOptions {
   /** 幅の広いダイアログ（カタログやアイコンエディタ）。size: 'lg' と同じ。 */
   wide?: boolean;
+  /** wide のうえで、縦も広くとる（中身が多いダイアログ用。画面に収まる範囲で 720px まで）。 */
+  tall?: boolean;
+  /** Esc を押されたとき、先に呼ぶ。true を返したら、その Esc は処理済み（ダイアログは閉じない。ダイアログの中のポップアップを閉じるときに使う）。 */
+  onEscape?: () => boolean;
   /** 大きさ。sm=確認、md=既定、lg=一覧や編集。 */
   size?: 'sm' | 'md' | 'lg';
   /** 下部のボタン。primary クラスのボタンは右端に並べ、Enter で押されるものとして扱う。 */
@@ -37,6 +41,7 @@ interface Layer {
   dialog: HTMLElement;
   close: () => void;
   closable: boolean;
+  onEscape?: () => boolean;
   handle: ModalHandle;
 }
 
@@ -71,6 +76,7 @@ function onDocumentKey(e: KeyboardEvent): void {
     // 一番上のレイヤーだけを閉じる。下のダイアログまで閉じないよう伝播を止める
     e.stopPropagation();
     e.preventDefault();
+    if (top.onEscape?.()) return;
     if (top.closable) top.close();
     return;
   }
@@ -99,7 +105,7 @@ function onDocumentKey(e: KeyboardEvent): void {
  * レイヤーを積む（ダイアログ以外の重なるもの、例：コマンドパレットにも使う）。
  * element は document.body に追加済みでなくてよい。閉じるときは返り値の close を呼ぶ。
  */
-export function pushLayer(opts: { element: HTMLElement; dialog: HTMLElement; closable?: boolean; key?: string; onClose?: () => void }): ModalHandle {
+export function pushLayer(opts: { element: HTMLElement; dialog: HTMLElement; closable?: boolean; key?: string; onClose?: () => void; onEscape?: () => boolean }): ModalHandle {
   const previous = document.activeElement as HTMLElement | null;
   let closed = false;
   const layer: Layer = {
@@ -108,6 +114,7 @@ export function pushLayer(opts: { element: HTMLElement; dialog: HTMLElement; clo
     element: opts.element,
     dialog: opts.dialog,
     closable: opts.closable ?? true,
+    onEscape: opts.onEscape,
     close: () => {
       if (closed) return;
       closed = true;
@@ -171,7 +178,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
   const footerButtons = opts.footer ? orderFooter(opts.footer) : null;
   const dialog = h(
     'div',
-    { class: `modal size-${size}${opts.wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabIndex: -1 },
+    { class: `modal size-${size}${opts.wide ? ' wide' : ''}${opts.wide && opts.tall ? ' tall' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabIndex: -1 },
     h('header', null,
       h('h2', { id: titleId }, title),
       closable ? h('button', { type: 'button', class: 'icon-button modal-close', title: t('閉じる (Esc)'), 'aria-label': t('閉じる (Esc)'), onclick: () => handle.close() }, svg(uiIcons.close)) : null),
@@ -196,7 +203,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
     e.preventDefault();
     primary.click();
   });
-  const handle = pushLayer({ element: backdrop, dialog, closable, key: opts.key, onClose: opts.onClose });
+  const handle = pushLayer({ element: backdrop, dialog, closable, key: opts.key, onClose: opts.onClose, onEscape: opts.onEscape });
   (opts.initialFocus ?? initialFocusTarget(dialog)).focus();
   return handle;
 }

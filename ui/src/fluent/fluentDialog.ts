@@ -1,4 +1,4 @@
-// アイコン集（Fluent UI System Icons と Tabler Icons）から選ぶダイアログ。Excel がなくても、見栄えのよいアイコンをボタンに付けられるようにする。
+// アイコン集（Fluent UI System Icons・Tabler Icons・Lucide・Sash のオリジナル）から選ぶダイアログ。Excel がなくても、見栄えのよいアイコンをボタンに付けられるようにする。
 // 選んだアイコンは色を付けた SVG にして返す。PNG にするのはアイコンエディタの役目（出力サイズで描き直し、バッジなどの加工もそこでできる）。
 // このモジュールとデータは使うときに動的 import で読む（最初の画面の読み込みを重くしないため）。
 // 検索は概念の辞書による絞り込み（iconSearch.ts）。「お金」「配送」「ねこ」のようなあいまいな言葉で探せる。
@@ -9,10 +9,12 @@ import { openModal, openOnce } from '../dialogs/modal';
 import { notify } from '../clipboard';
 import { lang, t } from '../i18n';
 import {
-  buildSvg, COLOR_PRESETS, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor,
+  buildSvg, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor, setFilePrefix, setLabel,
   type FluentIcon, type FluentVariant, type IconSet,
 } from './fluent';
 import { CATEGORIES } from './iconCategories';
+import { buildColorPalette } from './colorPalette';
+import { normalizeHex, pushRecent } from './iconPalette';
 import { buildIndex, relatedConcepts, searchIconSet, type IconHit, type SearchResult } from './iconSearch';
 
 export interface FluentPick {
@@ -43,6 +45,8 @@ interface Remembered {
   variant: FluentVariant;
   color: string;
   set: SetFilter;
+  /** 最近使った色（新しい順）。 */
+  recent: string[];
 }
 
 /** 前回の種類・色・アイコン集（この利用者の手元だけの好み。保存できない環境では既定に戻るだけ）。 */
@@ -52,10 +56,11 @@ function loadRemembered(): Remembered {
     return {
       variant: v.variant === 'filled' ? 'filled' : 'regular',
       color: safeColor(v.color ?? DEFAULT_COLOR),
-      set: v.set === 'fluent' || v.set === 'tabler' ? v.set : 'all',
+      set: v.set === 'fluent' || v.set === 'tabler' || v.set === 'lucide' || v.set === 'sash' ? v.set : 'all',
+      recent: Array.isArray(v.recent) ? v.recent.map((c) => normalizeHex(String(c))).filter((c): c is string => c !== null).filter((c, i, a) => a.indexOf(c) === i).slice(0, 8) : [],
     };
   } catch {
-    return { variant: 'regular', color: DEFAULT_COLOR, set: 'all' };
+    return { variant: 'regular', color: DEFAULT_COLOR, set: 'all', recent: [] };
   }
 }
 
@@ -65,11 +70,6 @@ function saveRemembered(r: Remembered): void {
   } catch {
     // 覚えられなくても選ぶことはできる
   }
-}
-
-/** 出どころの表示名（固有名詞なので訳さない）。 */
-function setLabel(set: IconSet): string {
-  return set === 'tabler' ? 'Tabler' : 'Fluent';
 }
 
 /** 開く。選んだら onPick を呼んで閉じる。 */
@@ -92,15 +92,12 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     h('button', { type: 'button', dataset: { variant: v }, 'aria-pressed': String(state.variant === v), class: state.variant === v ? 'active' : '', onclick: () => setVariant(v) }, v === 'regular' ? t('線') : t('塗り')),
   );
   const variantSwitch = h('div', { class: 'segmented', role: 'group', 'aria-label': t('アイコンのスタイル') }, variantButtons);
-  const setButtons = (['all', 'fluent', 'tabler'] as const).map((v) =>
+  const setButtons = (['all', 'fluent', 'tabler', 'lucide', 'sash'] as const).map((v) =>
     h('button', { type: 'button', dataset: { set: v }, 'aria-pressed': String(state.set === v), class: state.set === v ? 'active' : '', onclick: () => setSet(v) }, v === 'all' ? t('すべて') : setLabel(v)),
   );
   const setSwitch = h('div', { class: 'segmented', role: 'group', 'aria-label': t('アイコン集の出どころ') }, setButtons);
-  const colorInput = h('input', { type: 'color', value: state.color, title: t('色を選ぶ'), 'aria-label': t('色を選ぶ'), oninput: () => setColor(colorInput.value) });
-  const swatches = COLOR_PRESETS.map((p) =>
-    h('button', { type: 'button', class: 'fluent-swatch', style: `--swatch:${p.color}`, title: `${t(p.label)}（${p.color}）`, 'aria-label': t(p.label), dataset: { color: p.color }, onclick: () => setColor(p.color) }),
-  );
-  const colorRow = h('div', { class: 'fluent-colors', role: 'group', 'aria-label': t('色') }, h('span', { class: 'muted small' }, t('色')), ...swatches, colorInput);
+  // 色：右の欄にパレット（色相ごと・Office の標準の色・最近使った色・#RRGGBB の入力）を常に出す。以前の 6 色（既定のグレー・Excel の緑・青・赤・オレンジ・黒）もパレットの中にある
+  const palette = buildColorPalette({ value: state.color, recent: state.recent, onPick: (c) => setColor(c) });
 
   // カテゴリのチップ。件数は、今の検索語・出どころ・スタイルで絞った結果の中の数（チップを押す前に、どこに何があるか分かるように）
   const chipDefs = [{ id: 'all', ja: 'すべて' }, ...CATEGORIES];
@@ -124,7 +121,7 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     previewName,
     previewRow,
     h('p', { class: 'muted small' }, t('「使う」を押すとアイコンエディタが開き、出力サイズの PNG にして設定します。バッジなどの加工もそこでできます。')),
-    h('p', { class: 'muted small fluent-credit' }, t('アイコン：Microsoft Fluent UI System Icons と Tabler Icons（MIT License）')),
+    palette.el,
   );
 
   const useButton = h('button', { type: 'button', class: 'primary', disabled: true, onclick: () => confirm() }, t('使う'));
@@ -133,12 +130,12 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     { class: 'catalog fluent-picker' },
     h('div', { class: 'fluent-toolbar' }, search, variantSwitch, setSwitch),
     chipRow,
-    colorRow,
     h('div', { class: 'fluent-main' }, gridWrap, previewPane),
-    status,
+    h('div', { class: 'fluent-footnote' }, status, h('span', { class: 'muted small fluent-credit' }, t('アイコン：Fluent UI System Icons・Tabler Icons（MIT）、Lucide（ISC）、Sash のオリジナル'))),
   );
   const modal = openModal(t('アイコン集から選ぶ'), content, {
     wide: true,
+    tall: true,
     initialFocus: search,
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')), useButton],
     onClose: () => {
@@ -317,9 +314,8 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
 
   function setColor(c: string): void {
     state.color = safeColor(c);
-    colorInput.value = state.color;
     saveRemembered(state);
-    for (const s of swatches) s.setAttribute('aria-pressed', String(s.dataset['color'] === state.color));
+    palette.setValue(state.color);
     renderPreview();
   }
 
@@ -328,11 +324,14 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     const markup = buildSvg(selected, state.variant, state.color);
     if (!markup) return;
     picked = true;
+    // 使った色を「最近使った色」に覚える（次に開いたとき、パレットの中に出る）
+    state.recent = pushRecent(state.recent, state.color);
+    saveRemembered(state);
     const set = iconSet(selected);
     const pick: FluentPick = {
       blob: new Blob([markup], { type: 'image/svg+xml' }),
-      // Tabler と Fluent に同じ名前（home など）があるので、Tabler のファイル名には出どころを付ける
-      fileName: `${set === 'tabler' ? 'tabler-' : ''}${selected.name}_${state.variant}.svg`,
+      // 集どうしに同じ名前（home など）があるので、Fluent 以外のファイル名には出どころを付ける
+      fileName: `${setFilePrefix(set)}${selected.name}_${state.variant}.svg`,
       name: selected.name,
       set,
       variant: state.variant,

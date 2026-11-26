@@ -1,0 +1,154 @@
+// 0.3.1 で足したアイコン集（Lucide と Sash のオリジナル）。件数・ライセンス・組み立て・名前の重なり・カテゴリを確かめる。
+import { describe, expect, it } from 'vitest';
+import lucideData from '../src/fluent/lucideIcons.json';
+import sashData from '../src/fluent/sashIcons.json';
+import lucideLicense from '../src/fluent/LICENSE-lucide.txt?raw';
+import sashLicense from '../src/fluent/LICENSE-sash-icons.txt?raw';
+import { THIRD_PARTY_LICENSES } from '../src/shell/licenses';
+import { buildSvg, iconKey, isStrokeSet, setFilePrefix, setLabel, type TablerData } from '../src/fluent/fluent';
+import { categorize, categoryBit } from '../src/fluent/iconCategories';
+import { shapes } from './helpers/pathNormalize';
+import { allIcons, fluentIcons, lucideIcons, sashIcons, tablerIcons } from './helpers/allIcons';
+
+describe('Lucide のデータ', () => {
+  const d = lucideData as unknown as TablerData;
+
+  it('ISC License の版つきデータで、業務向けに選んだ 150 個以上（全部は入れない）', () => {
+    expect(d.source).toBe('lucide-static');
+    expect(d.license).toBe('ISC');
+    expect(d.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(lucideIcons.length).toBeGreaterThanOrEqual(150);
+    expect(lucideIcons.length).toBeLessThan(400);
+  });
+
+  it('Tabler にある名前は入れていない（同じ名前を二重に出さない）', () => {
+    const t = new Set(tablerIcons.map((i) => i.name));
+    expect(lucideIcons.filter((i) => t.has(i.name)).map((i) => i.name)).toEqual([]);
+  });
+
+  it('ものづくり・物流・営業の主なアイコンがある', () => {
+    const names = new Set(lucideIcons.map((i) => i.name));
+    for (const n of ['factory', 'warehouse', 'hand-truck', 'handshake', 'hard-hat', 'drafting-compass', 'ruler-dimension-line', 'robot-arm', 'shelving-unit', 'scan-barcode', 'package-check', 'screwdriver', 'chart-gantt', 'id-card']) {
+      expect(names.has(n), n).toBe(true);
+    }
+  });
+
+  it('図形はすべてパスに直してあり、M で始まる 1 本のパス（つないでも相対にならない）', () => {
+    for (const i of lucideIcons) {
+      // 線だけのものは 1 本の文字列。塗りも要る点（key-round・brain-circuit）だけは、'#' を付けた要素を別に持つ配列
+      const parts = typeof i.regular === 'string' ? [i.regular] : (i.regular as readonly string[]);
+      expect(parts.every((p) => p.replace(/^#/, '').startsWith('M')), i.name).toBe(true);
+      expect(i.filled, i.name).toBe(0);
+      expect(buildSvg(i, 'regular', '#000000'), i.name).not.toBeNull();
+    }
+  });
+
+  it('ISC License と Feather 由来の MIT License の全文を同梱し、アプリの中の一覧にも出る', () => {
+    expect(lucideLicense).toContain('ISC License');
+    expect(lucideLicense).toContain('Lucide Icons and Contributors');
+    expect(lucideLicense).toContain('Cole Bemis');
+    expect(lucideLicense).toContain('lucide-static ' + d.version);
+    expect(THIRD_PARTY_LICENSES.find((l) => l.name === 'Lucide')?.text).toBe(lucideLicense);
+  });
+});
+
+describe('Sash のオリジナルのアイコン', () => {
+  const d = sashData as unknown as TablerData;
+
+  it('エレベーター・旋盤・金型・パレット・見積書など 30 個以上を自作している', () => {
+    expect(d.license).toBe('Sash');
+    expect(sashIcons.length).toBeGreaterThanOrEqual(30);
+    const names = new Set(sashIcons.map((i) => i.name));
+    for (const n of ['elevator-car', 'elevator-shaft', 'elevator-call', 'lathe', 'machining-center', 'mold-die', 'welding-torch', 'pallet', 'hex-bolt', 'estimate-sheet', 'purchase-order', 'sales-order', 'stock-in', 'stock-out', 'parts-tree', 'drawing-sheet', 'business-card', 'deadline-calendar']) {
+      expect(names.has(n), n).toBe(true);
+    }
+  });
+
+  it('Tabler・Lucide と同じ名前のものは作っていない', () => {
+    const others = new Set([...tablerIcons, ...lucideIcons].map((i) => i.name));
+    expect(sashIcons.filter((i) => others.has(i.name)).map((i) => i.name)).toEqual([]);
+  });
+
+  it('どれも線のアイコンで、全体が 24×24 の枠に収まる（座標が枠から大きくはみ出さない）', () => {
+    for (const i of sashIcons) {
+      expect(i.regular, i.name).not.toBe(0);
+      const svg = buildSvg(i, 'regular', '#000000')!;
+      expect(svg, i.name).toContain('stroke-width="2"');
+      // 絶対座標の数字（M・L・H・V の直後）が、枠（0〜24）の内側にあること
+      for (const m of (i.regular as string).matchAll(/[MLHV](-?\d+(?:\.\d+)?)/g)) {
+        const v = Number(m[1]);
+        expect(v, `${i.name}: ${m[0]}`).toBeGreaterThanOrEqual(1);
+        expect(v, `${i.name}: ${m[0]}`).toBeLessThanOrEqual(23);
+      }
+    }
+  });
+
+  it('タグは英語だけ、出どころの表記は自作と分かる', () => {
+    for (const i of sashIcons) expect(i.tags!.every((t) => /^[a-z0-9-]+$/.test(t)), i.name).toBe(true);
+    expect(sashLicense).toContain('オリジナル');
+    expect(sashLicense).toContain('MIT License');
+    expect(THIRD_PARTY_LICENSES.find((l) => l.name === 'Sash original icons')?.text).toBe(sashLicense);
+  });
+});
+
+describe('4 つのアイコン集の合わせ方', () => {
+  it('合計は 8,200 個前後で、出どころごとの名前・ファイル名の前置き・描き方が決まっている', () => {
+    expect(allIcons.length).toBe(fluentIcons.length + tablerIcons.length + lucideIcons.length + sashIcons.length);
+    expect(allIcons.length).toBeGreaterThan(8200);
+    expect(setLabel('lucide')).toBe('Lucide');
+    expect(setLabel('sash')).toBe('Sash');
+    expect(setFilePrefix('fluent')).toBe('');
+    expect(setFilePrefix('lucide')).toBe('lucide-');
+    expect(setFilePrefix('sash')).toBe('sash-');
+    expect(isStrokeSet('fluent')).toBe(false);
+    expect(['tabler', 'lucide', 'sash'].every((s) => isStrokeSet(s as 'tabler'))).toBe(true);
+  });
+
+  it('出どころを含めたキーは全アイコンで重ならない', () => {
+    expect(new Set(allIcons.map(iconKey)).size).toBe(allIcons.length);
+  });
+
+  it('Lucide・Sash の線のアイコンは、色を stroke に入れて描く（Tabler と同じ）', () => {
+    const svg = buildSvg(sashIcons.find((i) => i.name === 'lathe')!, 'regular', '#0f6cbd', 32)!;
+    expect(svg).toContain('stroke="#0f6cbd"');
+    expect(svg).toContain('fill="none"');
+    expect(svg).not.toContain('fill="#0f6cbd"');
+    expect(buildSvg(lucideIcons.find((i) => i.name === 'factory')!, 'filled', '#000000')).toBeNull();
+  });
+
+  it('ものづくり・工場のカテゴリがあり、Lucide・Sash の工場系はそこに入る。Tabler の nut は食べ物ではない', () => {
+    const cat = (set: typeof allIcons, name: string) => categorize(set.find((i) => i.name === name)!);
+    expect(cat(sashIcons, 'lathe') & categoryBit('industry')).not.toBe(0);
+    expect(cat(lucideIcons, 'factory') & categoryBit('industry')).not.toBe(0);
+    expect(cat(tablerIcons, 'forklift') & categoryBit('industry')).not.toBe(0);
+    expect(cat(tablerIcons, 'nut') & categoryBit('food')).toBe(0);
+    expect(cat(sashIcons, 'pallet') & categoryBit('business')).not.toBe(0);
+  });
+});
+
+describe('Sash のオリジナルは、既存の集の図形を写していない', () => {
+  const asList = (p: string | readonly string[] | 0): string[] => (p === 0 ? [] : typeof p === 'string' ? [p] : [...p]);
+  it('自作の部分パス（3 命令以上）は、Fluent・Tabler・Lucide のどのアイコンの部分パスとも一致しない（平行移動・絶対／相対の書き方の違いを除いた形で比べる）', () => {
+    const others = new Set<string>();
+    for (const i of [...fluentIcons, ...tablerIcons, ...lucideIcons]) for (const v of ['regular', 'filled'] as const) {
+      for (const d of asList(i[v])) for (const s of shapes(d.replace(/^[#@]/, ''))) others.add(s);
+    }
+    const same: string[] = [];
+    for (const i of sashIcons) for (const d of asList(i.regular)) for (const s of shapes(d.replace(/^[#@]/, ''))) if (others.has(s)) same.push(`${i.name}: ${s.slice(0, 40)}`);
+    expect(same).toEqual([]);
+  });
+
+  it('突き合わせの仕組み自体が効く：Tabler の矢じり（M を含めて 3 命令）の写しと、1 単位ずらした長い部分パスの写しを見つける', () => {
+    const others = new Set<string>();
+    for (const i of tablerIcons) for (const v of ['regular', 'filled'] as const) for (const d of asList(i[v])) for (const s of shapes(d.replace(/^[#@]/, ''))) others.add(s);
+    // Tabler square-arrow-down の矢じり。そのまま写したものは一致する
+    expect(shapes('M8 12l4 4l4-4').every((x) => others.has(x))).toBe(true);
+    expect(shapes('M8 12l4 4l4-4')).toHaveLength(1);
+    // 4 命令以上の部分パス（ここでは Tabler home の屋根のように、よくある形ではなく丸い角の枠）は、1 単位ずらしても同じ形になる
+    const frame = 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z';
+    const shifted = 'M6 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z';
+    expect(shapes(shifted)).toEqual(shapes(frame));
+    // 絶対座標でも相対座標でも同じ形
+    expect(shapes('M5 3H19a2 2 0 0 1 2 2V19a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2z')).toEqual(shapes(frame));
+  });
+});

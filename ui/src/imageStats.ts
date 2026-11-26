@@ -37,6 +37,19 @@ export function lumaOf(r: number, g: number, b: number): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+/** 単色の画像が「暗いテーマで沈む」と見なす明るさ（平均がこれ未満）。配布前チェック（distributionCheck.ts）と、色の選び方（fluent/iconPalette.ts）が同じ値を使う。 */
+export const SINK_DARK_LUMA = 60;
+/** 単色の画像が「明るいテーマで沈む」と見なす明るさ（平均がこれ超）。 */
+export const SINK_LIGHT_LUMA = 215;
+
+/** #rrggbb の色が、Office の黒・濃い灰色のテーマ（dark）か、白・明るいテーマ（light）で背景に沈むか。どちらでもなければ null。 */
+export function sinkOfColor(hex: string): 'dark' | 'light' | null {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return null;
+  const l = lumaOf(parseInt(m[1]!, 16), parseInt(m[2]!, 16), parseInt(m[3]!, 16));
+  return l < SINK_DARK_LUMA ? 'dark' : l > SINK_LIGHT_LUMA ? 'light' : null;
+}
+
 /** RGBA の画素列（1 画素 4 つ）から集計する。 */
 export function analyzePixels(data: ArrayLike<number>, width: number, height: number): PixelStats {
   const total = width * height;

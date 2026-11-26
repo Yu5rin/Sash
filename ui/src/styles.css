@@ -508,6 +508,7 @@ button.home-drop-note.link:hover { color: var(--text); text-decoration: underlin
 .diff-empty { padding: var(--sp-6) var(--sp-4); text-align: center; }
 .diff-layout { margin-left: auto; }
 .modal.size-lg, .modal.wide { width: min(920px, 100%); height: min(660px, calc(100vh - 48px)); }
+.modal.wide.tall { height: min(720px, calc(100vh - 32px)); }
 .modal.diff-modal { width: min(1200px, calc(100vw - 48px)); }
 .diff-layout[hidden] { display: none; }
 .modal header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-4) var(--sp-3) var(--sp-2) var(--sp-5); }
