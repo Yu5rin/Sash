@@ -9,7 +9,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Company>Sash</Company>
     <Product>Sash</Product>
-    <Version>0.1.2</Version>
+    <Version>0.2.0</Version>
     <!-- pdb を dll に埋め込み、発行先に別ファイルを残さない -->
     <DebugType>embedded</DebugType>
   </PropertyGroup>
