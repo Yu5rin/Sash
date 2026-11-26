@@ -19,6 +19,7 @@
             <span class="file-chip-dirty" id="file-dirty" hidden></span>
           </span>
           <span id="excel-chip" class="excel-chip" hidden></span>
+          <span id="vba-chip" class="excel-chip vba-chip" hidden></span>
           <select id="part-switch" class="compact" hidden title="編集するパーツ（2010以降の Excel は customUI14 を優先します）" data-i18n-title="編集するパーツ（2010以降の Excel は customUI14 を優先します）" aria-label="編集するパーツ（2010以降の Excel は customUI14 を優先します）"></select>
         </div>
         <button id="update-banner" type="button" class="update-banner" hidden></button>
@@ -28,10 +29,11 @@
         <button id="btn-open" type="button" class="tb-button"></button>
         <button id="btn-save" type="button" class="tb-button" disabled></button>
         <span class="tb-sep" role="separator"></span>
-        <button id="btn-undo" type="button" class="tb-button" disabled></button>
-        <button id="btn-redo" type="button" class="tb-button" disabled></button>
+        <button id="btn-undo" type="button" class="tb-button icon-only" disabled></button>
+        <button id="btn-redo" type="button" class="tb-button icon-only" disabled></button>
         <span class="tb-sep" role="separator"></span>
         <button id="btn-command" type="button" class="tb-button subtle"></button>
+        <button id="btn-dist" type="button" class="tb-button subtle" disabled></button>
         <span class="tb-spacer"></span>
         <button id="btn-apply" type="button" class="tb-button excel" disabled></button>
       </div>

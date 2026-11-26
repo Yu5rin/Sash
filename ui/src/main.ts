@@ -13,7 +13,7 @@ import { openDiff } from './dialogs/diffDialog';
 import { openCommandPalette, type Command } from './dialogs/commandPalette';
 import { applyRecipe, openRecipes, saveAsRecipe } from './dialogs/recipeDialog';
 import { ask, isModalOpen, openOnce } from './dialogs/modal';
-import { $, h, svg } from './dom';
+import { $, debounce, h, svg } from './dom';
 import { lang, storeLang, t, translateDocument } from './i18n';
 import { applyLibraryIcon, openIconDialog } from './icon/iconDialog';
 import { openLibrary } from './dialogs/libraryDialog';
@@ -40,6 +40,7 @@ import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, R
 import { describeElement } from './elementHelp';
 import { inTextField, runEditCommand } from './shell/editCommands';
 import { createPollGate } from './shell/pollGate';
+import { vbaChipState } from './shell/vbaChip';
 import { applyToExcel, busyState, closeFile, confirmDiscard, exportSashFile, importSashFile, isQuitting, onBusyChange, openFile, quit, save, setPendingEditFlusher } from './shell/fileOps';
 import { changeLanguage, LANG_SYNC_KEY, REOPEN_KEY, sessionGet, sessionSet } from './shell/language';
 import { mountMenubar, type MenuDef, type MenuItemDef } from './shell/menubar';
@@ -306,7 +307,7 @@ function commands(): AppCommand[] {
     { id: 'view.resetLayout', group: G.view, title: t('既定のレイアウトに戻す'), keywords: 'layout reset', run: () => layout.reset() },
 
     ...PALETTE_ITEMS.map((tag): AppCommand => ({ id: `insert.${tag}`, group: G.insert, title: t('{name}を追加', { name: titleOf(tag) }), keywords: tag, enabled: has, run: () => void insertNearSelection(tag) })),
-    { id: 'insert.recipes', group: G.insert, title: t('レシピ…'), keywords: 'recipe template レシピを挿入', enabled: has, run: () => void openOnce('recipes', () => openRecipes(notify)) },
+    { id: 'insert.recipes', group: G.insert, title: t('レシピ…'), keywords: 'recipe template レシピを挿入', enabled: () => has() && !app.store?.syncError, run: () => void openOnce('recipes', () => openRecipes(notify)) },
     { id: 'insert.saveRecipe', group: G.recipe, title: t('選択中のタブ・グループをレシピとして保存'), keywords: 'recipe save', enabled: hasSel, run: () => void saveAsRecipe(notify) },
     ...builtinRecipes.map((r): AppCommand => ({ id: `recipe.${r.id}`, group: G.recipe, title: t(r.title), keywords: 'recipe template', enabled: has, run: () => runAndNotify(applyRecipe(r)) })),
     { id: 'insert.idMso', group: G.insert, title: t('idMso カタログ…'), keywords: 'idmso catalog', enabled: has, run: openIdMsoCatalog },
@@ -379,6 +380,7 @@ function disabledReasonFor(c: AppCommand): string | undefined {
     case 'edit.clearMulti': return t('複数選択のときに使えます');
     case 'tools.runMacro': return has() ? runMacroHint() : t('ファイルを開くと使えます');
     case 'tools.icon': return has() ? iconDisabledHint() : t('ファイルを開くと使えます');
+    case 'insert.recipes': return has() ? t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください') : t('ファイルを開くと使えます');
     case 'file.quit': return t('ブラウザで動かしているときは使えません');
     case 'view.fitExcel': return t('画面の幅を選び、Excel が見つかっているときに使えます');
     case 'vba.refresh': case 'vba.insert': return has() ? t('Excel で開いているブックで使えます') : t('ファイルを開くと使えます');
@@ -478,16 +480,16 @@ function previewMenuItems(): MenuItemDef[] {
   const p = currentPreview();
   const on = has();
   return [
-    { label: t('画面の幅'), enabled: on, items: () => WIDTH_CHOICES_ALL.map((w): MenuItemDef => ({ label: widthChoiceLabel(w), checked: p.width === w, run: () => changePreview({ width: w }) })) },
-    { label: t('拡大率'), enabled: on, items: () => SCALE_CHOICES.map((sc): MenuItemDef => ({ label: `${sc}%`, checked: p.scale === sc, run: () => changePreview({ scale: sc }) })) },
+    { label: t('画面の幅'), mnemonic: 'W', enabled: on, items: () => WIDTH_CHOICES_ALL.map((w): MenuItemDef => ({ label: widthChoiceLabel(w), checked: p.width === w, run: () => changePreview({ width: w }) })) },
+    { label: t('拡大率'), mnemonic: 'Z', enabled: on, items: () => SCALE_CHOICES.map((sc): MenuItemDef => ({ label: `${sc}%`, checked: p.scale === sc, run: () => changePreview({ scale: sc }) })) },
     {
-      label: t('表示のしかた'), enabled: on, items: () => [
+      label: t('表示のしかた'), mnemonic: 'S', enabled: on, items: () => [
         { label: t('全体を表示'), checked: p.fit === 'fit', run: () => changePreview({ fit: 'fit' }) },
         { label: t('実寸'), checked: p.fit === 'actual', run: () => changePreview({ fit: 'actual' }) },
       ],
     },
-    { label: t('キーヒントを表示'), enabled: on, checked: p.keytips, run: () => changePreview({ keytips: !p.keytips }) },
-    cmd('view.fitExcel', undefined, { hint: p.width === null ? t('画面の幅を選ぶと使えます') : app.info.excelInstalled ? undefined : t('Excel が見つからないため使えません') }),
+    { label: t('キーヒントを表示'), mnemonic: 'K', enabled: on, checked: p.keytips, run: () => changePreview({ keytips: !p.keytips }) },
+    cmd('view.fitExcel', undefined, { mnemonic: 'X', hint: p.width === null ? t('画面の幅を選ぶと使えます') : app.info.excelInstalled ? undefined : t('Excel が見つからないため使えません') }),
   ];
 }
 
@@ -558,7 +560,7 @@ const MENUS: MenuDef[] = [
       cmd('edit.clearMulti', undefined, { mnemonic: 'M' }),
       {
         // まとめての操作。使えないときは理由をツールチップに出す（隠さずに無効で見せる）
-        label: t('並べ替えと大きさ'), enabled: has(), items: () => [
+        label: t('並べ替えと大きさ'), mnemonic: 'O', enabled: has(), items: () => [
           cmd('edit.moveUp', undefined, { hint: moveDisabledReason(-1) ?? undefined }),
           cmd('edit.moveDown', undefined, { hint: moveDisabledReason(1) ?? undefined }),
           cmd('edit.newGroup', undefined, { hint: newGroupDisabledReason() ?? undefined }),
@@ -590,101 +592,103 @@ const MENUS: MenuDef[] = [
       const parts: MenuItemDef[] = s && s.parts.size >= 2
         ? [{
             label: t('編集するパーツ'),
+            mnemonic: 'E',
             items: () => [...s.parts.keys()].map((v): MenuItemDef => ({ label: v === 'office2010' ? t('customUI14.xml（2010以降）') : t('customUI.xml（2007）'), checked: s.active.version === v, run: () => app.switchPart(v) })),
           }]
         : [];
       const theme = app.settings.theme;
       return [
         {
-          label: t('ペインへ移る'), items: () => [
-            cmd('view.canvas', t('キャンバス')),
-            cmd('view.tree', t('ツリー')),
-            cmd('view.xml', t('XML エディタ')),
-            cmd('view.inspector', t('インスペクタ')),
+          label: t('ペインへ移る'), mnemonic: 'P', items: () => [
+            cmd('view.canvas', t('キャンバス'), { mnemonic: 'C' }),
+            cmd('view.tree', t('ツリー'), { mnemonic: 'T' }),
+            cmd('view.xml', t('XML エディタ'), { mnemonic: 'X' }),
+            cmd('view.inspector', t('インスペクタ'), { mnemonic: 'I' }),
             SEP,
-            cmd('view.nextPane'),
-            cmd('view.prevPane'),
-            cmd('view.treeFilter'),
+            cmd('view.nextPane', undefined, { mnemonic: 'N' }),
+            cmd('view.prevPane', undefined, { mnemonic: 'V' }),
+            cmd('view.treeFilter', undefined, { mnemonic: 'F' }),
           ],
         },
-        { label: t('キャンバスの表示'), enabled: has(), items: () => modes },
+        { label: t('キャンバスの表示'), mnemonic: 'C', enabled: has(), items: () => modes },
         ...parts,
         SEP,
         ...previewMenuItems(),
         SEP,
-        cmd('view.bottom', t('下部パネル'), { checked: !layout.isCollapsed('bottom') }),
+        cmd('view.bottom', t('下部パネル'), { checked: !layout.isCollapsed('bottom'), mnemonic: 'B' }),
         {
-          label: t('下部パネルのタブ'), enabled: has(), items: () => [
-            cmd('view.problems', t('問題')),
-            cmd('view.callbacks', t('コールバック')),
-            cmd('view.images', t('アイコン')),
+          label: t('下部パネルのタブ'), mnemonic: 'T', enabled: has(), items: () => [
+            cmd('view.problems', t('問題'), { mnemonic: 'P' }),
+            cmd('view.callbacks', t('コールバック'), { mnemonic: 'C' }),
+            cmd('view.images', t('アイコン'), { mnemonic: 'I' }),
           ],
         },
-        cmd('view.collapseSides'),
+        cmd('view.collapseSides', undefined, { mnemonic: 'L' }),
         SEP,
         {
-          label: t('テーマ'), items: () => [
-            { label: t('システムに合わせる'), checked: theme === 'system', run: () => void updateSettings({ theme: 'system' }) },
-            { label: t('ライト'), checked: theme === 'light', run: () => void updateSettings({ theme: 'light' }) },
-            { label: t('ダーク'), checked: theme === 'dark', run: () => void updateSettings({ theme: 'dark' }) },
+          label: t('テーマ'), mnemonic: 'M', items: () => [
+            { label: t('システムに合わせる'), mnemonic: 'S', checked: theme === 'system', run: () => void updateSettings({ theme: 'system' }) },
+            { label: t('ライト'), mnemonic: 'L', checked: theme === 'light', run: () => void updateSettings({ theme: 'light' }) },
+            { label: t('ダーク'), mnemonic: 'D', checked: theme === 'dark', run: () => void updateSettings({ theme: 'dark' }) },
           ],
         },
-        cmd('view.swap'),
-        cmd('view.resetLayout'),
+        cmd('view.swap', undefined, { mnemonic: 'V' }),
+        cmd('view.resetLayout', undefined, { mnemonic: 'R' }),
       ];
     },
   },
   {
     id: 'insert', label: t('挿入'), mnemonic: 'I', items: () => [
       ...INSERT_COMMON.map(insertItem),
-      { label: t('その他の要素'), items: () => PALETTE_ITEMS.filter((tag) => !INSERT_COMMON.includes(tag)).map(insertItem) },
+      { label: t('その他の要素'), mnemonic: 'O', items: () => PALETTE_ITEMS.filter((tag) => !INSERT_COMMON.includes(tag)).map(insertItem) },
       SEP,
-      cmd('insert.recipes'),
-      cmd('insert.saveRecipe', t('選択中をレシピとして保存…')),
+      cmd('insert.recipes', undefined, { mnemonic: 'R', hint: app.store?.syncError ? disabledReasonFor(byId('insert.recipes')) : undefined }),
+      cmd('insert.saveRecipe', t('選択中をレシピとして保存…'), { mnemonic: 'S' }),
       SEP,
-      cmd('insert.idMso'),
-      cmd('insert.imageMso'),
+      cmd('insert.idMso', undefined, { mnemonic: 'D' }),
+      cmd('insert.imageMso', undefined, { mnemonic: 'M' }),
     ],
   },
   {
     id: 'tools', label: t('ツール'), mnemonic: 'T', items: () => [
       cmd('tools.apply', undefined, {
+        mnemonic: 'A',
         enabled: has() && hasFile(),
         hint: sampleHint() ?? (app.info.excelInstalled ? undefined : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)')),
       }),
-      cmd('tools.diff'),
-      cmd('tools.distCheck'),
+      cmd('tools.diff', undefined, { mnemonic: 'D' }),
+      cmd('tools.distCheck', undefined, { mnemonic: 'C' }),
       SEP,
       {
-        label: 'VBA', items: () => [
-          cmd('tools.runMacro', t('マクロを Excel で試す'), { hint: runMacroHint() }),
-          cmd('vba.reveal', t('コールバックを VBE で表示')),
-          cmd('vba.refresh', t('VBA を読み直して照合'), { hint: app.session && !hasFile() ? t('サンプルは Excel で開かれていないため、VBA と照合できません') : undefined }),
-          cmd('vba.insert', t('足りないコールバックを挿入')),
-          cmd('vba.holder', t('onLoad と Invalidate の雛形を挿入')),
+        label: 'VBA', mnemonic: 'V', items: () => [
+          cmd('tools.runMacro', t('マクロを Excel で試す'), { mnemonic: 'M', hint: runMacroHint() }),
+          cmd('vba.reveal', t('コールバックを VBE で表示'), { mnemonic: 'V' }),
+          cmd('vba.refresh', t('VBA を読み直して照合'), { mnemonic: 'R', hint: app.session && !hasFile() ? t('サンプルは Excel で開かれていないため、VBA と照合できません') : undefined }),
+          cmd('vba.insert', t('足りないコールバックを挿入'), { mnemonic: 'I' }),
+          cmd('vba.holder', t('onLoad と Invalidate の雛形を挿入'), { mnemonic: 'H' }),
         ],
       },
       SEP,
-      cmd('tools.replaceIds'),
-      cmd('tools.icon', t('アイコンを作る…'), { hint: iconDisabledHint() }),
-      cmd('tools.library'),
+      cmd('tools.replaceIds', undefined, { mnemonic: 'R' }),
+      cmd('tools.icon', t('アイコンを作る…'), { mnemonic: 'I', hint: iconDisabledHint() }),
+      cmd('tools.library', undefined, { mnemonic: 'L' }),
       SEP,
-      cmd('tools.settings'),
+      cmd('tools.settings', undefined, { mnemonic: 'S' }),
     ],
   },
   {
     id: 'help', label: t('ヘルプ'), mnemonic: 'H', items: () => [
-      cmd('edit.palette', t('コマンドを探す…')),
-      cmd('help.shortcuts'),
-      cmd('help.readme'),
-      cmd('file.sample', t('サンプルを開いて試す')),
+      cmd('edit.palette', t('コマンドを探す…'), { mnemonic: 'C' }),
+      cmd('help.shortcuts', undefined, { mnemonic: 'K' }),
+      cmd('help.readme', undefined, { mnemonic: 'R' }),
+      cmd('file.sample', t('サンプルを開いて試す'), { mnemonic: 'S' }),
       SEP,
-      cmd('help.update'),
-      cmd('help.releases', t('リリースノート')),
-      cmd('help.github', t('GitHub のページ')),
-      cmd('help.logs'),
+      cmd('help.update', undefined, { mnemonic: 'U' }),
+      cmd('help.releases', t('リリースノート'), { mnemonic: 'N' }),
+      cmd('help.github', t('GitHub のページ'), { mnemonic: 'G' }),
+      cmd('help.logs', undefined, { mnemonic: 'L' }),
       SEP,
-      cmd('help.about'),
+      cmd('help.about', undefined, { mnemonic: 'A' }),
     ],
   },
 ];
@@ -699,6 +703,7 @@ toolbarButton('btn-save', uiIcons.save, t('保存'));
 toolbarButton('btn-undo', uiIcons.undo, t('元に戻す'));
 toolbarButton('btn-redo', uiIcons.redo, t('やり直し'));
 toolbarButton('btn-command', uiIcons.command, t('コマンド'));
+toolbarButton('btn-dist', uiIcons.check, t('配布前チェック'));
 $('btn-apply').replaceChildren(svg(uiIcons.apply), h('span', { class: 'tb-label' }, t('Excel へ反映')), h('kbd', null, 'F5'));
 
 /** ツールバーのボタンと、同じ働きのコマンド。 */
@@ -708,6 +713,7 @@ const TOOLBAR_COMMAND: Readonly<Record<string, string>> = {
   'btn-undo': 'edit.undo',
   'btn-redo': 'edit.redo',
   'btn-command': 'edit.palette',
+  'btn-dist': 'tools.distCheck',
   'btn-apply': 'tools.apply',
 };
 const toolbarKeys = new Map<string, string>();
@@ -765,6 +771,7 @@ function updateChrome(): void {
   set('btn-undo', store?.canUndo === true, tip(historyTitle(t('元に戻す'), store?.undoLabel), 'Ctrl+Z'));
   set('btn-redo', store?.canRedo === true, tip(historyTitle(t('やり直し'), store?.redoLabel), 'Ctrl+Y'));
   set('btn-command', true, tip(t('コマンドパレット'), 'Ctrl+K'));
+  set('btn-dist', !!s, t('配布前チェック'));
   set('btn-apply', !!s && !isSampleSession && busy === null,
     busy === 'apply' ? t('Excel へ反映しています…') : isSampleSession ? sampleHint()! : app.info.excelInstalled ? tip(t('Excel へ反映'), 'F5') : t('Excel が見つからないため、ファイルへの書き込みだけを行います (F5)'));
   // Excel がない PC では、押すと何が起きるかをボタンの文字で伝える（ツールチップにだけ書いてあると、押すまで分からない。総点検 G-12）
@@ -819,6 +826,26 @@ async function refreshExcelChip(): Promise<void> {
   chip.textContent = next === 'none' ? t('Excel：未検出') : next === 'open' ? t('Excel：このブックを開いています') : t('Excel：開いていません');
   chip.title = next === 'none' ? t('Excel が見つからないため、反映はファイルへの書き込みだけになります') : next === 'open' ? t('F5 で、Excel で開いているこのブックに反映します') : t('F5 でファイルに書き込みます（Excel では開かれていません）');
 }
+// ---- VBA との照合の印（総点検 G-12）。下部パネルのタブを開かなくても、照合できているかが分かる ----
+
+function refreshVbaChip(): void {
+  const chip = $('vba-chip');
+  const s = app.session;
+  const st = s && s.path !== '' ? vbaChipState(vba.status, vba.status === 'ok' ? vba.statuses().filter((x) => x.state === 'missing' || x.state === 'mismatch').length : 0) : null;
+  chip.hidden = st === null;
+  if (!st) return;
+  chip.dataset['state'] = st.state;
+  chip.textContent = st.text;
+  chip.title = vba.statusMessage();
+}
+const refreshVbaChipSoon = debounce(refreshVbaChip, 200);
+app.on('vba', refreshVbaChipSoon);
+app.on('session', refreshVbaChipSoon);
+// コールバックの書き換えで「要対応」の数が変わるので、文書の編集でも取り直す（間引く）
+app.on('store', (c) => {
+  if (!c || c.kinds.has('doc')) refreshVbaChipSoon();
+});
+
 // 問い合わせは重ねず、窓に戻るだけの取り直しは 30 秒に 1 回まで、保存・反映の最中は送らない。
 // Excel への問い合わせは COM の待ち行列を使うので、focus のたびに投げると F5 が後ろで待たされる
 const EXCEL_CHIP_MIN_INTERVAL_MS = 30_000;
@@ -889,6 +916,12 @@ mountInspector($('inspector'), {
   },
   pickImageMso: (cur, apply) => openCatalog('imageMso', cur, apply),
   editImage: (existing) => openImageEditor(undefined, existing),
+  // 何も選んでいないときの、よく使う 3 つの操作（総点検 I-4）
+  quickStart: () => [
+    { label: t('タブを追加'), run: () => void insertNearSelection('tab') },
+    { label: t('レシピから作る…'), run: () => void openOnce('recipes', () => openRecipes(notify)) },
+    { label: t('customUI の設定（onLoad）を開く'), run: () => app.store?.select([], 'inspector') },
+  ],
   pickFromLibrary: () => {
     const store = app.store;
     const target = store?.selection ? iconTargetPath(store.doc, store.selection) : null;
@@ -967,6 +1000,7 @@ $('btn-apply').addEventListener('click', () => void applyToExcel());
 $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
 $('btn-command').addEventListener('click', () => openCommandPalette(paletteCommands));
+$('btn-dist').addEventListener('click', () => byId('tools.distCheck').run());
 setupToolbarKeys($('toolbar'));
 initUpdates({ confirmDiscard });
 $<HTMLSelectElement>('part-switch').addEventListener('change', (e) => app.switchPart((e.target as HTMLSelectElement).value as 'office2007' | 'office2010'));
@@ -975,8 +1009,14 @@ $<HTMLSelectElement>('part-switch').addEventListener('change', (e) => app.switch
 
 /** 押されたキーに当たるコマンド。 */
 function commandForKey(e: KeyboardEvent): AppCommand | undefined {
-  return commands().find((c) => !c.displayOnly && [c.shortcut, ...(c.altKeys ?? [])].some((k) => !!k && matchShortcut(e, k)));
+  // コマンドの一覧（約 110 個。名前の翻訳や選択の数え上げを含む）は、キーを押すたびには作らない（総点検 G-15）。
+  // ショートカットの表は初回に 1 度だけ作り、当たったときだけ、いまの状態でコマンドを作って返す。
+  // ショートカットは言語や状態で変わらない（言語を変えると画面ごと読み込み直す）
+  shortcutIndex ??= commands().filter((c) => !c.displayOnly).map((c) => ({ id: c.id, keys: [c.shortcut, ...(c.altKeys ?? [])].filter((k): k is string => !!k) })).filter((x) => x.keys.length > 0);
+  const hit = shortcutIndex.find((x) => x.keys.some((k) => matchShortcut(e, k)));
+  return hit ? commands().find((c) => c.id === hit.id) : undefined;
 }
+let shortcutIndex: { id: string; keys: string[] }[] | null = null;
 
 /**
  * 入力欄の中でも受けるコマンド（保存・反映・ペインの移動など）は、捕捉の段階（capture）で先に受ける。

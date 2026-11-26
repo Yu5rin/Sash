@@ -8,6 +8,7 @@ import { en as enC } from './en/c';
 import { en as enD } from './en/d';
 import { en as enE } from './en/e';
 import { en as enF } from './en/f';
+import { en as enG } from './en/g';
 
 export type Lang = 'ja' | 'en';
 
@@ -23,7 +24,7 @@ function initialLang(): Lang {
 
 export const lang: Lang = initialLang();
 
-const dictionary: Readonly<Record<string, string>> = { ...enA, ...enB, ...enC, ...enD, ...enE, ...enF };
+const dictionary: Readonly<Record<string, string>> = { ...enA, ...enB, ...enC, ...enD, ...enE, ...enF, ...enG };
 
 /** 言語を保存する。反映するには画面の読み込み直しが必要。 */
 export function storeLang(next: Lang): void {

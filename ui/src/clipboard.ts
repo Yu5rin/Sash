@@ -269,16 +269,23 @@ function removeElement(el: Element, label: string, offerUndo: boolean, source: S
     // 削除後の選択：次の兄弟、なければ前の兄弟、なければ親
     return next ? pathOf(next) : pathOf(parent);
   }, label);
-  if (ok && offerUndo) offerUndoToast(t('{label}しました', { label }));
+  // 1 つのコントロールを消しただけなら知らせない（見えているものが消えただけで、元に戻すはツールバーと Ctrl+Z にある。総点検 G-17）。
+  // 中身を持つ要素（タブ・グループ・メニュー）は、見えていないものまで消えるので知らせる
+  if (ok && offerUndo && el.children.length > 0) offerUndoToast(t('{label}しました', { label }));
   return ok;
 }
+
+/** いま出している「元に戻す」付きの通知。同じ種類の通知は積まず、前のものを閉じてから出す。 */
+let undoToastHandle: { close: () => void } | null = null;
 
 /**
  * 「元に戻す」付きの通知を出す。そのあとに別の編集・元に戻す・やり直しがあったら通知を閉じる。
  * 残しておくと、押したときに取り消されるのが削除ではなく、その後の別の操作になってしまうため。
  */
 function offerUndoToast(message: string): void {
+  undoToastHandle?.close();
   const handle = toast({ kind: 'info', message, action: { label: t('元に戻す'), run: () => app.store?.undo() } });
+  undoToastHandle = handle;
   const watch = (c?: Change) => {
     // 選択が変わっただけなら残す（削除のあとに別の要素を選ぶのはよくあるため）
     if (c && !c.kinds.has('doc') && !c.kinds.has('images')) return;

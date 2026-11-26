@@ -296,6 +296,8 @@ export function mountLayout(root: HTMLElement): LayoutHandle {
   const apply = () => {
     // 保存値（sizes）は窓に関係なく持ち、画面に出す値だけを窓に収まるよう丸める
     const fitted = fitSizes({ ...sizes, top: sizes.top > 0 ? sizes.top + bonus.top : 0 }, viewport(), dragging);
+    // 通知（#app の外の body に出る）が下部パネルの操作ボタンに重ならないよう、下部パネルの高さ（仕切りの帯を含む）を html にも書く（総点検 B-3）
+    document.documentElement.style.setProperty('--bottom-h', `${fitted.bottom + sepOf(fitted.bottom, BOTTOM_BAND)}px`);
     for (const key of Object.keys(DEFAULT_SIZES) as PaneKey[]) {
       const collapsed = sizes[key] === 0;
       const shown = fitted[key];
