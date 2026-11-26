@@ -6,7 +6,7 @@ import type { Problem, Severity } from './lint';
 import { allElements, displayName, pathOf, type Path } from './model';
 import { attributes, titleOf } from './schema';
 import type { ImageInfo } from './imageStats';
-import { bareCallbackName, parseParams, parseProcedures, procedureCode, stripComment, type CallbackStatus, type VbaModule } from './vba';
+import { bareCallbackName, parseParams, parseProcedures, procedureCode, RIBBON_HOLDER_MODULE_NAME, stripComment, type CallbackStatus, type VbaModule } from './vba';
 
 /**
  * 確認の重さ。
@@ -164,7 +164,10 @@ function procedureBody(module: VbaModule, name: string): { body: string; param: 
   const proc = parseProcedures(module).find((p) => p.name.toLowerCase() === name.toLowerCase());
   if (!proc) return null;
   const lines = procedureCode(module, proc).split(/\r?\n/);
-  return { body: lines.slice(1, -2).map(stripComment).join('\n'), param: parseParams(proc.params)[0]?.name };
+  // 宣言は、行継続（行末の " _"）で複数行になることがある。宣言の最後の行までを本体から除く
+  let declEnd = 0;
+  while (declEnd < lines.length - 1 && /\s_\s*$/.test(stripComment(lines[declEnd]!))) declEnd++;
+  return { body: lines.slice(declEnd + 1, -2).map(stripComment).join('\n'), param: parseParams(proc.params)[0]?.name };
 }
 
 /** onLoad の Sub が、受け取った ribbon（IRibbonUI）を使っているか（変数に保持する・保持する Sub へ渡すなど）。 */
@@ -353,7 +356,7 @@ export function collectChecks(input: CheckInput): CheckSection[] {
       if (st?.state === 'implemented' && st.procedure && onLoadHoldsRibbon(input.modules, st.procedure.name, st.procedure.module) === false) {
         holderItems.push({ level: 'should', text: t('onLoad の Sub「{name}」が、受け取った ribbon を保持していません。Invalidate で更新できません', { name: st.name }), detail: `${st.procedure.module} ${st.procedure.line}行目`, path: st.uses[0]!.path, target: 'callbacks' });
       }
-      if (!hasInvalidateCall(input.modules, 'modRibbonCore')) {
+      if (!hasInvalidateCall(input.modules, RIBBON_HOLDER_MODULE_NAME)) {
         holderItems.push({ level: 'should', text: t('VBA に Invalidate を呼ぶところがありません。get〜 の値は、読み込んだときの 1 回だけ決まります'), target: 'callbacks' });
       }
     }
@@ -398,7 +401,7 @@ export function collectChecks(input: CheckInput): CheckSection[] {
   sections.push({
     id: 'themeIcons',
     title: t('テーマで見えにくいアイコン'),
-    note: input.images && [...usedImages].some((id) => input.images!.get(id) && !input.images!.get(id)!.stats)
+    note: input.images && [...usedImages].some((id) => { const im = input.images!.get(id); return im && !(im.examined ?? !!im.stats); })
       ? t('画像の色を調べています…')
       : t('Office には白・明るい灰色・濃い灰色・黒のテーマがあります。黒や白だけのアイコンは、背景と同じ色になって見えなくなります。透明な背景に、どのテーマでも読める色で描いてください。'),
     items: themeItems,

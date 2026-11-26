@@ -287,18 +287,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
         return new { backup, fingerprint = TryFingerprint(path) };
     }
 
-    /// <summary>ファイルのリボンの照合値。ファイルがない・読めない（Excel が書き込み中など）ときは null（検知をあきらめるだけで、失敗にはしない）。</summary>
-    private static IReadOnlyDictionary<string, string>? TryFingerprint(string path)
-    {
-        try
-        {
-            return File.Exists(path) ? RibbonFingerprint.Compute(RibbonPackage.Load(path)) : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UserFacingException)
-        {
-            return null;
-        }
-    }
+    private static IReadOnlyDictionary<string, string>? TryFingerprint(string path) => RibbonFingerprint.TryComputeFile(path);
 
     private object FileFingerprint(PathRequest req) => new { fingerprint = TryFingerprint(System.IO.Path.GetFullPath(req.Path)) };
 
@@ -626,14 +615,14 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
     private object? RecoveryWrite(RecoveryWriteRequest req)
     {
         _recovery.Write(req.Path, req.EditCount, req.Parts.Select(p => new RecoveryPart(
-            p.Version, p.Xml, p.AddImages.Select(i => new RecoveryImage(i.Id, i.DataUrl)).ToList(), p.RemoveImages)).ToList());
+            p.Version, p.Xml, p.AddImages.Select(i => new RecoveryImage(i.Id, i.DataUrl)).ToList(), p.RemoveImages, p.AddImageIds)).ToList());
         return null;
     }
 
     /// <summary>退避を読む。元のファイルが退避より後に変わっているか（fileNewer）も添える。</summary>
     private object? RecoveryRead(PathRequest req) =>
         _recovery.Read(req.Path) is { } e
-            ? new { e.Path, e.SavedAt, e.EditCount, e.Parts, FileNewer = RecoveryStore.IsFileNewer(e.Path, e.SavedAt) }
+            ? new { e.Path, e.SavedAt, e.EditCount, e.Parts, FileNewer = _recovery.IsFileNewer(e.Path, e.SavedAt) }
             : null;
 
     private object? RecoveryDelete(PathRequest req)
@@ -945,7 +934,7 @@ internal sealed class MessageRouter(IWin32Window owner, SettingsStore settings, 
 
     private sealed record RecoveryImageDto(string Id, string DataUrl);
 
-    private sealed record RecoveryPartDto(CustomUIVersion Version, string Xml, IReadOnlyList<RecoveryImageDto> AddImages, IReadOnlyList<string> RemoveImages);
+    private sealed record RecoveryPartDto(CustomUIVersion Version, string Xml, IReadOnlyList<RecoveryImageDto> AddImages, IReadOnlyList<string> RemoveImages, IReadOnlyList<string>? AddImageIds = null);
 
     private sealed record RecoveryWriteRequest(string Path, int EditCount, IReadOnlyList<RecoveryPartDto> Parts);
 

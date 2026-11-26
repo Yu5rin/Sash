@@ -174,4 +174,14 @@ export const en: Readonly<Record<string, string>> = {
   'ファイルのプロパティの［許可する］で解除できます': 'Clear it with Unblock in the file properties',
   '配布先でのマクロのブロック': 'Macros blocked at the destination',
   'インターネットやメールから取得したファイルには、Windows が「インターネットから取得した」印（Mark of the Web）を付けます。印のあるブックは、Office がマクロを既定で止めるため、配布先でリボンのボタンが動かない・アドインが読み込まれないことがあります。共有フォルダから各自の PC へコピーして使ってもらう、ファイルのプロパティの［許可する］で解除してもらう、または［信頼できる場所］に置いてもらってください。Sash から、これを確かめたり解除したりはできません。': 'Windows marks files obtained from the Internet or by email with a "downloaded from the Internet" mark (Mark of the Web). Office blocks macros in marked workbooks by default, so ribbon buttons may not work or add-ins may not load at the destination. Ask people to copy the file from a shared folder to their PC, to clear the mark with Unblock in the file properties, or to put it in a Trusted Location. Sash cannot check or clear this mark for other files.',
+  // ---- 見直しでの修正 ----
+  'id を振り直したので、命名規則で付けたコールバック名も付け直しました：{list}': 'Because ids were renumbered, callback names made by the naming rule were renamed too: {list}',
+  '次のコールバック名は、取り込み先のほかのコントロールと同じです。押すと、そちらと同じ Sub が動きます。別の名前に付け直してください：{list}': 'These callback names are the same as those of other controls in the destination. Clicking runs the same Sub as they do. Give them different names: {list}',
+  '共通のコールバックで control.Id を Select Case で振り分けている場合、振り直した id とは一致しなくなります。VBA 側の Case を確かめてください。': 'If a shared callback branches on control.Id with Select Case, it no longer matches the renumbered ids. Check the Cases in VBA.',
+  '取り込み先と重なるため、キーヒント（keytip）を外したもの：{list}': 'Key tips removed because they overlap the destination: {list}',
+  '合流させたため、取り込み元のタブ・メニュー自身の属性は使いません（捨てました）：{list}': 'Because the contents were merged into the existing one, the attributes of the source tab or menu itself were discarded: {list}',
+  'idQ などで使う名前空間の接頭辞の宣言を、取り込み先のルートに足しました：{list}': 'Added the declarations of namespace prefixes used by idQ and similar attributes to the root of the destination: {list}',
+  '{attr}「{value}」の接頭辞「{prefix}」が宣言されていません。ルートに xmlns:{prefix}="…" を足してください': 'The prefix "{prefix}" of {attr} "{value}" is not declared. Add xmlns:{prefix}="…" to the root.',
+  '呼び出し用の Sub は {module} に追加しましたが、その間に文書が変わったため、属性は付けませんでした。もう一度選び直してください': 'The wrapper Sub was added to {module}, but the document changed in the meantime, so the attribute was not set. Choose again.',
+  'その間に文書が変わったため、属性は付けませんでした。もう一度選び直してください': 'The document changed in the meantime, so the attribute was not set. Choose again.',
 };

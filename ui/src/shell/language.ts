@@ -5,6 +5,7 @@ import { app } from '../app';
 import { invoke } from '../bridge';
 import { lang, storeLang, t, type Lang } from '../i18n';
 import { ask } from '../dialogs/modal';
+import { discardCurrentRecovery } from '../recovery';
 import { isSampleSession } from '../sample';
 import { toast } from './toast';
 
@@ -59,6 +60,8 @@ async function confirmReloadWithChanges(): Promise<boolean> {
 /** 読み込み直して言語を反映する。未保存の変更があるときは読み込み直さない（false を返す）。 */
 export async function reloadForLanguage(): Promise<boolean> {
   if (!(await confirmReloadWithChanges())) return false;
+  // 「破棄して切り替える」を選んだので、残す編集はない。退避も消す（読み込み直したあとに、捨てた編集の復旧を聞かないように）
+  await discardCurrentRecovery();
   return reload();
 }
 
@@ -73,6 +76,7 @@ function reload(): boolean {
 export async function changeLanguage(next: Lang): Promise<boolean> {
   if (next === lang) return true;
   if (!(await confirmReloadWithChanges())) return false;
+  await discardCurrentRecovery();
   try {
     await saveLanguage(next);
   } catch (e) {

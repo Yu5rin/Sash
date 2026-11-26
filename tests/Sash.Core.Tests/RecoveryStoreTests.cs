@@ -92,11 +92,12 @@ public class RecoveryStoreTests
     public void IsFileNewer_ファイルの更新日時と退避の日時を比べる_ファイルがなければfalse()
     {
         using var book = new TestWorkbook();
+        var store = new RecoveryStore(NewRoot(), new FixedTime(T0));
         File.SetLastWriteTimeUtc(book.Path, T0.UtcDateTime);
 
-        Assert.True(RecoveryStore.IsFileNewer(book.Path, T0.AddMinutes(-1)));
-        Assert.False(RecoveryStore.IsFileNewer(book.Path, T0.AddMinutes(1)));
-        Assert.False(RecoveryStore.IsFileNewer(Path.Combine(Path.GetTempPath(), "sash-tests", "nothing-" + Guid.NewGuid().ToString("N")), T0));
+        Assert.True(store.IsFileNewer(book.Path, T0.AddMinutes(-1)));
+        Assert.False(store.IsFileNewer(book.Path, T0.AddMinutes(1)));
+        Assert.False(store.IsFileNewer(Path.Combine(Path.GetTempPath(), "sash-tests", "nothing-" + Guid.NewGuid().ToString("N")), T0));
     }
 
     [Fact]
@@ -163,5 +164,101 @@ public class RecoveryStoreTests
 
         store.Write(@"C:\a.xlsm", 1, [Part("<a/>")]);
         Assert.True(Directory.Exists(root));
+    }
+
+    // ---- 2 つの Sash（プロセス）で同じブックを開いたとき（§23.2） ----
+
+    private static RecoveryStore AsProcess(string root, int pid, params int[] alive) =>
+        new(root, new FixedTime(T0), pid, p => alive.Contains(p));
+
+    [Fact]
+    public void 動いている別のSashの退避は_読まず_一覧に出さず_消さない()
+    {
+        var root = NewRoot();
+        var a = AsProcess(root, 100, 100, 200);
+        var b = AsProcess(root, 200, 100, 200);
+        a.Write(@"C:ook.xlsm", 1, [Part("<a/>")]);
+        b.Write(@"C:ook.xlsm", 2, [Part("<b/>")]);
+
+        // それぞれ自分の退避だけを読む（取り合わない）
+        Assert.Equal("<a/>", a.Read(@"C:ook.xlsm")!.Parts[0].Xml);
+        Assert.Equal("<b/>", b.Read(@"C:ook.xlsm")!.Parts[0].Xml);
+        Assert.Single(a.List());
+
+        // a が消しても b のものは残る
+        a.Delete(@"C:ook.xlsm");
+        Assert.Null(a.Read(@"C:ook.xlsm"));
+        Assert.Equal("<b/>", b.Read(@"C:ook.xlsm")!.Parts[0].Xml);
+        Assert.Single(Directory.GetFiles(root, "*.json"));
+    }
+
+    [Fact]
+    public void 動いていないプロセスが残した退避は_復旧の候補になり_消せる()
+    {
+        var root = NewRoot();
+        AsProcess(root, 100, 100).Write(@"C:ook.xlsm", 5, [Part("<crashed/>")]);
+
+        // 100 は落ちた。新しい Sash（200）は、その退避を読める・一覧に出せる
+        var b = AsProcess(root, 200, 200);
+        Assert.Equal("<crashed/>", b.Read(@"C:ook.xlsm")!.Parts[0].Xml);
+        Assert.Single(b.List());
+
+        // 自分の退避を書けば、そちらが優先される。捨てれば落ちた Sash のものも消える
+        b.Write(@"C:ook.xlsm", 1, [Part("<mine/>")]);
+        Assert.Equal("<mine/>", b.Read(@"C:ook.xlsm")!.Parts[0].Xml);
+        Assert.Single(b.List());
+        b.Delete(@"C:ook.xlsm");
+        Assert.Null(b.Read(@"C:ook.xlsm"));
+        Assert.Empty(Directory.GetFiles(root, "*.json"));
+    }
+
+    [Fact]
+    public void 古くなった退避の掃除は_動いている別のSashのものには触らない()
+    {
+        var root = NewRoot();
+        var time = new FixedTime(T0);
+        new RecoveryStore(root, time, 100, p => true).Write(@"C:ook.xlsm", 1, [Part("<a/>")]);
+        time.Now = T0.AddDays(RecoveryStore.RetentionDays + 5);
+
+        Assert.Empty(new RecoveryStore(root, time, 200, p => true).List());
+        Assert.Single(Directory.GetFiles(root, "*.json"));
+    }
+
+    // ---- 画像は変わった分だけ送る（§23.2） ----
+
+    [Fact]
+    public void 画像は前回から変わった分だけ受け取り_残りは前回の退避から引き継ぐ()
+    {
+        var store = new RecoveryStore(NewRoot(), new FixedTime(T0));
+        store.Write(@"C:ook.xlsm", 1, [new RecoveryPart(CustomUIVersion.Office2010, "<a/>", [new RecoveryImage("a", "data:A"), new RecoveryImage("b", "data:B")], [], null)]);
+
+        // 2 回目：b を差し替え、c を足し、a は送らない（AddImageIds に a がある＝引き継ぐ）。d は AddImageIds にないので、送られても入らない
+        store.Write(@"C:ook.xlsm", 2, [new RecoveryPart(CustomUIVersion.Office2010, "<a2/>", [new RecoveryImage("b", "data:B2"), new RecoveryImage("c", "data:C")], [], ["a", "b", "c"])]);
+        var images = store.Read(@"C:ook.xlsm")!.Parts[0].AddImages.ToDictionary(i => i.Id, i => i.DataUrl);
+        Assert.Equal(new Dictionary<string, string> { ["a"] = "data:A", ["b"] = "data:B2", ["c"] = "data:C" }, images);
+
+        // 3 回目：a を外した（AddImageIds にない）。XML だけ変わった
+        store.Write(@"C:ook.xlsm", 3, [new RecoveryPart(CustomUIVersion.Office2010, "<a3/>", [], [], ["b", "c"])]);
+        Assert.Equal(["b", "c"], store.Read(@"C:ook.xlsm")!.Parts[0].AddImages.Select(i => i.Id).Order());
+    }
+
+    // ---- つながらないパスで待たされない（§23.2） ----
+
+    [Fact]
+    public void 元のファイルの確認が長引いても_一覧は時間で打ち切って返す()
+    {
+        var store = new RecoveryStore(NewRoot(), new FixedTime(T0), probe: _ => { Thread.Sleep(5000); return (false, null); }, probeTimeout: TimeSpan.FromMilliseconds(200));
+        store.Write(@"\unreachable\shareook.xlsm", 1, [Part("<a/>")]);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var list = store.List();
+        sw.Stop();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(3), $"一覧に {sw.Elapsed} かかった");
+        // 調べられなかったものは「ある・日時は不明」（復旧の候補からは外さない）
+        var only = Assert.Single(list);
+        Assert.True(only.FileExists);
+        Assert.Null(only.FileModifiedAt);
+        Assert.False(only.FileNewer);
     }
 }

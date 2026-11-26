@@ -7,7 +7,7 @@ import { askExternalChange } from '../dialogs/externalChangeDialog';
 import { isModalOpen } from '../dialogs/modal';
 import { checkExternalChange, isWatchable } from '../externalChange';
 import { t } from '../i18n';
-import { busyState, openFile, reloadFromDisk } from './fileOps';
+import { busyState, flushEdits, openFile, reloadFromDisk } from './fileOps';
 import { createPollGate } from './pollGate';
 import { splitPath } from './text';
 import { toast } from './toast';
@@ -22,9 +22,13 @@ async function run(): Promise<void> {
   const s = app.session;
   // ダイアログを開いている間や、保存・反映の最中は調べない（次に窓へ戻ったときに調べる）
   if (!isWatchable(s) || isModalOpen() || busyState() !== null) return;
+  // 入力中の欄を確定してから、編集の有無を見る（確定前の入力を「編集なし」と取り違えて、読み直しで捨てないように）
+  flushEdits();
   const { state, current } = await checkExternalChange(s);
-  if (state !== 'changed' || app.session !== s) return;
+  if (state !== 'changed' || app.session !== s || isModalOpen()) return;
   const name = splitPath(s.path).name;
+  // 照合している間にも編集が入りうるので、読み直す直前にもう一度見る
+  flushEdits();
   if (!app.dirty) {
     // 自分の編集がないので、失うものがない。黙って読み直す
     if (await openFile(s.path, { force: true })) toast({ kind: 'info', message: t('「{file}」がほかで変更されたため、読み直しました', { file: name }) });

@@ -347,7 +347,17 @@ export async function assignMacro(targets: readonly { path: Path; attr: string }
   const code = plan.wrappers.map((w) => w.code).join('\r\n');
   const names = plan.wrappers.map((w) => w.name).join(t('、'));
   const viaVba = vba.canWrite;
+  // 選んだ要素の目印（種類・id・いまの属性の値）。VBA への挿入を待つ間に、文書が書き換わる・並べ替わると、同じパスが別の要素を指す
+  const signature = (el: Element | null | undefined, attr: string) => (el ? `${el.localName}|${el.getAttribute('id') ?? ''}|${el.getAttribute('idMso') ?? ''}|${el.getAttribute(attr) ?? ''}` : null);
+  const before = elements.map((x) => signature(x.el, x.attr));
   if (viaVba) await vbaInvoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
+  const sameElements = () => app.store === store && elements.every((x, i) => signature(elementAt(store.doc, x.path), x.attr) === before[i]);
+  if (!sameElements()) {
+    if (viaVba) await vba.refresh();
+    throw new Error(viaVba
+      ? t('呼び出し用の Sub は {module} に追加しましたが、その間に文書が変わったため、属性は付けませんでした。もう一度選び直してください', { module: app.settings.callbackModule })
+      : t('その間に文書が変わったため、属性は付けませんでした。もう一度選び直してください'));
+  }
   const ok = store.edit('inspector', (doc) => {
     for (const a of plan.assignments) elementAt(doc, a.path)?.setAttribute(a.attr, a.name);
     return undefined;

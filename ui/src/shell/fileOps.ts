@@ -9,7 +9,7 @@ import { ask } from '../dialogs/modal';
 import { askExternalChange } from '../dialogs/externalChangeDialog';
 import { askRecovery } from '../dialogs/recoveryDialog';
 import { checkExternalChange, isWatchable, refreshBaseline } from '../externalChange';
-import { applyRecovery, discardRecovery } from '../recovery';
+import { applyRecovery, discardCurrentRecovery, discardRecovery, readRecovery } from '../recovery';
 import { t } from '../i18n';
 import { exportSash, parseSash, partXml } from '../sashJson';
 import { isSampleSession } from '../sample';
@@ -57,6 +57,11 @@ let flushPendingEdits: () => void = () => undefined;
  * インスペクタの欄は change か Enter で確定するので、入力したまま Ctrl+S / F5 / × を押すと、
  * その値が書き込む内容にも「未保存の変更」にも入らない。ビューを直接読み込まずに済むよう、外から渡す。
  */
+/** 入力中でまだ確定していない欄を確定する（窓に戻ったときの検知など、外から編集の有無を見る前に呼ぶ）。 */
+export function flushEdits(): void {
+  flushPendingEdits();
+}
+
 export function setPendingEditFlusher(fn: () => void): void {
   flushPendingEdits = fn;
 }
@@ -117,7 +122,8 @@ async function offerRecovery(s: NonNullable<typeof app.session>): Promise<void> 
   if (!s.path || isSampleSession()) return;
   let entry;
   try {
-    entry = await invoke('recovery.read', { path: s.path });
+    // 書く・消すと同じ待ち行列で読む（開き直した直後に、捨てたはずの退避を読んで復旧を聞かないように）
+    entry = await readRecovery(s.path);
   } catch {
     return;
   }
@@ -136,7 +142,7 @@ async function offerRecovery(s: NonNullable<typeof app.session>): Promise<void> 
   }
   const r = applyRecovery(entry);
   if (r.missing.length) toast({ kind: 'warning', message: t('ファイルにないパーツがあったため、一部は復旧できませんでした') });
-  if (r.applied.length) toast({ kind: 'success', message: t('保存されなかった編集を復旧しました。内容を確かめて保存してください'), action: { label: t('元に戻す'), run: () => s.active.undo() } });
+  if (r.applied.length) toast({ kind: 'success', message: t('保存されなかった編集を復旧しました。内容を確かめて保存してください'), action: { label: t('元に戻す'), run: () => { for (const store of r.stores) store.undo(); } } });
 }
 
 /** 開いているファイルを閉じてホームに戻る。 */
@@ -164,7 +170,7 @@ export async function quit(): Promise<boolean> {
   try {
     if (!(await confirmDiscard())) return false;
     // 保存した・「保存しない」を選んだ。残す編集はないので退避を消してから終わる
-    if (app.session?.path) await discardRecovery(app.session.path);
+    await discardCurrentRecovery();
     await invoke('app.close');
     return true;
   } catch (e) {
@@ -210,7 +216,9 @@ function markAllSaved(prepared: Prepared, path: string, fingerprint?: Fingerprin
   for (const [p, snap] of prepared.snapshots) p.markSaved(snap);
   app.session.created = false;
   if (fingerprint !== undefined) app.session.fingerprint = fingerprint;
-  else void refreshBaseline(app.session);
+  // 自分が書き込んだときだけ基準を取り直す。書き込むものがなかったとき（編集なしの反映）に取り直すと、
+  // ほかの変更を照合しないまま「基準」にしてしまい、次の保存で黙って上書きする
+  else if (prepared.parts.length > 0) void refreshBaseline(app.session);
 }
 
 /**

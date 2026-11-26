@@ -8,7 +8,7 @@ import { invoke, type CustomUIVersion, type RecoveryEntryDto, type RecoveryPartD
 import { t } from './i18n';
 import { isSampleSession } from './sample';
 import { toast } from './shell/toast';
-import type { Change, ImageEntry } from './store';
+import type { Change, ImageEntry, PartStore } from './store';
 
 /** 最後の変更から、これだけ待ってから書く（入力のたびに書かない）。 */
 export const RECOVERY_DELAY_MS = 3000;
@@ -89,7 +89,38 @@ function reportFailure(e: unknown): void {
   }
 }
 
-let lastSent = '';
+/** 前回ホストへ送れた（書けた）内容。変わっていなければ書かない。比べるのは文字列の同一性だけで、全体を直列化しない。 */
+let lastPayload: { path: string; editCount: number; parts: RecoveryPartDto[] } | null = null;
+/** ホストに退避済みの画像（パーツ・id → 中身）。次からは、これと違うものだけを送る。 */
+let sentImages = new Map<string, string>();
+
+function resetSent(): void {
+  lastPayload = null;
+  sentImages = new Map();
+}
+
+/** 前回と同じ内容か（XML・消す画像・足す画像の id と中身。編集の回数も）。 */
+export function samePayload(a: { path: string; editCount: number; parts: RecoveryPartDto[] } | null, b: { path: string; editCount: number; parts: RecoveryPartDto[] }): boolean {
+  if (!a || a.path !== b.path || a.editCount !== b.editCount || a.parts.length !== b.parts.length) return false;
+  return a.parts.every((p, i) => {
+    const q = b.parts[i]!;
+    return p.version === q.version && p.xml === q.xml
+      && p.removeImages.length === q.removeImages.length && p.removeImages.every((id, j) => id === q.removeImages[j])
+      && p.addImages.length === q.addImages.length && p.addImages.every((im, j) => im.id === q.addImages[j]!.id && im.dataUrl === q.addImages[j]!.dataUrl);
+  });
+}
+
+/**
+ * ホストへ送る形にする。画像は、前回までに送ったものと違う（足した・差し替えた）ものだけを addImages に入れ、
+ * いま足している画像の id の全部を addImageIds に入れる（残りは、ホストが前回の退避から引き継ぐ）。
+ */
+export function toWire(parts: RecoveryPartDto[], sent: ReadonlyMap<string, string>): (RecoveryPartDto & { addImageIds: string[] })[] {
+  return parts.map((p) => ({
+    ...p,
+    addImages: p.addImages.filter((i) => sent.get(`${p.version}:${i.id}`) !== i.dataUrl),
+    addImageIds: p.addImages.map((i) => i.id),
+  }));
+}
 
 async function writeNow(session: Session): Promise<void> {
   if (!app.settings.autoRecovery || !session.path || isSampleSession()) return;
@@ -99,25 +130,40 @@ async function writeNow(session: Session): Promise<void> {
     return;
   }
   const body = { path: session.path, ...payload };
-  const sig = JSON.stringify(body);
-  if (sig === lastSent) return;
+  if (samePayload(lastPayload, body)) return;
   await enqueue(async () => {
     // 待っている間に別のファイルへ替わっていたら、書かない
     if (app.session !== session) return;
     try {
-      await invoke('recovery.write', body);
-      lastSent = sig;
+      await invoke('recovery.write', { ...body, parts: toWire(body.parts, sentImages) });
+      lastPayload = body;
+      sentImages = new Map(body.parts.flatMap((p) => p.addImages.map((i): [string, string] => [`${p.version}:${i.id}`, i.dataUrl])));
       failures = 0;
     } catch (e) {
+      // 書けたかが分からないので、次は画像も全部送り直す
+      resetSent();
       reportFailure(e);
     }
+  });
+}
+
+/** 退避を読む（書く・消すと同じ待ち行列を通す。開き直した直後に、捨てたはずの退避を読まないように）。読めなければ null。 */
+export function readRecovery(path: string): Promise<RecoveryEntryDto | null> {
+  return new Promise((resolve) => {
+    void enqueue(async () => {
+      try {
+        resolve(await invoke('recovery.read', { path }));
+      } catch {
+        resolve(null);
+      }
+    });
   });
 }
 
 /** そのブックの退避を消す。失敗は黙る。 */
 export function discardRecovery(path: string): Promise<void> {
   if (!path) return Promise.resolve();
-  lastSent = '';
+  resetSent();
   return enqueue(() => invoke('recovery.delete', { path }));
 }
 
@@ -155,15 +201,32 @@ export function startRecovery(): void {
     const previous = tracked;
     tracked = next;
     debouncer.cancel();
-    lastSent = '';
+    resetSent();
     if (previous?.path) void discardRecovery(previous.path);
   });
+}
+
+/**
+ * 開いているブックの退避を消す。書く予約も取り消す（消したあとに、予約が退避を書き直さないように）。
+ * 「保存しない」「破棄する」を選んで終わる・読み込み直すときに呼ぶ。
+ */
+export function discardCurrentRecovery(): Promise<void> {
+  debouncer.cancel();
+  const path = app.session?.path;
+  return path ? discardRecovery(path) : Promise.resolve();
+}
+
+/** 退避を、あらためて予約する（破棄を選んだが、やめて編集を続けることになったとき）。 */
+export function rescheduleRecovery(): void {
+  if (app.session && app.session === tracked && app.dirty) debouncer.trigger();
 }
 
 // ---- 復旧 ----
 
 export interface RecoveryApplied {
   applied: CustomUIVersion[];
+  /** 適用したパーツ（元に戻すで、すべてを戻すため）。 */
+  stores: PartStore[];
   /** いまのファイルにないパーツ（ファイルの中身が変わっていた）。 */
   missing: CustomUIVersion[];
 }
@@ -171,7 +234,7 @@ export interface RecoveryApplied {
 /** 退避の内容を、開いているファイルに適用する。1 回の「元に戻す」で、開いた直後に戻れる（パーツごとに 1 つの履歴にする）。 */
 export function applyRecovery(entry: RecoveryEntryDto): RecoveryApplied {
   const s = app.session;
-  const result: RecoveryApplied = { applied: [], missing: [] };
+  const result: RecoveryApplied = { applied: [], stores: [], missing: [] };
   if (!s) return result;
   for (const part of entry.parts) {
     const store = s.parts.get(part.version);
@@ -184,6 +247,7 @@ export function applyRecovery(entry: RecoveryEntryDto): RecoveryApplied {
     for (const i of part.addImages) images.set(i.id, { id: i.id, dataUrl: i.dataUrl, isNew: true });
     store.replaceAll(part.xml, [...images.values()], t('未保存の編集の復旧'));
     result.applied.push(part.version);
+    result.stores.push(store);
   }
   return result;
 }

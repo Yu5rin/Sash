@@ -28,6 +28,22 @@ public static class RibbonFingerprint
         return result;
     }
 
+    /// <summary>
+    /// ファイルのリボンの照合値。ファイルがない・読めない（Excel が書き込み中・壊れている・権限がないなど）ときは、理由を問わず null。
+    /// 検知をあきらめるだけで、呼び出し元（保存・反映）の成功を取り消さないために、例外はすべてここで受ける。
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? TryComputeFile(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? Compute(RibbonPackage.Load(path)) : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>JSON のキー（UI の CustomUIVersion と同じ表記）。</summary>
     public static string KeyOf(CustomUIVersion version) => version == CustomUIVersion.Office2010 ? "office2010" : "office2007";
 

@@ -142,4 +142,18 @@ public class RibbonFingerprintTests
 
         Assert.Empty(RibbonFingerprint.Compute(RibbonPackage.Load(book.Path)));
     }
+
+    [Fact]
+    public void TryComputeFile_ない_壊れている_ファイルは例外にせずnull()
+    {
+        using var book = new TestWorkbook();
+        Assert.NotNull(RibbonFingerprint.TryComputeFile(book.Path));
+        Assert.Null(RibbonFingerprint.TryComputeFile(book.Path + ".none"));
+
+        var broken = Path.Combine(Path.GetDirectoryName(book.Path)!, "broken.xlsm");
+        File.WriteAllText(broken, "zip ではない");
+        Assert.Null(RibbonFingerprint.TryComputeFile(broken));
+        // パスそのものが不正でも例外にしない
+        Assert.Null(RibbonFingerprint.TryComputeFile("\0:<>"));
+    }
 }

@@ -74,6 +74,17 @@ export function lint(doc: Document, ctx: LintContext): Problem[] {
     add('error', root, t('名前空間が {format} 用ではありません。xmlns="{ns}" にしてください', { format: ctx.version === 'office2010' ? t('customUI14（2010以降）') : t('customUI（2007）'), ns: expectedNs }), 'xmlns');
   }
 
+  // idQ・insertAfterQ・insertBeforeQ の「接頭辞:名前」は、接頭辞の名前空間を宣言していないと Excel が読めない
+  for (const el of allElements(doc)) {
+    for (const q of ['idQ', 'insertAfterQ', 'insertBeforeQ']) {
+      const v = el.getAttribute(q);
+      const i = v ? v.indexOf(':') : -1;
+      if (v && i > 0 && !el.lookupNamespaceURI(v.slice(0, i))) {
+        add('error', el, t('{attr}「{value}」の接頭辞「{prefix}」が宣言されていません。ルートに xmlns:{prefix}="…" を足してください', { attr: q, value: v, prefix: v.slice(0, i) }), q);
+      }
+    }
+  }
+
   const ids = new Map<string, Element[]>();
   const idQs = new Map<string, Element[]>();
   const builtInContainers = new Map<string, Element[]>();

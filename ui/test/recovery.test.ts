@@ -194,7 +194,8 @@ describe('applyRecovery', () => {
   it('XML と画像の差分を適用し、元に戻す 1 回で開いた直後に戻れる', () => {
     const edited = XML.replace('label="A"', 'label="復旧後"');
     const r = rec.applyRecovery({ path: 'C:\\book.xlsm', savedAt: '2026-11-26T05:00:00Z', editCount: 3, parts: [{ version: 'office2010', xml: edited, addImages: [{ id: 'new1', dataUrl: PNG }], removeImages: ['old'] }] });
-    expect(r).toEqual({ applied: ['office2010'], missing: [] });
+    expect(r).toMatchObject({ applied: ['office2010'], missing: [] });
+    expect(r.stores).toEqual([app.store]);
     const store = app.store!;
     expect(store.text).toBe(edited);
     expect([...store.images.keys()]).toEqual(['new1']);
@@ -207,7 +208,7 @@ describe('applyRecovery', () => {
 
   it('いまのファイルにないパーツは適用せず、missing に挙げる', () => {
     const r = rec.applyRecovery({ path: 'C:\\book.xlsm', savedAt: 'x', editCount: 1, parts: [{ version: 'office2007', xml: '<customUI/>', addImages: [], removeImages: [] }] });
-    expect(r).toEqual({ applied: [], missing: ['office2007'] });
+    expect(r).toMatchObject({ applied: [], stores: [], missing: ['office2007'] });
     expect(app.store!.text).toBe(XML);
   });
 });

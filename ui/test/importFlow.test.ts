@@ -139,7 +139,7 @@ describe('取り込みダイアログ', () => {
     expect(app.store!.text).toContain('id="btnSum2"');
     expect(app.store!.images.has('logo')).toBe(true);
     await vi.waitFor(() => expect(document.querySelector('.import-callbacks')).not.toBeNull());
-    expect(document.querySelector('.import-callbacks')!.textContent).toContain('Ribbon_btnSum_onAction');
+    expect(document.querySelector('.import-callbacks')!.textContent).toContain('Ribbon_btnSum2_onAction');
     expect(document.querySelector('.import-callbacks')!.textContent).toContain('VBA は運ばれません');
     // VBA を読めていない（Excel で開いていない）ので、挿入は出さず、コピーだけ
     expect(byText('.import-cb-actions button', 'Sub の一覧をコピー')).toBeTruthy();

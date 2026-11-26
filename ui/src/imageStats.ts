@@ -24,6 +24,8 @@ export interface PixelStats {
 }
 
 export interface ImageInfo {
+  /** 色を調べ終えたか（調べたが読めなかった画像も true。stats がなくても、これが true なら「調べています」にしない）。 */
+  examined?: boolean;
   bytes: number;
   width?: number;
   height?: number;
@@ -104,14 +106,30 @@ export function pngSize(dataUrl: string): { width: number; height: number } | nu
 
 // ---- 画素の読み取り（ブラウザ） ----
 
+/** 調べた結果の覚え。null は「調べたが読めなかった」（未調査は、キーがない）。古いものから捨てて、閉じたファイルの画像が残り続けないようにする。 */
 const cache = new Map<string, PixelStats | null>();
+export const PIXEL_CACHE_LIMIT = 100;
+
+export function rememberStats(key: string, value: PixelStats | null): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > PIXEL_CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
+}
+
+/** いま開いている画像以外の覚えを捨てる（ファイルを閉じたあとの分）。 */
+export function pruneCache(keep: ReadonlySet<string>): void {
+  for (const key of [...cache.keys()]) if (!keep.has(key)) cache.delete(key);
+}
+
+/** 覚えの数（テスト用）。 */
+export const cacheSize = () => cache.size;
 
 /** 画像を描いて集計する（大きい画像は縮める。色合いの判定には十分）。描けない環境（テスト）・壊れた画像は null。 */
 export function loadPixelStats(dataUrl: string): Promise<PixelStats | null> {
   if (cache.has(dataUrl)) return Promise.resolve(cache.get(dataUrl)!);
   return new Promise((resolve) => {
     const done = (v: PixelStats | null) => {
-      cache.set(dataUrl, v);
+      rememberStats(dataUrl, v);
       resolve(v);
     };
     try {
@@ -142,6 +160,7 @@ export function loadPixelStats(dataUrl: string): Promise<PixelStats | null> {
 
 /** 画像すべての色合いを調べて覚える。終わったら true（呼び出し側がチェックの画面を描き直す）。 */
 export async function ensurePixelStats(images: readonly ImageEntry[]): Promise<boolean> {
+  pruneCache(new Set(images.map((i) => i.dataUrl)));
   const todo = images.filter((i) => !cache.has(i.dataUrl));
   if (todo.length === 0) return false;
   await Promise.all(todo.map((i) => loadPixelStats(i.dataUrl)));
@@ -153,6 +172,6 @@ export function imageInfoMap(images: readonly ImageEntry[]): Map<string, ImageIn
   return new Map(images.map((i): [string, ImageInfo] => {
     const size = pngSize(i.dataUrl);
     const stats = cache.get(i.dataUrl) ?? undefined;
-    return [i.id, { bytes: dataUrlBytes(i.dataUrl), width: size?.width ?? stats?.width, height: size?.height ?? stats?.height, stats }];
+    return [i.id, { examined: cache.has(i.dataUrl), bytes: dataUrlBytes(i.dataUrl), width: size?.width ?? stats?.width, height: size?.height ?? stats?.height, stats }];
   }));
 }

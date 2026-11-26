@@ -3,7 +3,7 @@
 // 2 段目：取り込んだあとの結果と、VBA は運ばれないので要る Sub の案内（コピー・VBA へ挿入）。
 
 import { app } from '../app';
-import { insertStubs, vba } from '../callbacks';
+import { insertStubs, namingRule, vba } from '../callbacks';
 import { copyText } from '../clipboard';
 import type { SourceBook } from '../importFlow';
 import { h } from '../dom';
@@ -13,7 +13,7 @@ import {
   applyImport, callbackUses, flatten, listCandidates, normalizePicks, planImages, previewIdRenames, usedImageIds,
   type ImportCandidate, type ImportOutcome,
 } from '../ribbonImport';
-import { generateStub, bareCallbackName } from '../vba';
+import { generateStub, bareCallbackName, parseProcedures } from '../vba';
 import { openModal } from './modal';
 import { toast } from '../shell/toast';
 
@@ -185,6 +185,12 @@ export function openImportDialog(book: SourceBook): void {
     if (out.addedImages.length) details.push(h('p', { class: 'muted' }, t('一緒に運んだ画像：{list}', { list: out.addedImages.join(t('、')) })));
     if (out.renamedImages.length) details.push(h('p', { class: 'muted' }, t('番号を付けた画像：{list}', { list: out.renamedImages.map(([a, b]) => `${a} → ${b}`).join(t('、')) })));
     if (out.mergedInto.length) details.push(h('p', { class: 'muted' }, t('同じ組み込みのものがすでにあるため、中へ足しました：{list}', { list: out.mergedInto.join(t('、')) })));
+    if (out.renamedCallbacks.length) details.push(h('p', { class: 'muted' }, t('id を振り直したので、命名規則で付けたコールバック名も付け直しました：{list}', { list: out.renamedCallbacks.map(([a, b]) => `${a} → ${b}`).join(t('、')) })));
+    if (out.sharedCallbacks.length) details.push(h('p', { class: 'field-error' }, t('次のコールバック名は、取り込み先のほかのコントロールと同じです。押すと、そちらと同じ Sub が動きます。別の名前に付け直してください：{list}', { list: out.sharedCallbacks.join(t('、')) })));
+    if (out.renamedIds.length && out.callbacks.length) details.push(h('p', { class: 'muted' }, t('共通のコールバックで control.Id を Select Case で振り分けている場合、振り直した id とは一致しなくなります。VBA 側の Case を確かめてください。')));
+    if (out.droppedKeytips.length) details.push(h('p', { class: 'muted' }, t('取り込み先と重なるため、キーヒント（keytip）を外したもの：{list}', { list: out.droppedKeytips.map((k) => `${k.id}（${k.keytip}）`).join(t('、')) })));
+    if (out.mergeDroppedAttrs.length) details.push(h('p', { class: 'muted' }, t('合流させたため、取り込み元のタブ・メニュー自身の属性は使いません（捨てました）：{list}', { list: out.mergeDroppedAttrs.map((m) => `${m.idMso}（${m.attrs.join(', ')}）`).join(t('、')) })));
+    if (out.addedPrefixes.length) details.push(h('p', { class: 'muted' }, t('idQ などで使う名前空間の接頭辞の宣言を、取り込み先のルートに足しました：{list}', { list: out.addedPrefixes.join(t('、')) })));
     if (out.missingImages.length) details.push(h('p', { class: 'field-error' }, t('運べなかった画像（このファイルにありません）：{list}', { list: out.missingImages.join(t('、')) })));
 
     const renderCallbacks = () => {
@@ -219,7 +225,7 @@ export function openImportDialog(book: SourceBook): void {
     if (chosen.length === 0) return;
     let out: ImportOutcome | null = null;
     try {
-      out = applyImport(store, { doc: sourceDoc, images }, chosen, { renameIds, groupTarget });
+      out = applyImport(store, { doc: sourceDoc, images }, chosen, { renameIds, groupTarget, naming: namingRule(), takenCallbacks: new Set((vba.modules ?? []).flatMap(parseProcedures).map((p) => p.name)) });
     } catch (e) {
       toast({ kind: 'error', message: t('取り込めませんでした：{message}', { message: (e as Error).message }) });
       return;

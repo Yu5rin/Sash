@@ -5,6 +5,7 @@ import { invoke, type UpdateCheckResult, type UpdateStatus } from './bridge';
 import { ask, openModal, openOnce } from './dialogs/modal';
 import { $, h } from './dom';
 import { t } from './i18n';
+import { discardCurrentRecovery, rescheduleRecovery } from './recovery';
 import { checkbox, settingRow } from './shell/form';
 import { toast as showToast, type ToastKind } from './shell/toast';
 
@@ -90,6 +91,8 @@ async function runCheck(manual: boolean): Promise<void> {
 
 async function install(): Promise<void> {
   if (!(await confirmDiscard())) return;
+  // 保存した・「保存しない」を選んだので、残す編集はない。退避も消す（再起動のあとに、捨てた編集の復旧を聞かないように）
+  await discardCurrentRecovery();
   // 入れ替えの途中で閉じられると、ダウンロードだけが裏で続いて分かりにくいので、閉じられないようにする
   const progress = openModal(t('更新しています'), h('div', { class: 'update-progress' },
     h('p', { class: 'modal-message' }, t('ダウンロードと照合をしています。終わると Sash が再起動します…')),
@@ -98,6 +101,8 @@ async function install(): Promise<void> {
     await invoke('update.install');
   } catch (e) {
     progress.close();
+    // 更新をやめて編集を続けることになったので、退避をまた取る
+    rescheduleRecovery();
     toast(t('更新できませんでした：{message}', { message: (e as Error).message }), 'error');
   }
 }

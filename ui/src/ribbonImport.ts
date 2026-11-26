@@ -3,11 +3,12 @@
 // VBA は運ばれないので、取り込んだ部品が使うコールバック名を返し、呼び出し側（ダイアログ）が Sub の雛形を案内する。
 
 import {
-  allowedInsertIndex, childElements, createElement, elementAt, ensureContextMenus, ensureContextualTabs, ensureTabs,
+  allElements, allowedInsertIndex, childElements, createElement, elementAt, ensureContextMenus, ensureContextualTabs, ensureTabs,
   importElement, insertAt, pathOf, renameDuplicateIds, usedIds, type Path,
 } from './model';
 import { attributes, NAMESPACES, titleOf } from './schema';
 import { t } from './i18n';
+import { bareCallbackName, callbackName, type NamingRule } from './vba';
 import { selectMany, type ImageEntry, type PartStore } from './store';
 
 export type ImportKind = 'tab' | 'group' | 'tabSet' | 'contextMenu' | 'backstage';
@@ -162,6 +163,10 @@ export interface ImportOptions {
   renameIds: boolean;
   /** グループを入れる、取り込み先のタブのパス。'new' なら新しいタブを作って入れる。 */
   groupTarget: Path | 'new';
+  /** コールバック名の命名規則。id を振り直したとき、規則で付けた名前も付け直す（なければ付け直さない）。 */
+  naming?: NamingRule;
+  /** 取り込み先の VBA にある Sub の名前（付け直した名前が重ならないように避ける）。 */
+  takenCallbacks?: ReadonlySet<string>;
 }
 
 export interface ImportedCallback {
@@ -180,6 +185,16 @@ export interface ImportOutcome {
   callbacks: ImportedCallback[];
   /** 同じ idMso のタブ・右クリックメニューがすでにあり、その中へ足したもの。 */
   mergedInto: string[];
+  /** id を振り直したので、命名規則で付け直したコールバック名（元 → 新）。 */
+  renamedCallbacks: [string, string][];
+  /** 付け直せず（規則外の名前）、取り込み先のほかのコントロールと同じ Sub を共有してしまうコールバック名。 */
+  sharedCallbacks: string[];
+  /** 取り込み先と重なったので外した keytip（要素の表示名と keytip）。 */
+  droppedKeytips: { id: string; keytip: string }[];
+  /** 同じ組み込みのタブ・右クリックメニューへ合流させたので、取り込み元のものを捨てた属性。 */
+  mergeDroppedAttrs: { idMso: string; attrs: string[] }[];
+  /** 取り込み先のルートへ宣言を足した名前空間の接頭辞（idQ などが使う）。 */
+  addedPrefixes: string[];
 }
 
 /** 取り込んだときに id がどう振り直されるかを、文書を変えずに見積もる（取り込む前の確認用）。 */
@@ -217,10 +232,55 @@ export function applyImport(
     missingImages: imagePlan.missing,
     callbacks: [],
     mergedInto: [],
+    renamedCallbacks: [],
+    sharedCallbacks: [],
+    droppedKeytips: [],
+    mergeDroppedAttrs: [],
+    addedPrefixes: [],
   };
   const ok = store.addImagesAndEdit(entries, (doc) => {
     const used = usedIds(doc);
+    const taken = new Set([...(opts.takenCallbacks ?? [])].map((n) => n.toLowerCase()));
+    // 取り込む前の、取り込み先のコールバック名と keytip（重なりを調べるため）
+    const existingCallbacks = new Set<string>();
+    const keytips = new Set<string>();
+    for (const el of allElements(doc)) {
+      for (const a of Array.from(el.attributes)) {
+        if (attributes.get(a.name)?.kind === 'callback' && a.value) {
+          existingCallbacks.add(bareCallbackName(a.value).toLowerCase());
+          taken.add(bareCallbackName(a.value).toLowerCase());
+        }
+      }
+      const k = el.getAttribute('keytip');
+      if (k) keytips.add(k.toUpperCase());
+    }
+    const prefixes = new Map<string, string>();
+    const resolvePrefix = (p: string): string => {
+      const cached = prefixes.get(p);
+      if (cached !== undefined) return cached;
+      const uri = source.doc.documentElement.getAttribute(`xmlns:${p}`);
+      if (!uri) return p;
+      const root = doc.documentElement;
+      let name = p;
+      for (let n = 2; ; n++) {
+        const have = root.getAttribute(`xmlns:${name}`);
+        if (have === uri) break;
+        if (have === null) {
+          root.setAttributeNS('http://www.w3.org/2000/xmlns/', `xmlns:${name}`, uri);
+          outcome.addedPrefixes.push(name);
+          break;
+        }
+        name = `${p}${n}`;
+      }
+      prefixes.set(p, name);
+      return name;
+    };
     const placed: Element[] = [];
+    /** 合流させたとき、取り込み元の要素自身の属性（label・getVisible など）は使われない。何を捨てたかを控える。 */
+    const noteDropped = (copy: Element, idMso: string) => {
+      const attrs = Array.from(copy.attributes).map((a) => a.name).filter((n) => n !== 'idMso' && n !== 'keytip' && !n.startsWith('xmlns'));
+      if (attrs.length) outcome.mergeDroppedAttrs.push({ idMso, attrs });
+    };
     const roots: Element[] = [];
     let newTab: Element | null = null;
     const append = (parent: Element, child: Element) => insertAt(parent, child, allowedInsertIndex(parent, child.localName, parent.children.length) ?? parent.children.length);
@@ -233,7 +293,58 @@ export function applyImport(
         for (const c of childElements(el)) retarget(c);
       };
       retarget(copy);
-      if (opts.renameIds) outcome.renamedIds.push(...renameDuplicateIds(copy, used));
+      // idQ・insertAfterQ などの「接頭辞:名前」は、取り込み先のルートに接頭辞の宣言がないと読めなくなる。宣言を足す（違う URI で使われていれば付け替える）
+      const fixPrefixes = (el: Element) => {
+        for (const q of ['idQ', 'insertAfterQ', 'insertBeforeQ']) {
+          const v = el.getAttribute(q);
+          const i = v ? v.indexOf(':') : -1;
+          if (v && i > 0) {
+            const np = resolvePrefix(v.slice(0, i));
+            if (np !== v.slice(0, i)) el.setAttribute(q, `${np}${v.slice(i)}`);
+          }
+        }
+        for (const c of childElements(el)) fixPrefixes(c);
+      };
+      fixPrefixes(copy);
+      // id を振り直す前に、id から規則で付けたコールバック名を持つ要素を控える
+      const before: { el: Element; oldId: string }[] = [];
+      const note = (el: Element) => {
+        const id = el.getAttribute('id');
+        if (id) before.push({ el, oldId: id });
+        for (const c of childElements(el)) note(c);
+      };
+      note(copy);
+      if (opts.renameIds) {
+        outcome.renamedIds.push(...renameDuplicateIds(copy, used));
+        const rule = opts.naming;
+        for (const { el, oldId } of before) {
+          const newId = el.getAttribute('id')!;
+          if (!rule || rule.shared || newId === oldId) continue;
+          for (const a of Array.from(el.attributes)) {
+            if (attributes.get(a.name)?.kind !== 'callback' || !a.value) continue;
+            const old = a.value;
+            const bare = bareCallbackName(old);
+            if (bare.toLowerCase() !== callbackName(rule, oldId, a.name, el.localName).toLowerCase()) continue;
+            const next = callbackName(rule, newId, a.name, el.localName, taken);
+            taken.add(next.toLowerCase());
+            const value = `${old.slice(0, old.length - bare.length)}${next}`;
+            el.setAttribute(a.name, value);
+            outcome.renamedCallbacks.push([old, value]);
+          }
+        }
+      }
+      // keytip は、取り込み先にすでにあるものと重なると、Excel でどちらか一方しか効かない。重なるものは外す
+      const dedupeKeytips = (el: Element) => {
+        const k = el.getAttribute('keytip');
+        if (k) {
+          if (keytips.has(k.toUpperCase())) {
+            outcome.droppedKeytips.push({ id: el.getAttribute('id') ?? el.getAttribute('idMso') ?? el.localName, keytip: k });
+            el.removeAttribute('keytip');
+          } else keytips.add(k.toUpperCase());
+        }
+        for (const c of childElements(el)) dedupeKeytips(c);
+      };
+      dedupeKeytips(copy);
       roots.push(copy);
       switch (src.localName) {
         case 'tab': {
@@ -247,6 +358,7 @@ export function applyImport(
               placed.push(g);
             }
             outcome.mergedInto.push(idMso!);
+            noteDropped(copy, idMso!);
           } else {
             append(tabs, copy);
             placed.push(copy);
@@ -285,6 +397,7 @@ export function applyImport(
               placed.push(c);
             }
             outcome.mergedInto.push(idMso!);
+            noteDropped(copy, idMso!);
           } else {
             append(menus, copy);
             placed.push(copy);
@@ -302,6 +415,8 @@ export function applyImport(
     const byName = new Map<string, string[]>();
     for (const u of callbackUses(roots)) byName.set(u.name, [...(byName.get(u.name) ?? []), `${u.id}.${u.attr}`]);
     outcome.callbacks = [...byName].map(([name, uses]) => ({ name, uses }));
+    // 付け直せなかった名前が、取り込み先のほかのコントロールと同じ Sub を指していれば、押すと既存のマクロが動く
+    outcome.sharedCallbacks = outcome.callbacks.map((c) => c.name).filter((n) => existingCallbacks.has(bareCallbackName(n).toLowerCase()));
     outcome.added = placed.map((el) => pathOf(el));
     return selectMany(outcome.added);
   }, label);
