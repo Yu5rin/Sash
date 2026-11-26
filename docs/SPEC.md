@@ -520,7 +520,7 @@ Office のアイコンは Microsoft の著作物で、Sash（MIT）には同梱�
 | Microsoft Fluent UI System Icons（`@fluentui/svg-icons`） | 1.1.347 | MIT | 2,909 種。24px（なければ 20px）の線 / 塗り | `ui/src/fluent/fluentIcons.json`（2.6MB） |
 | Tabler Icons（`@tabler/icons`） | 3.52.0 | MIT（Copyright (c) 2020-2026 Paweł Kuna） | 5,113 種（線 5,113 / 塗り 1,019）。ブランドのロゴ（Brand カテゴリ 378 個）は除く | `ui/src/fluent/tablerIcons.json`（1.7MB） |
 | Lucide（`lucide-static`） | 1.81.0 | ISC（一部は Feather 由来の MIT） | 187 種（線のみ）。業務向けに名前で選んだもの（0.3.1。§24.1） | `ui/src/fluent/lucideIcons.json`（54KB） |
-| Sash のオリジナル | 1 | MIT（Sash 本体と同じ） | 99 種（線のみ）。自作（0.3.1。§24.2・§24.6） | `ui/src/fluent/sashIcons.json`（5KB） |
+| Sash のオリジナル | 1 | MIT（Sash 本体と同じ） | 95 種（線のみ）。自作（0.3.1。§24.2・§24.6） | `ui/src/fluent/sashIcons.json`（15KB） |
 
 - Tabler を足した理由：Fluent は画面部品が中心で、ビジネス（グラフ・請求・倉庫・フォークリフト）・食べ物・乗り物・アルファベット（letter-a〜z、number-0〜9 と、丸・四角つきの変種）が薄い。Tabler は検索用のタグとカテゴリを元データに持つので、概念検索の手がかりになる。
 - ブランドのロゴを除く理由：ボタンのアイコンには使いにくく、商標の扱いが別になるため。
@@ -539,7 +539,7 @@ MIT License は複製に許諾表示を含めることを求める。リポジ�
 「お金」「配送」「ねこ」のようなあいまいな日本語で関係するアイコンを絞る。実装は `ui/src/fluent/iconSearch.ts`（検索）・`iconConcepts.ts`（概念の辞書）・`iconCategories.ts`（カテゴリ）。
 
 - **入力の扱い**：全角半角・大文字小文字・ひらがな→カタカナ・長音の揺れを吸収する。空白・読点・中黒と、英数字と日本語の境目（「CSV出力」→ csv / 出力）で語に分ける。変換中（IME の組み立て中）は検索しない。
-- **概念の辞書**：466 の概念（見出し 4,981 個、英語の言葉 1,238 種。0.3.1 で 418・4,447・1,134 から拡充：§24.3）。1 つの概念は「日本語の見出し（読みのひらがなを含む）」と「関係する英語の言葉」の組。例：お金/費用/コスト/売上/経費 → money, cash, coin, currency, wallet, receipt, calculator, chart …。ビジネス・事務（生産計画・在庫・出荷・品番・図面・仕様・工程・納期・稼働・品質・承認・確認 など）、文書・操作、人、動物、乗り物、食べ物、天気・自然、図形・記号・文字を含む。以前からの小さな辞書（`JA_KEYWORDS`）も合わせて使う。
+- **概念の辞書**：685 の概念（見出し 7,128 個、英語の言葉 1,388 種。0.3.1 で 418・4,447・1,134 から拡充：§24.3・§24.6）。1 つの概念は「日本語の見出し（読みのひらがなを含む）」と「関係する英語の言葉」の組。例：お金/費用/コスト/売上/経費 → money, cash, coin, currency, wallet, receipt, calculator, chart …。ビジネス・事務（生産計画・在庫・出荷・品番・図面・仕様・工程・納期・稼働・品質・承認・確認 など）、文書・操作、人、動物、乗り物、食べ物、天気・自然、図形・記号・文字を含む。以前からの小さな辞書（`JA_KEYWORDS`）も合わせて使う。
   - 英語の言葉は、代表的なものほど前に書く（前ほど重い）。名前の単語（truck）、Tabler のタグ（delivery）、単語の並び（`building-factory`：名前の中でその順に並ぶものにだけ当たる）が使える。
   - 辞書の見出しの引き方：そのまま一致 > 入力の途中（「はいそ」→配送）> 言い回しの付いた語（「保存する」）> 語の中に見出しを含む（「売上集計」の「売上」）。**そのまま一致する見出しがあれば、それだけを使う**（「ログイン」で、前方が同じ「ログ」＝履歴まで広がらないように）。1 文字の見出し（上・表 など）は、入力がその 1 文字だけのときにしか使わない。
   - 辞書の言葉が検索で 1 つも当たらないものを残さないよう、テストで確かめる（`iconSearch.test.ts`）。
@@ -1156,13 +1156,13 @@ Linux 上の単体テスト（.NET・Vitest）とブラウザ（Playwright。ホ
 | 個数 | 187 種（最初の 185 種に、第 3 弾で heater・hand-helping を足した）。Lucide 全体（約 1,700）ではなく、業務で区別がつくものを名前で選んだ（`ui/scripts/build-lucide-icons.mjs` の `LIST`）。Tabler と同じ名前のもの（signature・folder-cog など）は入れない（同名を二重に出さない）。別名（古い名前）のファイルと、ブランドのロゴは使わない |
 | 選んだもの | ものづくり：factory・warehouse・anvil・drill・screw・screwdriver・wrench・toolbox・robot-arm・hard-hat・circuit-board・microchip・cog・drafting-compass・ruler-dimension-line・diameter・scaling・flask-conical・test-tubes ほか。物流：hand-truck・ship-cargo・van・trailer・shelving-unit・briefcase-conveyor-belt・package-check／minus／open／plus／search／x・boxes・carton・scan-barcode・scan-box・qr-code。営業・事務：handshake・megaphone・briefcase-business・badge-japanese-yen・receipt-japanese-yen・stamp・id-card・id-card-lanyard・chart-gantt・kanban・workflow・milestone・goal・calendar-range・list-todo ほか。開発：bot・brain-circuit・code-xml・database-backup・server-nas・pen-tool |
 | 作り | Tabler と同じ 24×24・線幅 2・丸い端の線なので、見た目がそろう。**線だけ**（塗りはない）。ただし小さな点 2 種（key-round・brain-circuit）だけは、塗りと線の両方で描く（下記）。元は円・四角・線なども要素で持つので、ビルドでパスの `d` に直し、先頭を絶対指定の `M` にそろえて 1 本につなぐ（`ui/scripts/iconPaths.mjs`）。先頭が小文字の `m` のとき、最初の 1 組だけを絶対にし、続く暗黙の座標は相対の `l` にする（**最初の版は、x と y の間の空白を読み違えて `l` を落とし、48 個の図が変わっていた**。直して作り直した）。半径 1 以下の塗りの点（`fill="currentColor"` の小さな円。key-round・brain-circuit）は、線だけで描くと真ん中に穴が空くので、塗りと線の両方で描く印（`#`）を付けて別に持つ |
-| 元との一致の確認 | ①`ui/scripts/verify-icon-pixels.mjs`（手で実行。Chromium、96px）：Lucide 185 個と Sash 32 個を、元の SVG と画素比較する。**2 通りで比べる**。(a) 元の要素ごと vs JSON のパスを M の位置で分けて描いたもの＝**図形の一致**：色の差が **96 以上（0〜255）の画素が 1 つでもあれば差あり**として数え、**差があるものは 0 個**（直す前は 48 個。閾値 32 でも 0）。(b) 元 vs **アプリ（`buildSvg`）と同じ 1 本のパス**：線が重なる縁の薄い画素が変わるため、**cog（12 画素）・boxes（24 画素）の 2 個**が閾値を超える。図形が変わったのではなく重なる縁の画素の差で、目視では見分けられない（参考として数を出し、失敗にはしない）。②`ui/test/iconPaths.test.ts`（CI で走る）：元の path 要素の座標を絶対座標に直して（相対・暗黙の繰り返し・h/v・円弧のフラグの続け書きを展開）、JSON のパスに残っているかを 185 個すべてで確かめる |
+| 元との一致の確認 | ①`ui/scripts/verify-icon-pixels.mjs`（手で実行。Chromium、96px）：Lucide 187 個と Sash 95 個（計 282 個）を、元の SVG と画素比較する。**2 通りで比べる**。(a) 元の要素ごと vs JSON のパスを M の位置で分けて描いたもの＝**図形の一致**：色の差が **96 以上（0〜255）の画素が 1 つでもあれば差あり**として数え、**差があるものは 0 個**（直す前は 48 個。閾値 32 でも 0）。(b) 元 vs **アプリ（`buildSvg`）と同じ 1 本のパス**：線が重なる縁の薄い画素が変わるため、**cog（12 画素）・boxes（24 画素）・capacity-plate（6 画素）の 3 個**が閾値を超える。図形が変わったのではなく重なる縁の画素の差で、目視では見分けられない（参考として数を出し、失敗にはしない）。②`ui/test/iconPaths.test.ts`（CI で走る）：元の path 要素の座標を絶対座標に直して（相対・暗黙の繰り返し・h/v・円弧のフラグの続け書きを展開）、JSON のパスに残っているかを 187 個すべてで確かめる |
 | データの形 | Tabler と同じ `icons[名前] = [カテゴリ番号, タグ, 線のパス, 0]`。タグは Lucide の `tags.json`（英語。14 個まで）、カテゴリは `LIST` のグループに Tabler の名前（と Industry）を付けて持つ |
 | 作り直し | `cd ui && npm run lucide-icons`。生成物（`lucideIcons.json`）をコミットする |
 | 読み込み | 既存の遅延読み込みに乗せる。`loadIconSet` が Fluent・Tabler・Lucide・Sash を並べて動的 import し、ダイアログを開いたときかラベルから候補を出すときにだけ読む |
 | 増えた大きさ | 全体（js + css）で、**生 +89.9KB（9.21MB → 9.30MB）・gzip +31.2KB（2.25MB → 2.28MB）**。ほとんどは遅延読み込み（ダイアログを開いたとき）。**起動時に読む分**（`index.html` から静的につながる js と css の合計）は、**生 +4.8KB（928,841 → 933,649 バイト）・gzip +2.7KB（262,335 → 265,010 バイト）**。増えた分は、英語の辞書の文言と `fluent.ts` の関数・`imageStats.ts` の共有（配布前チェックとパレットが同じ基準を使うため）で、アイコンのデータ・辞書・パレットの部品は含まない（アイコンエディタのパレットは「▾」を押したときの動的 import。最初に作ったときは静的 import で、起動時に 11.4KB 増えていたのを直した）。内訳（生 / gzip）：Lucide のデータ 55.2KB / 17.6KB、Sash のデータ 5.0KB / 2.1KB、辞書を含む `iconSearch` +11.3KB / +4.2KB、ライセンス表示 +5.5KB / +1.3KB、ダイアログとパレット +7.7KB / +3.2KB |
 
-### 24.2 Sash のオリジナルのアイコン（第 1 弾 32 種。第 3 弾の 67 種は §24.6）
+### 24.2 Sash のオリジナルのアイコン（第 1 弾 32 種。第 3 弾の 63 種は §24.6）
 
 どのアイコン集にもなかった業務の場面のものを、**自分で SVG を描いて**入れた（作品としてこのリポジトリに入れる）。他のアイコン集の図形を写したものではない。出どころの表示は「Sash」。ライセンスは Sash 本体と同じ MIT License（`LICENSE-sash-icons.txt`）。
 
@@ -1215,7 +1215,7 @@ Linux 上の単体テスト（.NET・Vitest）とブラウザ（Playwright。ホ
 
 利用者の要望（原文）：「町工場やビジネスマン、エレベーター、エスカレーターをイメージして言葉を考えてください。その言葉からアイコンを選定して追加してください。もっともっとアイコンが欲しいです。」独立した選定（言葉と対応するアイコンの案）を元に実装した。
 
-**1. 言葉（辞書）**：概念 468（Q&A・M&A を足した後）→ **651（+183：新しい 182 概念と、「ビル」の行）**、見出し（のべ）5,010 → **7,058**、見出し（重なりを除く）4,854 → **6,935**（拡充前の 0.3.0 からは概念 418 → 651、重なりを除く見出し 4,397 → 6,935）。世界ごとの概念は、町工場・ものづくり 96、ビジネスマン・オフィス 52、エレベーター 23、エスカレーター・動く歩道 11。
+**1. 言葉（辞書）**：概念 468（Q&A・M&A を足した後）→ **685（+217：新しい 182 概念と「ビル」の行、見出しを移した 32 行の橋渡しの行、QR・戸開閉の 2 行）**、見出し（のべ）5,010 → **7,128**、見出し（重なりを除く）4,854 → **6,941**（拡充前の 0.3.0 からは概念 418 → 685、重なりを除く見出し 4,397 → 6,941）。世界ごとの概念は、町工場・ものづくり 96、ビジネスマン・オフィス 52、エレベーター 23、エスカレーター・動く歩道 11。
 - 各行は「見出し（漢字・ひらがな・カタカナ・英語の言い換え）」と「アイコンの名前（先頭ほど重い）」の組で、`iconConcepts.ts` の「第 3 弾」の節に世界ごとに並べた。既存のアイコンで足りる 105 概念には、既存の名前を付けて、日本語で引けるようにした（歩留まり・予実・稟議・出張・残業 など）。
 - **既存の行と重なる見出しは新しい行へ移した（30 行）**：階段の行の「エスカレーター」、金型の行の「鋳造」、溶接の行の「はんだ付け」、ツールの行の「修理」、怒るの行の「クレーム」、台風の行の「地震」、ハンマーの行の「ドリル」、工程の行の「段取り」、人事・社員・証明・表彰・電源・コーヒー・家具・四角・表示・質問・添付・一覧・並べ替え・送信・学習・保全・クレーン・電気設備・バルブ・検品・フォークリフトの行の、それぞれ重なる語。**「エスカレーター」「フロア」は階段の行（先頭が stairs）の見出しだったので、新しい行へ移さないと届かない**ため移した（階段の行は階段・階だけになった）。「けんしゅう」は研修の行から外し、検品の行（検収）に戻した（§24.3 の方針）。
 - **読みが同じで意味の違う語は新しい行に入れない**：けんさく（研削の読みが検索と同じ）・ベンダー（板金の曲げ機が顧客のベンダーと同じ）・がいちゅう（外注が害虫と同じ）・てんじ（展示・点字）。これらは `iconSearchWorlds.test.ts` で、新しい行の見出しにないことを確かめる。
@@ -1223,22 +1223,27 @@ Linux 上の単体テスト（.NET・Vitest）とブラウザ（Playwright。ホ
 - **英数字と日本語が続いた語**：「Web会議」のように、続けた語そのものが見出しなら、分けずに 1 語で探す（分けると web と会議の両方に当たるアイコンが無く、関係ないものが出ていた）。
 - **受け入れのテスト**（`ui/test/iconSearchWorlds.test.ts`、105 件）：町工場（段取り替え・山積み・負荷・アンドン・現品票・外注・内製・治具・研削・板金・鋳造・めっき・5S・カイゼン・ヒヤリハット・歩留まり・切粉・ノギス・マイクロメータ ほか）、ビジネス（ビジネスマン・サラリーマン・スーツ・ネクタイ・名刺交換・稟議・決裁・押印・回覧・予実・Web会議・共有フォルダ・出張・残業 ほか）、エレベーター（戸開・戸閉・閉じ込め・階数表示・非常呼び・インターホン・操作盤・昇降路・巻上機・ダムウェーター・定員 ほか）、エスカレーター（エスカレーター・エスカレータ・動く歩道・上り・下り・非常停止・足元注意・手すり・ステップ ほか）で、上位 5 件に妥当なアイコンが出ること。**拡充前の見出しの一覧**（`test/fixtures-headwords-before.txt`、4,382 語）と比べ、新しい語が拡充前の辞書になかったこと、新しいアイコンが Fluent + Tabler だけの索引になかったことを確かめる。ひらがな・カタカナ・長音の揺れ（エレベーター／エレベータ／えれべーた／半角）も確かめる。
 
+- **回帰の確認**（`ui/test/searchRegression.test.ts`）：拡充の途中の辞書で全見出し 4,884 語（ひらがな・カタカナの別も含む）を探したときの上位 5 件を `test/fixtures-search-before.json` に残し、いまの結果と比べる。**前の 1 位が上位 5 件から消えた語は 72 → 25、前の上位 5 件がすべて入れ替わった語は 39 → 7**。残った語は、前の 1 位が関係ないアイコンだった語（「か」→ car、「チーズ」→ map-2 など）と意図した変更（ビル・Q&A・M&A・Web会議・げこう）で、すべて理由つきの許容の一覧にある（直ったら外すテストつき）。
+- **見出しを移した語の結果**：移した語は、元の行の先頭の語を、新しい行の先頭 2 つのあとに足す橋渡しの行を作った（32 行。サポート 320 → 415 件、担当者 87 → 89、はんだ 86 → 93、カタログ 284 → 310、電力・省エネは plug・power が戻る）。新しい行に自作 1 個しかなかった語（外注・内製・治具・研削・回覧・定員 など）には、意味の近い既存のアイコンを足した（すべての新しい行の先頭の見出しで 3 件以上、主な語は 5 件以上出る）。
+- **SDカード・QRコード**：英数字と日本語が続いた語を 1 語で探す規則で、device-sd-card・scan-qr-code が消えていたので、その行にアイコンを足した（QRコードはバーコードの行から分けた）。戸開は戸閉を後ろに回し（戸開閉の行を別に作った）、ステップ・昇降路の上位から無関係な tool・wrench を外した。
+
 **2. 新しい集から取り込んだもの・見送ったもの**
 - **取り込んだ**：Lucide の `heater`（暖房）・`hand-helping`（支援）の 2 個（同梱の 185 → 187）。
 - **見送った**：Iconoir（MIT。取り込みたかったのは `glass-fragile`・`consumable` の 2 個）。線幅が 1.5 で、線幅 2 の Tabler・Lucide と混ぜると太さがそろわず、2 個のために 5 つ目の出どころ（ライセンス表示・選択肢・ファイル名の前置き）を足すのは割に合わないため。代わりに割れ物注意は Tabler の `glass`・`alert-triangle`、消耗品は `packages` を当てた。Phosphor（`pipe`・`goggles`・`lockers`・`pipe-wrench`・`gas-can`・`office-chair`）は塗りのパス（256 格子）で、線の集と混ぜると見苦しいうえ、色の入れ方（`fill`）が増えるので取り込まない（パイプは `pipeline`、ロッカーは `hanger`、パイプレンチは `wrench`・`pipeline`、携行缶は自作の `oil-can`、座席は `desk` で代用）。Remix Icon は npm の表示と実際のライセンス文書が食い違い、独自の条件なので使わない。Lucide の残り（約 1,200 個）は、似た形が増えて一覧が長くなるので、言葉から選んだ分だけにした。
 
-**3. 自作 67 個**（第 3 弾。計 99 個）：Tabler と同じ作り（24×24・線幅 2・丸い端・塗りなし）。元の図は `ui/scripts/sash-icons-2.mjs`。16px・24px・48px で描いて、ライト・ダークの拡大した一覧画像で目で確かめた。
-- **町工場（43）**：`grinding-wheel`（研削）・`sheet-bending`（板金）・`casting-ladle`（鋳造）・`plating-tank`（めっき）・`furnace`（熱処理炉）・`c-clamp`（治具・クランプ）・`end-mill`（エンドミル）・`rasp-file`（やすり）・`soldering-iron`（はんだごて）・`control-chart`（管理図）・`pareto-chart`（パレート図）・`changeover`（段取り替え）・`outsource`（外注）・`in-house`（内製）・`bar-stock`（丸棒）・`h-beam`（H 形鋼）・`metal-chips`（切粉）・`oil-can`（油差し）・`compressor`・`hydraulic-cylinder`（油圧）・`belt-pulley`（ベルト・伝動）・`control-panel`（制御盤）・`emergency-stop`（非常停止）・`signal-tower`（表示灯・アンドン）・`work-order`（作業指示書）・`load-capacity`（負荷・山積み）・`lead-time`・`stagnant-stock`（滞留在庫）・`reorder-point`（発注点）・`item-tag`（現品票）・`poka-yoke`・`agv`・`five-s`・`near-miss`（ヒヤリハット）・`safety-goggles`・`work-glove`・`shutter`・`time-card`・`pallet-jack`・`chain-hoist`・`first-article`（初品）・`pinch-hazard`（巻き込まれ）・`this-side-up`（天地無用）。
-- **ビジネスマン・オフィス（7）**：`businessperson`・`circulation`（回覧）・`promissory-note`（手形）・`binder`・`meeting-room`・`presence-board`（在席表示）・`stapler`。
-- **エレベーター（12）**：`floor-indicator`（階数表示）・`door-open-button`（戸開。◀｜▶）・`door-close-button`（戸閉。▶｜◀）・`emergency-call`（非常呼び）・`elevator-trapped`（閉じ込め）・`capacity-plate`（定員）・`elevator-inspection`（検査）・`machine-room`（機械室・巻上機）・`counterweight`・`car-panel`（操作盤・行先ボタン）・`earthquake`（地震時管制）・`building-floors`（ビルの階）。
+**3. 自作 63 個**（第 3 弾。計 95 個）：Tabler と同じ作り（24×24・線幅 2・丸い端・塗りなし）。元の図は `ui/scripts/sash-icons-2.mjs`。16px・24px・48px で描いて、ライト・ダークの拡大した一覧画像で目で確かめた。
+- **町工場（41）**：`grinding-wheel`（研削）・`sheet-bending`（板金）・`casting-ladle`（鋳造）・`plating-tank`（めっき）・`furnace`（熱処理炉）・`c-clamp`（治具・クランプ）・`end-mill`（エンドミル）・`rasp-file`（やすり）・`soldering-iron`（はんだごて）・`control-chart`（管理図）・`pareto-chart`（パレート図）・`changeover`（段取り替え）・`outsource`（外注）・`in-house`（内製）・`bar-stock`（丸棒）・`h-beam`（H 形鋼）・`metal-chips`（切粉）・`oil-can`（油差し）・`hydraulic-cylinder`（油圧）・`belt-pulley`（ベルト・伝動）・`control-panel`（制御盤）・`emergency-stop`（非常停止）・`signal-tower`（表示灯・アンドン）・`work-order`（作業指示書）・`load-capacity`（負荷・山積み）・`lead-time`・`stagnant-stock`（滞留在庫）・`reorder-point`（発注点）・`item-tag`（現品票）・`poka-yoke`・`agv`・`five-s`・`near-miss`（ヒヤリハット）・`safety-goggles`・`work-glove`・`shutter`・`time-card`・`pallet-jack`・`chain-hoist`・`first-article`（初品）・`pinch-hazard`（巻き込まれ）。
+- **ビジネスマン・オフィス（6）**：`businessperson`・`circulation`（回覧）・`promissory-note`（手形）・`binder`・`meeting-room`・`stapler`。
+- **エレベーター（11）**：`floor-indicator`（階数表示）・`door-open-button`（戸開。◀｜▶）・`door-close-button`（戸閉。▶｜◀）・`emergency-call`（非常呼び）・`elevator-trapped`（閉じ込め）・`capacity-plate`（定員）・`elevator-inspection`（検査）・`counterweight`・`car-panel`（操作盤・行先ボタン）・`earthquake`（地震時管制）・`building-floors`（ビルの階）。
 - **エスカレーター・動く歩道（5）**：`moving-walkway`・`handrail`（手すり）・`stand-still`（立ち止まる）・`ramp`（スロープ）・`step-caution`（足元注意）。
 - **区別**：エレベーターは、かご・昇降路・乗り場ボタン・荷物用（第 1 弾）に、戸開／戸閉（三角の向きだけが違う）・閉じ込め（人と感嘆符）・階数表示（横長の窓と数字）を足して描き分けた。外注（矢印が出る）と内製（矢印が入る）は工場の向きが逆。
-- **取りやめた 1 個**：`micrometer`（マイクロメーター）。U 字のフレームと筒が、ペーパークリップに見えて読み取れなかったので取りやめ、代わりに既存の `caliper`・`ruler-measure` を当てた。
-- **弱い点**：`metal-chips`（切粉）・`bar-stock`（丸棒）・`circulation`（回覧）・`machine-room` は、16px では形が密で、ほかより読み取りにくい。
-- **既存の集との同一パスの確認**：自作 99 個の部分パス（3 命令以上）を Fluent・Tabler・Lucide の全アイコンの部分パスと突き合わせるテスト（`iconSetsAdded.test.ts`）で、一致 0 件。途中で一致が出た 5 件（角丸の長方形と矢じりの寸法）は、半径・寸法を変えて直した。単純な線（2 命令以下）は、どの集にもあるので比べない。
-- **画素比較**（`verify-icon-pixels.mjs`）：Lucide 187 個と自作 99 個の計 286 個で、図形の一致は差 0（アプリと同じ 1 本のパスでは、cog・boxes の 2 個が重なる縁で閾値を超える）。
+- **取りやめた 5 個**：`micrometer`（マイクロメーター。ペーパークリップに見えた）。最終の見直しで、描き直しても読めなかった次の 4 個も取りやめた：`machine-room`（機械室。T 字の標識に見えた。巻上機は `elevator-shaft` に当てる）、`presence-board`（在席表示。横線の入った四角で、`shutter`・`building-floors` と区別できなかった。`user-check`・`chalkboard` に当てる）、`this-side-up`（天地無用。荷扱いの図記号 ISO 780 に近いので。`packing-box` に当てる）、`compressor`（コンプレッサー。浴槽・ヤカンに見えた。`wind`・`gauge` に当てる）。
+- **最終の見直しで描き直したもの**（16・24・48px で目で確かめた）：`door-open-button`（三角の底辺を中央の線から離し、先端を外側へ）、`emergency-stop`（四角の中の丸と下向き矢印が Tabler の `square-arrow-down` に近かったので、横から見たきのこ形の押しボタンに）、`metal-chips`（刃物の先から出るらせんの切粉）、`bar-stock`（横から見た円柱 2 本と端の楕円）、`circulation`（大きな書類と 1 本の円弧の矢印）、`end-mill`（斜めに置いた刃物）、`agv`（低い台車・車輪・荷・床の誘導線）、`pinch-hazard`（左右に並ぶローラーと、接点へ向かう矢印）、`stand-still`（2 人とも頭と体）、`building-floors`（窓のある塔）、`capacity-plate`（面取りした銘板）、`meeting-room`（楕円の机と椅子）、`elevator-call`（細い盤と丸いボタン 2 つ。Tabler の `elevator` と区別）、`shutter`。
+- **弱い点**：`metal-chips`（切粉）・`bar-stock`（丸棒）・`end-mill` は、16px では形が密で、ほかより読み取りにくい。
+- **既存の集との同一パスの確認**：自作 95 個の部分パス（3 命令以上）を Fluent・Tabler・Lucide の全アイコンの部分パスと突き合わせるテスト（`iconSetsAdded.test.ts`）で、一致 0 件。**比べるのは、平行移動と絶対／相対の書き方の違いを除いた形**（各命令の座標をいまの点からの差にして 0.5 単位に丸める。1 単位ずらした写しや、相対座標に書き直した写しも同じ形になる）。途中で一致が出た 5 件（角丸の長方形と矢じりの寸法）は、半径・寸法を変えて直した。単純な線（2 命令以下）は、どの集にもあるので比べない。
+- **画素比較**（`verify-icon-pixels.mjs`）：Lucide 187 個と自作 95 個の計 282 個で、図形の一致は差 0（アプリと同じ 1 本のパスでは、cog・boxes・capacity-plate の 3 個が重なる縁で閾値を超える）。
 
-**4. 大きさ**：全体（js + css）で、拡充前（0.3.0）に比べて **生 +133KB（9.21MB → 9.34MB）・gzip +49KB（2.25MB → 2.30MB）**。第 3 弾の分は、生 +44KB・gzip +17KB（辞書を含む `iconSearch` 94.9KB → 126.8KB、自作のデータ 5.0KB → 16.4KB、gzip 2.1KB → 6.5KB）。**起動時に読む分は第 3 弾で増えていない**（933,649 バイト・gzip 265,005 バイトのまま）。
+**4. 大きさ**：全体（js + css）で、拡充前（0.3.0）に比べて **生 +139KB（9.21MB → 9.35MB）・gzip +50KB（2.25MB → 2.30MB）**。辞書を含む `iconSearch` は 94.9KB → 133.1KB（gzip 41.0KB → 55.3KB）、自作のデータは 5.0KB → 15.7KB（gzip 2.1KB → 6.3KB）。**起動時に読む分は、第 3 弾（最終の見直しを含む）で増えていない**（933,649 バイト・gzip 265,009 バイトのまま。0.3.0 比では +4.8KB / +2.7KB で、英語の辞書などの分）。
 
 **5. 確かめていないこと**：WebView2 での見え方、高 DPI・拡大率 125% 以上での 16px の読み取りやすさ、Excel のリボンに置いたときの見え方は、Windows 実機で確かめていない。
 
