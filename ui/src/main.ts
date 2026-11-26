@@ -33,7 +33,7 @@ import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palett
 import { filteredTreePaths, focusTreeFilter, mountTree } from './views/tree';
 import { openIdReplaceDialog } from './idReplaceDialog';
 import { openSample } from './sample';
-import { mountXmlEditor, revealInXml } from './views/xmlEditor';
+import { mountXmlEditor, revealInXml, setXmlEscapeHandler } from './views/xmlEditor';
 import { probeInsert, setEditRefusedHandler } from './shell/compat';
 import { openAboutDialog, openBackupDialog, openShortcutsDialog, RELEASES_URL, REPO_URL } from './shell/dialogs';
 import { describeElement } from './elementHelp';
@@ -47,6 +47,7 @@ import { matchShortcut, splitPath } from './shell/text';
 import { applyTheme, setEditorThemeHandler, updateSettings } from './shell/theme';
 import { notify, toast } from './shell/toast';
 import { installErrorReporting, reportUnexpected } from './shell/errorReport';
+import { installTextFieldMenu } from './shell/textMenu';
 import { changePreview, currentPreview, fitExcelToPreview, SCALE_CHOICES, WIDTH_CHOICES, widthChoiceLabel } from './shell/previewCommands';
 import { openDistributionCheck } from './dialogs/distributionDialog';
 import { openHistoryDialog } from './dialogs/historyDialog';
@@ -58,6 +59,8 @@ import { callbacksAt } from './vba';
 
 // 想定外の例外を握りつぶさない（製品版は開発者ツールが使えない）。ほかの初期化より先に登録する
 installErrorReporting();
+// 入力欄の右クリック（切り取り・コピー・貼り付け）。製品版は WebView2 の既定のメニューを切っている
+installTextFieldMenu();
 
 // ---- 文言 ----
 
@@ -713,6 +716,8 @@ mountCanvas($('canvas'), { onImageDrop: (files, path, target) => {
   openIconDialog(target, files);
 } });
 const xmlHandle = mountXmlEditor($('xml-editor'), $('xml-status'), { undo, redo });
+// Esc で XML エディタを出る（Tab は字下げに使うので、キーボードだけでは出られなかった）
+setXmlEscapeHandler(() => focusPane('canvas'));
 setEditorThemeHandler((dark) => xmlHandle.setTheme(dark));
 // 保存・反映・閉じる前に、インスペクタで入力中の値を確定させる
 setPendingEditFlusher(flushPendingEdits);

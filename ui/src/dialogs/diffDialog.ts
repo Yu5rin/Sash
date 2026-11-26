@@ -1,6 +1,7 @@
 // 保存済みの状態との差分（仕様書 §9.3、第3弾）。XML を左右に並べて比べる。
 
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import type * as MonacoTypes from 'monaco-editor/esm/vs/editor/editor.api';
+import { monaco } from '../views/monacoApi';
 import { app } from '../app';
 import { h } from '../dom';
 import { t } from '../i18n';
@@ -24,8 +25,8 @@ export function openDiff(): void {
     : null;
 
   const dark = document.documentElement.dataset['theme'] === 'dark' || (document.documentElement.dataset['theme'] !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
-  let editor: monaco.editor.IStandaloneDiffEditor | null = null;
-  let models: monaco.editor.ITextModel[] = [];
+  let editor: MonacoTypes.editor.IStandaloneDiffEditor | null = null;
+  let models: MonacoTypes.editor.ITextModel[] = [];
   /** 最後に渡したモデルの差分の計算が終わったか。 */
   let diffReady = false;
   let disposed = false;

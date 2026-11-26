@@ -1,11 +1,7 @@
 // XML エディタ（仕様書 §5.5）。Monaco を使い、スキーマに基づく補完、エラーの波線、選択の同期を行う。
 
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
-import 'monaco-editor/esm/vs/basic-languages/xml/xml.contribution';
-import 'monaco-editor/esm/vs/editor/contrib/folding/browser/folding';
-import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController';
-import 'monaco-editor/esm/vs/editor/contrib/hover/browser/hoverContribution';
-import 'monaco-editor/esm/vs/editor/contrib/find/browser/findController';
+import type * as MonacoTypes from 'monaco-editor/esm/vs/editor/editor.api';
+import { monaco } from './monacoApi';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { app } from '../app';
 import { h } from '../dom';
@@ -34,12 +30,14 @@ function setSyncStopped(stopped: boolean): void {
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 
-let editor: monaco.editor.IStandaloneCodeEditor;
+let editor: MonacoTypes.editor.IStandaloneCodeEditor;
 let applying = false;
+/** 「最後の正しい状態に戻す」の最中。文字を入れ替えるときにカーソルが動いても、選択を customUI に飛ばさない（総点検 X-2）。 */
+let restoring = false;
 let spans: ElementSpan[] = [];
 let spansFor = '';
 /** 選択中の要素の開始タグを示す飾り（範囲選択の代わり。選択してしまうと Undo のたびにタグ全体が選ばれるため）。 */
-let selectionDecorations: monaco.editor.IEditorDecorationsCollection | null = null;
+let selectionDecorations: MonacoTypes.editor.IEditorDecorationsCollection | null = null;
 
 /** XML エディタにフォーカスを移す（Ctrl+3 / F6）。 */
 export function focus(): void {
@@ -64,6 +62,14 @@ export function revealLine(line: number): void {
   editor.setPosition({ lineNumber: ln, column: 1 });
   editor.revealLineInCenterIfOutsideViewport(ln, monaco.editor.ScrollType.Smooth);
   editor.focus();
+}
+
+/** Esc で XML エディタから出るときの行き先（main.ts が登録する。パネルの切り替えを xmlEditor が知らなくて済むように）。 */
+let cyclePaneHook: (() => void) | null = null;
+
+/** Esc で XML エディタを出たときに、フォーカスを移す先を登録する。 */
+export function setXmlEscapeHandler(fn: () => void): void {
+  cyclePaneHook = fn;
 }
 
 export interface XmlEditorHandle {
@@ -91,11 +97,34 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
   // addCommand はすべてのエディタに効くキー割り当てとして登録されるので、差分ダイアログの中の Ctrl+Z まで
   // アプリの Undo になってしまう（不具合 7）。このエディタにだけある文脈キーを条件にした操作として登録する。
   editor.createContextKey('sashMainXml', true);
-  const action = (id: string, keybindings: number[], run: () => void) =>
-    editor.addAction({ id: `sash.${id}`, label: id, keybindings, precondition: 'sashMainXml', keybindingContext: 'sashMainXml', run });
-  action('undo', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ], handlers.undo);
-  action('redo', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ], handlers.redo);
-  action('format', [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF], () => app.store?.format());
+  // 右クリックメニューにも出す（製品版は WebView2 の既定のメニューを切っているので、Monaco のメニューが唯一の入口。総点検 G-3）。
+  // 切り取り・コピー・貼り付け・すべて選択は Monaco 自身の項目が出る
+  const action = (id: string, label: string, keybindings: number[], run: () => void, menuOrder: number) =>
+    editor.addAction({ id: `sash.${id}`, label, keybindings, precondition: 'sashMainXml', keybindingContext: 'sashMainXml', contextMenuGroupId: '1_modification', contextMenuOrder: menuOrder, run });
+  action('undo', t('元に戻す'), [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ], handlers.undo, 1);
+  action('redo', t('やり直し'), [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ], handlers.redo, 2);
+  action('format', t('XML を整形'), [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF], () => app.store?.format(), 3);
+  // 右クリックメニューの「すべて選択」（Monaco のメニュー部品には含まれないので足す）
+  editor.addAction({
+    id: 'sash.selectAll',
+    label: t('すべて選択'),
+    contextMenuGroupId: '9_cutcopypaste',
+    contextMenuOrder: 4,
+    run: (ed) => {
+      const model = ed.getModel();
+      if (model) ed.setSelection(model.getFullModelRange());
+    },
+  });
+  // Esc でキャンバスへ戻る（Tab は字下げに使うので、キーボードだけでは出られない。F6 でも出られる。総点検 X-3 の入口）。
+  // 補完・検索・ヒントが開いているときは、そちらを閉じるのが先
+  editor.addAction({
+    id: 'sash.leave',
+    label: t('キャンバスへ戻る'),
+    keybindings: [monaco.KeyCode.Escape],
+    precondition: 'sashMainXml && !suggestWidgetVisible && !findWidgetVisible && !parameterHintsVisible && !editorHasSelection && !inSnippetMode && !hasMultipleSelections',
+    keybindingContext: 'sashMainXml',
+    run: () => cyclePaneHook?.(),
+  });
   selectionDecorations = editor.createDecorationsCollection();
 
   editor.onDidChangeModelContent(() => {
@@ -105,7 +134,7 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
 
   // カーソル位置の要素を、キャンバスとツリーでも選択する
   editor.onDidChangeCursorPosition((e) => {
-    if (applying || e.source === 'api') return;
+    if (applying || restoring || e.source === 'api') return;
     const store = app.store;
     if (!store || store.syncError) return;
     const offset = editor.getModel()!.getOffsetAt(e.position);
@@ -125,13 +154,24 @@ export function mountXmlEditor(host: HTMLElement, statusEl: HTMLElement, handler
   const restoreLastValid = async () => {
     const store = app.store;
     if (!store?.syncError) return;
-    const r = await ask(t('最後の正しい状態に戻しますか？'), t('XML エディタの内容を、構文エラーになる前の状態に置き換えます。いま書いている内容は失われます。'), [
+    const r = await ask(t('最後の正しい状態に戻しますか？'), t('構文エラーになる前の内容に戻します。元に戻す（Ctrl+Z）で、いまの内容に戻せます。'), [
       { value: 'ok', label: t('戻す'), primary: true },
       { value: 'cancel', label: t('キャンセル') },
     ]);
     if (r !== 'ok' || !app.store?.syncError) return;
-    // エディタの文字を置き換えれば、変更通知でストアにも伝わる（ストアだけを書き換えると、エディタの壊れた文字が残る）
-    editor.setValue(serialize(app.store.doc));
+    // エディタの文字を置き換えれば、変更通知でストアにも伝わる（ストアだけを書き換えると、エディタの壊れた文字が残る）。
+    // 全文の setValue ではカーソルが 1 行 1 列に飛び、選択が customUI に移ってしまうので、同期と同じく変わった所だけを置き換える
+    const model = editor.getModel()!;
+    const diff = minimalEdit(model.getValue(), serialize(app.store.doc));
+    if (diff) {
+      restoring = true;
+      try {
+        const range = monaco.Range.fromPositions(model.getPositionAt(diff.start), model.getPositionAt(diff.end));
+        editor.executeEdits('sash-restore', [{ range, text: diff.text, forceMoveMarkers: false }]);
+      } finally {
+        restoring = false;
+      }
+    }
     editor.focus();
   };
 
@@ -250,7 +290,7 @@ function updateMarkers(): void {
   const model = editor.getModel();
   const store = app.store;
   if (!model || !store) return;
-  const markers: monaco.editor.IMarkerData[] = [];
+  const markers: MonacoTypes.editor.IMarkerData[] = [];
   if (store.syncError) {
     const line = store.syncError.line ?? 1;
     markers.push({ severity: monaco.MarkerSeverity.Error, message: store.syncError.message, startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: model.getLineMaxColumn(Math.min(line, model.getLineCount())) });
@@ -318,7 +358,7 @@ function registerLanguageFeatures(): void {
       const word = model.getWordUntilPosition(position);
       const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
       const ctx = contextAt(text, offset);
-      const suggestions: monaco.languages.CompletionItem[] = [];
+      const suggestions: MonacoTypes.languages.CompletionItem[] = [];
 
       if (ctx.inTag && ctx.attrName) {
         // 属性値：列挙値と真偽値

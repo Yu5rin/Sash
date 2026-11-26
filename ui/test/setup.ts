@@ -9,3 +9,8 @@ function cancelAppTimers(): void {
 
 afterEach(cancelAppTimers);
 afterAll(cancelAppTimers);
+
+// Monaco のクリップボード部品は読み込み時に document.queryCommandSupported を呼ぶが、jsdom には無い
+if (typeof document !== 'undefined' && typeof document.queryCommandSupported !== 'function') {
+  (document as unknown as { queryCommandSupported: (c: string) => boolean }).queryCommandSupported = () => false;
+}
