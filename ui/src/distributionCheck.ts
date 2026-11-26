@@ -5,7 +5,7 @@ import { t } from './i18n';
 import type { Problem, Severity } from './lint';
 import { allElements, displayName, pathOf, type Path } from './model';
 import { attributes, titleOf } from './schema';
-import type { ImageInfo } from './imageStats';
+import { SINK_DARK_LUMA, SINK_LIGHT_LUMA, type ImageInfo } from './imageStats';
 import { bareCallbackName, parseParams, parseProcedures, procedureCode, RIBBON_HOLDER_MODULE_NAME, stripComment, type CallbackStatus, type VbaModule } from './vba';
 
 /**
@@ -383,9 +383,9 @@ export function collectChecks(input: CheckInput): CheckSection[] {
     if (st && st.opaque >= 16) {
       if (st.solidBackground) {
         themeItems.push({ level: 'should', text: st.solidBackground === 'light' ? t('画像「{id}」は白い背景が透明になっていません。暗いテーマでは白い四角に見えます', { id }) : t('画像「{id}」は黒い背景が透明になっていません。明るいテーマでは黒い四角に見えます', { id }), detail: id, target: 'images' });
-      } else if (st.meanLuma < 60 && st.darkShare >= 0.85) {
+      } else if (st.meanLuma < SINK_DARK_LUMA && st.darkShare >= 0.85) {
         themeItems.push({ level: 'should', text: t('画像「{id}」は暗い単色に近く、Office の黒・濃い灰色のテーマで背景に沈みます', { id }), detail: id, target: 'images' });
-      } else if (st.meanLuma > 215 && st.lightShare >= 0.85) {
+      } else if (st.meanLuma > SINK_LIGHT_LUMA && st.lightShare >= 0.85) {
         themeItems.push({ level: 'should', text: t('画像「{id}」は白に近い単色で、Office の白・明るいテーマで背景に沈みます', { id }), detail: id, target: 'images' });
       }
     }

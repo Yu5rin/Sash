@@ -9,10 +9,12 @@ import { openModal, openOnce } from '../dialogs/modal';
 import { notify } from '../clipboard';
 import { lang, t } from '../i18n';
 import {
-  buildSvg, COLOR_PRESETS, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor, setFilePrefix, setLabel,
+  buildSvg, DEFAULT_COLOR, displayName, iconSet, loadIconSet, safeColor, setFilePrefix, setLabel,
   type FluentIcon, type FluentVariant, type IconSet,
 } from './fluent';
 import { CATEGORIES } from './iconCategories';
+import { buildColorPalette } from './colorPalette';
+import { normalizeHex, pushRecent } from './iconPalette';
 import { buildIndex, relatedConcepts, searchIconSet, type IconHit, type SearchResult } from './iconSearch';
 
 export interface FluentPick {
@@ -43,6 +45,8 @@ interface Remembered {
   variant: FluentVariant;
   color: string;
   set: SetFilter;
+  /** 最近使った色（新しい順）。 */
+  recent: string[];
 }
 
 /** 前回の種類・色・アイコン集（この利用者の手元だけの好み。保存できない環境では既定に戻るだけ）。 */
@@ -53,9 +57,10 @@ function loadRemembered(): Remembered {
       variant: v.variant === 'filled' ? 'filled' : 'regular',
       color: safeColor(v.color ?? DEFAULT_COLOR),
       set: v.set === 'fluent' || v.set === 'tabler' || v.set === 'lucide' || v.set === 'sash' ? v.set : 'all',
+      recent: Array.isArray(v.recent) ? v.recent.map((c) => normalizeHex(String(c))).filter((c): c is string => c !== null).slice(0, 8) : [],
     };
   } catch {
-    return { variant: 'regular', color: DEFAULT_COLOR, set: 'all' };
+    return { variant: 'regular', color: DEFAULT_COLOR, set: 'all', recent: [] };
   }
 }
 
@@ -91,11 +96,8 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     h('button', { type: 'button', dataset: { set: v }, 'aria-pressed': String(state.set === v), class: state.set === v ? 'active' : '', onclick: () => setSet(v) }, v === 'all' ? t('すべて') : setLabel(v)),
   );
   const setSwitch = h('div', { class: 'segmented', role: 'group', 'aria-label': t('アイコン集の出どころ') }, setButtons);
-  const colorInput = h('input', { type: 'color', value: state.color, title: t('色を選ぶ'), 'aria-label': t('色を選ぶ'), oninput: () => setColor(colorInput.value) });
-  const swatches = COLOR_PRESETS.map((p) =>
-    h('button', { type: 'button', class: 'fluent-swatch', style: `--swatch:${p.color}`, title: `${t(p.label)}（${p.color}）`, 'aria-label': t(p.label), dataset: { color: p.color }, onclick: () => setColor(p.color) }),
-  );
-  const colorRow = h('div', { class: 'fluent-colors', role: 'group', 'aria-label': t('色') }, h('span', { class: 'muted small' }, t('色')), ...swatches, colorInput);
+  // 色：右の欄にパレット（色相ごと・Office の標準の色・最近使った色・#RRGGBB の入力）を常に出す。以前の 6 色（既定のグレー・Excel の緑・青・赤・オレンジ・黒）もパレットの中にある
+  const palette = buildColorPalette({ value: state.color, recent: state.recent, onPick: (c) => setColor(c) });
 
   // カテゴリのチップ。件数は、今の検索語・出どころ・スタイルで絞った結果の中の数（チップを押す前に、どこに何があるか分かるように）
   const chipDefs = [{ id: 'all', ja: 'すべて' }, ...CATEGORIES];
@@ -119,7 +121,7 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     previewName,
     previewRow,
     h('p', { class: 'muted small' }, t('「使う」を押すとアイコンエディタが開き、出力サイズの PNG にして設定します。バッジなどの加工もそこでできます。')),
-    h('p', { class: 'muted small fluent-credit' }, t('アイコン：Fluent UI System Icons・Tabler Icons（MIT）、Lucide（ISC）、Sash のオリジナル')),
+    palette.el,
   );
 
   const useButton = h('button', { type: 'button', class: 'primary', disabled: true, onclick: () => confirm() }, t('使う'));
@@ -128,12 +130,12 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     { class: 'catalog fluent-picker' },
     h('div', { class: 'fluent-toolbar' }, search, variantSwitch, setSwitch),
     chipRow,
-    colorRow,
     h('div', { class: 'fluent-main' }, gridWrap, previewPane),
-    status,
+    h('div', { class: 'fluent-footnote' }, status, h('span', { class: 'muted small fluent-credit' }, t('アイコン：Fluent UI System Icons・Tabler Icons（MIT）、Lucide（ISC）、Sash のオリジナル'))),
   );
   const modal = openModal(t('アイコン集から選ぶ'), content, {
     wide: true,
+    tall: true,
     initialFocus: search,
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')), useButton],
     onClose: () => {
@@ -312,9 +314,8 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
 
   function setColor(c: string): void {
     state.color = safeColor(c);
-    colorInput.value = state.color;
     saveRemembered(state);
-    for (const s of swatches) s.setAttribute('aria-pressed', String(s.dataset['color'] === state.color));
+    palette.setValue(state.color);
     renderPreview();
   }
 
@@ -323,6 +324,9 @@ function build(onPick: (pick: FluentPick) => void, opts: FluentPickerOptions): v
     const markup = buildSvg(selected, state.variant, state.color);
     if (!markup) return;
     picked = true;
+    // 使った色を「最近使った色」に覚える（次に開いたとき、パレットの中に出る）
+    state.recent = pushRecent(state.recent, state.color);
+    saveRemembered(state);
     const set = iconSet(selected);
     const pick: FluentPick = {
       blob: new Blob([markup], { type: 'image/svg+xml' }),

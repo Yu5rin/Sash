@@ -15,6 +15,7 @@ import { iconTargetPath } from '../iconTarget';
 import { ID_PATTERN } from '../schema';
 import { t as tr } from '../i18n';
 import type { FluentPick } from '../fluent/fluentDialog';
+import { buildColorPalette } from '../fluent/colorPalette';
 import { reportRefusal, type ImageEntry } from '../store';
 import {
   adjustBrightness, cornerColor, fitRect, keyOutColor, monochrome, opaqueBounds, parseHex, parseIco, pickIcoEntry,
@@ -200,8 +201,53 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: opts[key], dataset: { opt: key }, onchange: (e: Event) => { opts[key] = (e.target as HTMLInputElement).checked; render(); } }), tr(text));
   // 色の入力は文字がないので、名前を付ける（読み上げとツールチップのため。総点検 D-5）
   const COLOR_NAMES = { monoColor: '単色の色', replaceFrom: '置き換える前の色', replaceTo: '置き換えた後の色', badgeColor: 'バッジの色' } as const;
-  const color = (key: 'monoColor' | 'replaceFrom' | 'replaceTo' | 'badgeColor') =>
-    h('input', { type: 'color', value: opts[key], title: tr(COLOR_NAMES[key]), 'aria-label': tr(COLOR_NAMES[key]), oninput: (e: Event) => { opts[key] = (e.target as HTMLInputElement).value; render(); } });
+  type ColorKey = 'monoColor' | 'replaceFrom' | 'replaceTo' | 'badgeColor';
+  const colorInputs = new Map<ColorKey, HTMLInputElement>();
+  const color = (key: ColorKey) => {
+    const input = h('input', { type: 'color', value: opts[key], title: tr(COLOR_NAMES[key]), 'aria-label': tr(COLOR_NAMES[key]), oninput: (e: Event) => { opts[key] = (e.target as HTMLInputElement).value; render(); } }) as HTMLInputElement;
+    colorInputs.set(key, input);
+    return input;
+  };
+  /**
+   * 色の入力（ブラウザの色選び）に、既定の配色（パレット）を足す。色の入力の横の「▾」で、その行の下にパレット
+   * （色相ごとの色・Office の標準の色・#RRGGBB の入力）を開く。同じ行の色の入力は 1 つのパレットを使い回す。
+   */
+  const paletteGroup = (keys: ColorKey[]) => {
+    let active = keys[0]!;
+    const palette = buildColorPalette({
+      value: opts[active],
+      label: COLOR_NAMES[active],
+      onPick: (c) => {
+        opts[active] = c;
+        const input = colorInputs.get(active);
+        if (input) input.value = c;
+        render();
+      },
+    });
+    const panel = h('div', { class: 'icon-palette', hidden: true }, palette.el);
+    const buttons = new Map<ColorKey, HTMLButtonElement>();
+    const sync = () => buttons.forEach((b, k) => b.setAttribute('aria-expanded', String(!panel.hidden && active === k)));
+    const field = (key: ColorKey): HTMLElement[] => {
+      const toggle = h('button', {
+        type: 'button', class: 'small icon-palette-toggle', title: tr('パレットから選ぶ'), 'aria-label': `${tr(COLOR_NAMES[key])}：${tr('パレットから選ぶ')}`, 'aria-expanded': 'false',
+        onclick: () => {
+          if (!panel.hidden && active === key) panel.hidden = true;
+          else {
+            active = key;
+            palette.setValue(opts[key]);
+            panel.hidden = false;
+          }
+          sync();
+        },
+      }, '▾') as HTMLButtonElement;
+      buttons.set(key, toggle);
+      return [color(key), toggle];
+    };
+    return { field, panel };
+  };
+  const monoPalette = paletteGroup(['monoColor']);
+  const replacePalette = paletteGroup(['replaceFrom', 'replaceTo']);
+  const badgePalette = paletteGroup(['badgeColor']);
   const select = <K extends 'size' | 'shape' | 'badge'>(key: K, options: [string, string][]) =>
     h('select', { onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (opts as unknown as Record<string, unknown>)[key] = key === 'size' ? Number(v) : v; if (key === 'size' && source?.ico) selectIco(pickIcoEntry(source.ico.entries, opts.size)); else render(); } },
       options.map(([v, t]) => h('option', { value: v, selected: String(opts[key]) === v }, tr(t))));
@@ -224,13 +270,16 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: opts.transparent, dataset: { opt: 'transparent' }, onchange: (e: Event) => { opts.transparent = (e.target as HTMLInputElement).checked; render(); } }), tr('背景を透過する'), keySwatch),
       row('許容値', ...range('tolerance', 0, 60))),
     section('色',
-      h('div', { class: 'inline' }, check('mono', '単色にする'), color('monoColor')),
-      h('div', { class: 'inline' }, check('replace', '色を置き換える'), color('replaceFrom'), h('span', null, '→'), color('replaceTo')),
+      h('div', { class: 'inline' }, check('mono', '単色にする'), ...monoPalette.field('monoColor')),
+      monoPalette.panel,
+      h('div', { class: 'inline' }, check('replace', '色を置き換える'), ...replacePalette.field('replaceFrom'), h('span', null, '→'), ...replacePalette.field('replaceTo')),
+      replacePalette.panel,
       row('明るさ', ...range('brightness', -60, 60))),
     section('形と仕上げ',
       row('形', select('shape', [['none', 'そのまま'], ['rounded', '角丸'], ['circle', '円形']])),
       row('角丸の大きさ', ...range('radius', 5, 50, '%')),
-      row('バッジ', select('badge', [['none', 'なし'], ['dot', '点'], ['plus', 'プラス'], ['check', 'チェック'], ['exclaim', '注意']]), color('badgeColor')),
+      row('バッジ', select('badge', [['none', 'なし'], ['dot', '点'], ['plus', 'プラス'], ['check', 'チェック'], ['exclaim', '注意']]), ...badgePalette.field('badgeColor')),
+      badgePalette.panel,
       row('シャープ', ...range('sharpen', 0, 100))),
     section('画像名', row('名前', nameInput), nameError),
     section('ライブラリ',

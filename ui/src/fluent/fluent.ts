@@ -70,16 +70,6 @@ export interface TablerData {
 /** リボン（Excel の明るいリボン）に置いて見やすい既定の色。画面のテーマの文字色を使うと、暗いテーマで白いアイコンができてしまうため固定にする。 */
 export const DEFAULT_COLOR = '#424242';
 
-/** 色の候補。Excel の緑と、注意・強調に使われやすい色。 */
-export const COLOR_PRESETS: readonly { color: string; label: string }[] = [
-  { color: '#424242', label: 'グレー（標準）' },
-  { color: '#217346', label: 'Excel の緑' },
-  { color: '#0f6cbd', label: '青' },
-  { color: '#c42b1c', label: '赤' },
-  { color: '#ca5010', label: 'オレンジ' },
-  { color: '#000000', label: '黒' },
-];
-
 export function toIcons(data: FluentData): FluentIcon[] {
   return Object.entries(data.icons).map(([name, e]) => ({ name, words: name.split('_'), regular: e[0], filled: e[1], size: e[2] ?? 24, set: 'fluent' as const }));
 }

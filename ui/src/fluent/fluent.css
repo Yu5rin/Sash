@@ -14,13 +14,7 @@
 .fluent-chips button.fluent-chip.active .fluent-chip-count { color: inherit; }
 .fluent-chips button.fluent-chip[hidden] { display: none; }
 
-.fluent-colors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-/* 共通のボタンの :hover などで背景が上書きされないよう、詳細度を上げて色を固定する */
-.fluent-colors button.fluent-swatch,
-.fluent-colors button.fluent-swatch:hover,
-.fluent-colors button.fluent-swatch:active { width: 22px; height: 22px; min-width: 0; padding: 0; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--swatch); }
-.fluent-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
-.fluent-colors input[type="color"] { width: 32px; height: 24px; padding: 0 2px; }
+.fluent-preview .cp { padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
 
 .fluent-main { display: flex; gap: var(--sp-3); flex: 1; min-height: 0; }
 .fluent-grid-wrap { flex: 1; min-width: 0; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); padding: 4px; }
@@ -40,11 +34,14 @@
 .fluent-badge { display: inline-block; padding: 0 6px; border-radius: var(--radius-pill); font-family: inherit; font-size: var(--fs-2xs); border: 1px solid var(--stroke-control); color: var(--text-muted); vertical-align: 1px; }
 
 .fluent-preview { width: 300px; flex: none; display: flex; flex-direction: column; gap: var(--sp-2); overflow: auto; }
+/* 中身が高いとき、縮めずにスクロールさせる（縮めると、プレビューの絵が潰れる） */
+.fluent-preview > * { flex: none; }
 .fluent-preview h3 { margin: 0; font-size: var(--fs-sm); }
 .fluent-preview-name { font-family: Consolas, monospace; font-size: var(--fs-sm); overflow-wrap: anywhere; min-height: 1.4em; }
 .fluent-preview p { margin: 0; }
 .fluent-preview .icon-preview svg { display: block; }
-.fluent-credit { margin-top: auto !important; }
+.fluent-footnote { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); }
+.fluent-footnote .fluent-credit { text-align: right; }
 
 @media (max-width: 640px) {
   .fluent-main { flex-direction: column; }

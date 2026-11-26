@@ -1,0 +1,36 @@
+/* アイコンの色のパレット（アイコン集のダイアログと、アイコンエディタが使う）。色はアプリのテーマの変数だけを使い、明暗どちらでも見分けられるようにする。 */
+
+.cp { display: flex; flex-direction: column; gap: var(--sp-2); }
+.cp-group { display: grid; gap: 4px; }
+.cp-hues { grid-template-columns: repeat(13, 18px); }
+.cp-standard { grid-template-columns: repeat(10, 18px); }
+.cp-recent { grid-template-columns: repeat(8, 18px); }
+.cp-title { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); font-weight: 600; }
+/* 共通のボタンの :hover などで背景が上書きされないよう、詳細度を上げて色を固定する */
+.cp button.cp-swatch,
+.cp button.cp-swatch:hover,
+.cp button.cp-swatch:active { position: relative; width: 18px; height: 18px; min-width: 0; min-height: 0; padding: 0; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--swatch); }
+.cp button.cp-swatch:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
+.cp button.cp-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text); }
+.cp button.cp-swatch[aria-pressed="true"]:focus-visible { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus), 0 0 0 6px var(--text); }
+/* 背景に沈む色の印：沈む先の背景の色の点を右下に付ける（暗いテーマで沈む → 暗い点、明るいテーマで沈む → 白い点）。印の色はテーマに関わらず固定 */
+.cp button.cp-swatch[data-sink]::after { content: ''; position: absolute; right: -3px; bottom: -3px; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; }
+.cp button.cp-swatch[data-sink="dark"]::after { background: #1f1f1f; border: 1.5px solid #ffffff; }
+.cp button.cp-swatch[data-sink="light"]::after { background: #ffffff; border: 1.5px solid #1f1f1f; }
+.cp-custom { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.cp-custom input[type="text"] { width: 92px; font-family: Consolas, monospace; }
+.cp-custom input[type="color"] { width: 32px; height: 24px; padding: 0 2px; }
+.cp-current { display: inline-block; width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--swatch); }
+.cp-note { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+.cp-note[data-sink] { color: var(--warning-text); }
+.cp-error { margin: 0; font-size: var(--fs-xs); color: var(--error-text); }
+.cp-error[hidden], .cp-recent-wrap[hidden] { display: none; }
+.cp-legend { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--fs-2xs); color: var(--text-muted); }
+.cp-legend i { flex: none; display: inline-block; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; }
+.cp-legend i.d { background: #1f1f1f; border: 1.5px solid #ffffff; outline: 1px solid var(--border-strong); }
+.cp-legend i.l { background: #ffffff; border: 1.5px solid #1f1f1f; }
+
+/* アイコンエディタの中（色の入力の下に開くパレット） */
+.icon-palette { padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); overflow-x: auto; }
+.icon-palette[hidden] { display: none; }
+.icon-options button.icon-palette-toggle { min-width: 0; padding: 0 6px; }

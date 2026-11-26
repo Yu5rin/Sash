@@ -15,6 +15,8 @@ export interface ModalHandle {
 export interface ModalOptions {
   /** 幅の広いダイアログ（カタログやアイコンエディタ）。size: 'lg' と同じ。 */
   wide?: boolean;
+  /** wide のうえで、縦も広くとる（中身が多いダイアログ用。画面に収まる範囲で 720px まで）。 */
+  tall?: boolean;
   /** 大きさ。sm=確認、md=既定、lg=一覧や編集。 */
   size?: 'sm' | 'md' | 'lg';
   /** 下部のボタン。primary クラスのボタンは右端に並べ、Enter で押されるものとして扱う。 */
@@ -171,7 +173,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
   const footerButtons = opts.footer ? orderFooter(opts.footer) : null;
   const dialog = h(
     'div',
-    { class: `modal size-${size}${opts.wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabIndex: -1 },
+    { class: `modal size-${size}${opts.wide ? ' wide' : ''}${opts.wide && opts.tall ? ' tall' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabIndex: -1 },
     h('header', null,
       h('h2', { id: titleId }, title),
       closable ? h('button', { type: 'button', class: 'icon-button modal-close', title: t('閉じる (Esc)'), 'aria-label': t('閉じる (Esc)'), onclick: () => handle.close() }, svg(uiIcons.close)) : null),
