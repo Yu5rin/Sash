@@ -13,7 +13,7 @@ const FIRST = {
   // ---- エレベーター・昇降（Tabler の elevator は箱に上下の矢印。ここは実物の部分を描き分ける）----
   'elevator-car': ['Industry', 'elevator lift car cabin door doors floor building', ['M5 21v-15a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v15', 'M3 21h18', 'M9 21v-10', 'M15 21v-10', 'M9 8h6']],
   'elevator-shaft': ['Industry', 'elevator lift shaft hoistway rope cable car rails', ['M5 3v18', 'M19 3v18', 'M12 3v6', 'M8 9h8v9h-8z']],
-  'elevator-call': ['Industry', 'elevator lift call button panel hall up down', ['M7 5a2 2 0 0 1 2 -2h6a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-6a2 2 0 0 1 -2 -2z', 'M10 9l2 -2l2 2', 'M10 15l2 2l2 -2']],
+  'elevator-call': ['Industry', 'elevator lift call button panel hall up down', ['M8 3h8a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-8a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3z', 'M14 9a2 2 0 1 0 -4 0a2 2 0 1 0 4 0z', 'M14 15.5a2 2 0 1 0 -4 0a2 2 0 1 0 4 0z']],
   'freight-lift': ['Industry', 'lift freight dumbwaiter hoist platform load goods', ['M12 3v5', 'M9.5 5.5l2.5 -2.5l2.5 2.5', 'M8 12h8v5h-8z', 'M4 20h16', 'M6 17v3', 'M18 17v3']],
 
   // ---- 工作機械・加工 ----
