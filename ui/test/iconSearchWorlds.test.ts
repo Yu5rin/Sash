@@ -19,19 +19,19 @@ const SHOP: readonly (readonly [string, readonly string[]])[] = [
   ['切粉', ['metal-chips']], ['ノギス', ['caliper']], ['マイクロメータ', ['caliper', 'ruler-measure']], ['マイクロメーター', ['caliper', 'ruler-measure']],
   ['熱処理', ['furnace']], ['はんだ付け', ['soldering-iron']], ['パレート図', ['pareto-chart']], ['管理図', ['control-chart']], ['リードタイム', ['lead-time']],
   ['滞留在庫', ['stagnant-stock']], ['発注点', ['reorder-point']], ['ポカヨケ', ['poka-yoke']], ['無人搬送車', ['agv']], ['保護メガネ', ['safety-goggles']],
-  ['軍手', ['work-glove']], ['タイムカード', ['time-card']], ['ハンドリフト', ['pallet-jack']], ['ホイスト', ['chain-hoist']], ['天地無用', ['this-side-up']],
-  ['非常停止ボタン', ['emergency-stop']], ['制御盤', ['control-panel']], ['作業指示書', ['work-order']], ['油差し', ['oil-can']], ['コンプレッサー', ['compressor']],
+  ['軍手', ['work-glove']], ['タイムカード', ['time-card']], ['ハンドリフト', ['pallet-jack']], ['ホイスト', ['chain-hoist']], ['天地無用', ['packing-box']],
+  ['非常停止ボタン', ['emergency-stop']], ['制御盤', ['control-panel']], ['作業指示書', ['work-order']], ['油差し', ['oil-can']], ['コンプレッサー', ['gauge', 'wind']],
   ['丸棒', ['bar-stock']], ['H形鋼', ['h-beam']], ['シャッター', ['shutter']], ['エンドミル', ['end-mill']], ['やすり', ['rasp-file']], ['鋼材', ['h-beam']],
 ];
 const BUSINESS: readonly (readonly [string, readonly string[]])[] = [
   ['ビジネスマン', ['businessperson']], ['サラリーマン', ['businessperson']], ['会社員', ['businessperson']], ['スーツ', ['tie', 'shirt', 'businessperson']], ['ネクタイ', ['tie']],
   ['名刺交換', ['business-card']], ['稟議', ['rubber-stamp', 'stamp']], ['決裁', ['rubber-stamp', 'stamp']], ['押印', ['rubber-stamp', 'stamp']], ['回覧', ['circulation']],
   ['予実', ['chart-arrows', 'chart-bar']], ['Web会議', ['video', 'device-desktop-share']], ['共有フォルダ', ['folder-share']], ['出張', ['plane', 'luggage']], ['残業', ['clock-plus', 'moon']],
-  ['会議室', ['meeting-room']], ['バインダー', ['binder']], ['手形', ['promissory-note']], ['在席表示', ['presence-board']], ['ホチキス', ['stapler']],
+  ['会議室', ['meeting-room']], ['バインダー', ['binder']], ['手形', ['promissory-note']], ['在席表示', ['user-check', 'chalkboard']], ['ホチキス', ['stapler']],
 ];
 const ELEVATOR: readonly (readonly [string, readonly string[]])[] = [
   ['戸開', ['door-open-button']], ['戸閉', ['door-close-button']], ['閉じ込め', ['elevator-trapped']], ['階数表示', ['floor-indicator']], ['非常呼び', ['emergency-call']],
-  ['インターホン', ['emergency-call']], ['行先ボタン', ['car-panel']], ['操作盤', ['control-panel', 'car-panel']], ['昇降路', ['elevator-shaft']], ['巻上機', ['machine-room']],
+  ['インターホン', ['emergency-call']], ['行先ボタン', ['car-panel']], ['操作盤', ['control-panel', 'car-panel']], ['昇降路', ['elevator-shaft']], ['巻上機', ['elevator-shaft']],
   ['ダムウェーター', ['freight-lift']], ['定員', ['capacity-plate']], ['カウンターウェイト', ['counterweight']], ['地震', ['earthquake']], ['ビルの階', ['building-floors']],
   ['エレベーター', ['elevator', 'elevator-car']], ['エレベータ', ['elevator', 'elevator-car']], ['昇降機', ['elevator', 'elevator-car']],
 ];

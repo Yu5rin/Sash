@@ -19,6 +19,10 @@ describe('absoluteStart（先頭の m を M にする）', () => {
     expect(absoluteStart('m12,5 3,4', 'x')).toBe('M12 5l3,4');
     expect(absoluteStart('m1+2 3', 'x')).toBe('M1 2l3');
     expect(absoluteStart('m1 2,l3 4', 'x')).toBe('M1 2l3 4');
+    // x と y の間が「空白 カンマ 空白」や改行のもの
+    expect(absoluteStart('m1 , 2 3', 'x')).toBe('M1 2l3');
+    expect(absoluteStart('m1\n2 3', 'x')).toBe('M1 2l3');
+    expect(absoluteStart('m1 ,\n 2 3 4', 'x')).toBe('M1 2l3 4');
     expect(() => absoluteStart('x1 2', 'x')).toThrow();
   });
 
@@ -28,7 +32,7 @@ describe('absoluteStart（先頭の m を M にする）', () => {
   });
 });
 
-describe('Lucide のデータは、元のパスの座標と同じ（185 個すべて）', () => {
+describe('Lucide のデータは、元のパスの座標と同じ（すべて）', () => {
   const icons = (lucideData as unknown as { icons: Record<string, [number, string, string | string[], 0]> }).icons;
   const flat = (e: string | string[]) => (Array.isArray(e) ? e : [e]).map((x) => (x.startsWith('#') ? x.slice(1) : x)).join('');
 

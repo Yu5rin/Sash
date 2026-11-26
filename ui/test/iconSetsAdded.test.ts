@@ -7,7 +7,7 @@ import sashLicense from '../src/fluent/LICENSE-sash-icons.txt?raw';
 import { THIRD_PARTY_LICENSES } from '../src/shell/licenses';
 import { buildSvg, iconKey, isStrokeSet, setFilePrefix, setLabel, type TablerData } from '../src/fluent/fluent';
 import { categorize, categoryBit } from '../src/fluent/iconCategories';
-import { absolute } from './helpers/pathNormalize';
+import { shapes } from './helpers/pathNormalize';
 import { allIcons, fluentIcons, lucideIcons, sashIcons, tablerIcons } from './helpers/allIcons';
 
 describe('Lucide のデータ', () => {
@@ -128,24 +128,13 @@ describe('4 つのアイコン集の合わせ方', () => {
 
 describe('Sash のオリジナルは、既存の集の図形を写していない', () => {
   const asList = (p: string | readonly string[] | 0): string[] => (p === 0 ? [] : typeof p === 'string' ? [p] : [...p]);
-  /** パスを、部分パス（M ごと）の絶対座標の文字列にする。3 命令に満たない単純な線（M3 20h18 など）は、どの集にもあるので比べない。 */
-  const subpaths = (d: string): string[] => {
-    const cmds = absolute(d.replace(/^[#@]/, ''));
-    const out: string[][] = [];
-    for (const c of cmds) {
-      if (c.startsWith('M ')) out.push([c]);
-      else if (out.length) out[out.length - 1]!.push(c);
-    }
-    return out.filter((s) => s.length >= 3).map((s) => s.join('|'));
-  };
-
-  it('自作の部分パス（3 命令以上）は、Fluent・Tabler・Lucide のどのアイコンの部分パスとも一致しない', () => {
+  it('自作の部分パス（3 命令以上）は、Fluent・Tabler・Lucide のどのアイコンの部分パスとも一致しない（平行移動・絶対／相対の書き方の違いを除いた形で比べる）', () => {
     const others = new Set<string>();
     for (const i of [...fluentIcons, ...tablerIcons, ...lucideIcons]) for (const v of ['regular', 'filled'] as const) {
-      for (const d of asList(i[v])) for (const s of subpaths(d)) others.add(s);
+      for (const d of asList(i[v])) for (const s of shapes(d.replace(/^[#@]/, ''))) others.add(s);
     }
     const same: string[] = [];
-    for (const i of sashIcons) for (const d of asList(i.regular)) for (const s of subpaths(d)) if (others.has(s)) same.push(`${i.name}: ${s.slice(0, 40)}`);
+    for (const i of sashIcons) for (const d of asList(i.regular)) for (const s of shapes(d.replace(/^[#@]/, ''))) if (others.has(s)) same.push(`${i.name}: ${s.slice(0, 40)}`);
     expect(same).toEqual([]);
   });
 });
