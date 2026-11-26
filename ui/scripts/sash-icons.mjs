@@ -7,7 +7,9 @@
 // 形：名前 → [カテゴリ, タグ（空白区切りの英語）, パス（空白で区切った複数の部分パスを、配列で渡してもよい）]
 // build-sash-icons.mjs が src/fluent/sashIcons.json にする。パスの d は、Tabler と同じく M で始める。
 
-export const SASH_ICONS = {
+import { SASH_ICONS_2 } from './sash-icons-2.mjs';
+
+const FIRST = {
   // ---- エレベーター・昇降（Tabler の elevator は箱に上下の矢印。ここは実物の部分を描き分ける）----
   'elevator-car': ['Industry', 'elevator lift car cabin door doors floor building', ['M5 21v-15a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v15', 'M3 21h18', 'M9 21v-10', 'M15 21v-10', 'M9 8h6']],
   'elevator-shaft': ['Industry', 'elevator lift shaft hoistway rope cable car rails', ['M5 3v18', 'M19 3v18', 'M12 3v6', 'M8 9h8v9h-8z']],
@@ -50,3 +52,6 @@ export const SASH_ICONS = {
   'business-card': ['Communication', 'business card name card contact sales meishi', ['M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2z', 'M7 10h4', 'M7 14h3', 'M14 10h3', 'M14 14h3']],
   'cost-down': ['Charts', 'cost down reduction saving coin decrease price', ['M13 8a5 5 0 1 0 -10 0a5 5 0 1 0 10 0z', 'M3 20h10', 'M18 4v11', 'M14.5 12l3.5 3.5l3.5 -3.5']],
 };
+
+// 第 1 弾（上）と第 2 弾（sash-icons-2.mjs）を合わせたもの。
+export const SASH_ICONS = { ...FIRST, ...SASH_ICONS_2 };
