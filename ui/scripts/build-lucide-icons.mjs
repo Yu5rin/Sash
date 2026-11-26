@@ -72,15 +72,28 @@ for (const [group, text] of Object.entries(LIST)) {
       missing.push(name);
       continue;
     }
-    const paths = [];
+    // 保存の形：線だけのパスは 1 本につなぎ、塗りも要る点（fill 指定の小さな円）は '#' を付けて別に持つ
+    const out = [];
+    let run = [];
+    const flush = () => {
+      if (run.length) out.push(packPaths(run));
+      run = [];
+    };
     for (const [tag, attrs] of els) {
-      // 小さな点（半径 1 以下で fill 指定のある円）は、線幅 2 の線で描いても同じ大きさの点になるので、線のまま扱う。それ以外の塗りは扱えない
-      if ('fill' in attrs && attrs.fill !== 'none' && !(tag === 'circle' && Number(attrs.r) <= 1)) throw new Error(`塗りのある要素は扱えません: ${name}`);
-      paths.push(absoluteStart(tidy(elementToPath(tag, attrs, name), name), name));
+      // 小さな点（半径 1 以下で fill 指定のある円）。線幅 2 の線だけで描くと、半径 0.5 の円は真ん中に穴が空く（元は塗りがある）ので、
+      // 塗りと線の両方で描く印（'#'）を付けて別に持つ。それ以外の塗りは扱えない
+      const dot = 'fill' in attrs && attrs.fill !== 'none';
+      if (dot && !(tag === 'circle' && Number(attrs.r) <= 1)) throw new Error(`塗りのある要素は扱えません: ${name}`);
+      const d = absoluteStart(tidy(elementToPath(tag, attrs, name), name), name);
+      if (dot) {
+        flush();
+        out.push(`#${d}`);
+      } else run.push(d);
     }
-    if (paths.length === 0) throw new Error(`図形がありません: ${name}`);
+    flush();
+    if (out.length === 0) throw new Error(`図形がありません: ${name}`);
     const tags = (tagsOf[name] ?? []).map((t) => String(t).trim().replace(/\s+/g, '-').toLowerCase()).filter(Boolean).slice(0, 14);
-    icons[name] = [categories.indexOf(category), [...new Set(tags)].join(' '), packPaths(paths), 0];
+    icons[name] = [categories.indexOf(category), [...new Set(tags)].join(' '), out.length === 1 ? out[0] : out, 0];
   }
 }
 if (missing.length) throw new Error(`Lucide にない名前（書き間違いか、別名しかない）: ${missing.join(' ')}`);

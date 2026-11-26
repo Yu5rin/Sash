@@ -57,7 +57,7 @@ function loadRemembered(): Remembered {
       variant: v.variant === 'filled' ? 'filled' : 'regular',
       color: safeColor(v.color ?? DEFAULT_COLOR),
       set: v.set === 'fluent' || v.set === 'tabler' || v.set === 'lucide' || v.set === 'sash' ? v.set : 'all',
-      recent: Array.isArray(v.recent) ? v.recent.map((c) => normalizeHex(String(c))).filter((c): c is string => c !== null).slice(0, 8) : [],
+      recent: Array.isArray(v.recent) ? v.recent.map((c) => normalizeHex(String(c))).filter((c): c is string => c !== null).filter((c, i, a) => a.indexOf(c) === i).slice(0, 8) : [],
     };
   } catch {
     return { variant: 'regular', color: DEFAULT_COLOR, set: 'all', recent: [] };

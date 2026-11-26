@@ -15,7 +15,8 @@ import { iconTargetPath } from '../iconTarget';
 import { ID_PATTERN } from '../schema';
 import { t as tr } from '../i18n';
 import type { FluentPick } from '../fluent/fluentDialog';
-import { buildColorPalette } from '../fluent/colorPalette';
+import { approxIconCount, ICON_SET_NAMES } from '../fluent/fluent';
+import type { ColorPalette } from '../fluent/colorPalette';
 import { reportRefusal, type ImageEntry } from '../store';
 import {
   adjustBrightness, cornerColor, fitRect, keyOutColor, monochrome, opaqueBounds, parseHex, parseIco, pickIcoEntry,
@@ -166,7 +167,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     { class: 'icon-sources' },
     h('button', { type: 'button', onclick: () => fileInput.click() }, tr('ファイル')),
     h('button', { type: 'button', title: tr('EXE / DLL に埋め込まれたアイコンから選ぶ'), onclick: () => void fromExecutable() }, 'EXE / DLL'),
-    h('button', { type: 'button', title: tr('同梱のアイコン集（Fluent・Tabler、約 8,000 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます'), onclick: () => openFluentIcons((p) => void loadFluent(p).catch(reportError)) }, tr('アイコン集')),
+    h('button', { type: 'button', title: tr('同梱のアイコン集（{sets}、約 {count} 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます', { sets: ICON_SET_NAMES, count: approxIconCount() }), onclick: () => openFluentIcons((p) => void loadFluent(p).catch(reportError)) }, tr('アイコン集')),
     app.info.excelInstalled ? h('button', { type: 'button', title: tr('組み込みアイコン（imageMso）を元にする'), onclick: () => fromImageMso() }, tr('組み込みアイコン')) : null,
     h('button', { type: 'button', title: tr('アイコンライブラリから選ぶ（元画像と設定があれば加工し直せます）'), onclick: () => fromLibrary() }, tr('ライブラリ')),
     h('button', { type: 'button', title: tr('フォルダ内の画像を、今の加工設定でまとめて取り込む（コントロールには設定しません）'), onclick: () => folderInput.click() }, tr('フォルダを一括')),
@@ -203,41 +204,92 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const COLOR_NAMES = { monoColor: '単色の色', replaceFrom: '置き換える前の色', replaceTo: '置き換えた後の色', badgeColor: 'バッジの色' } as const;
   type ColorKey = 'monoColor' | 'replaceFrom' | 'replaceTo' | 'badgeColor';
   const colorInputs = new Map<ColorKey, HTMLInputElement>();
+  /** ブラウザの色選びで色が変わったとき、開いているパレットの選択の印を合わせる（paletteGroup が登録する）。 */
+  const colorRefresh = new Map<ColorKey, () => void>();
   const color = (key: ColorKey) => {
-    const input = h('input', { type: 'color', value: opts[key], title: tr(COLOR_NAMES[key]), 'aria-label': tr(COLOR_NAMES[key]), oninput: (e: Event) => { opts[key] = (e.target as HTMLInputElement).value; render(); } }) as HTMLInputElement;
+    const input = h('input', { type: 'color', value: opts[key], title: tr(COLOR_NAMES[key]), 'aria-label': tr(COLOR_NAMES[key]), oninput: (e: Event) => { opts[key] = (e.target as HTMLInputElement).value; colorRefresh.get(key)?.(); render(); } }) as HTMLInputElement;
     colorInputs.set(key, input);
     return input;
   };
+  /** パレットで色を選んだとき、その色を使う設定がオフなら、オンにする（選んだのに何も変わらない、をなくす）。 */
+  const enableFor = (key: ColorKey) => {
+    if (key === 'monoColor' && !opts.mono) {
+      opts.mono = true;
+      const box = content.querySelector<HTMLInputElement>('input[data-opt="mono"]');
+      if (box) box.checked = true;
+    } else if ((key === 'replaceFrom' || key === 'replaceTo') && !opts.replace) {
+      opts.replace = true;
+      const box = content.querySelector<HTMLInputElement>('input[data-opt="replace"]');
+      if (box) box.checked = true;
+    } else if (key === 'badgeColor' && opts.badge === 'none') {
+      opts.badge = 'dot';
+      const sel = content.querySelector<HTMLSelectElement>('select[data-opt="badge"]');
+      if (sel) sel.value = 'dot';
+    }
+  };
+  /** 開いているパレットの閉じ方（Esc でアイコンエディタごと閉じないよう、パレットだけ閉じる。onEscape が使う）。 */
+  const openPalettes: (() => boolean)[] = [];
   /**
    * 色の入力（ブラウザの色選び）に、既定の配色（パレット）を足す。色の入力の横の「▾」で、その行の下にパレット
    * （色相ごとの色・Office の標準の色・#RRGGBB の入力）を開く。同じ行の色の入力は 1 つのパレットを使い回す。
+   * パレットの部品は、最初に「▾」を押したときに読み込む（アイコンエディタを開くだけの起動時の読み込みを増やさないため）。
    */
   const paletteGroup = (keys: ColorKey[]) => {
     let active = keys[0]!;
-    const palette = buildColorPalette({
-      value: opts[active],
-      label: COLOR_NAMES[active],
-      onPick: (c) => {
-        opts[active] = c;
-        const input = colorInputs.get(active);
-        if (input) input.value = c;
-        render();
-      },
-    });
-    const panel = h('div', { class: 'icon-palette', hidden: true }, palette.el);
+    let palette: ColorPalette | null = null;
+    let loading = false;
+    const panel = h('div', { class: 'icon-palette', hidden: true });
     const buttons = new Map<ColorKey, HTMLButtonElement>();
     const sync = () => buttons.forEach((b, k) => b.setAttribute('aria-expanded', String(!panel.hidden && active === k)));
+    const show = () => {
+      palette?.setValue(opts[active]);
+      palette?.setLabel(COLOR_NAMES[active]);
+    };
+    const close = (): boolean => {
+      if (panel.hidden) return false;
+      panel.hidden = true;
+      sync();
+      buttons.get(active)?.focus();
+      return true;
+    };
+    openPalettes.push(close);
+    for (const k of keys) colorRefresh.set(k, () => { if (!panel.hidden && active === k) show(); });
+    const open = async (key: ColorKey) => {
+      active = key;
+      if (!palette) {
+        if (loading) return;
+        loading = true;
+        try {
+          const { buildColorPalette } = await import('../fluent/colorPalette');
+          palette = buildColorPalette({
+            value: opts[active],
+            label: COLOR_NAMES[active],
+            onPick: (c) => {
+              opts[active] = c;
+              const input = colorInputs.get(active);
+              if (input) input.value = c;
+              enableFor(active);
+              render();
+            },
+          });
+          panel.append(palette.el);
+        } catch (e) {
+          reportError(e);
+          return;
+        } finally {
+          loading = false;
+        }
+      }
+      show();
+      panel.hidden = false;
+      sync();
+    };
     const field = (key: ColorKey): HTMLElement[] => {
       const toggle = h('button', {
         type: 'button', class: 'small icon-palette-toggle', title: tr('パレットから選ぶ'), 'aria-label': tr('{name}：{action}', { name: tr(COLOR_NAMES[key]), action: tr('パレットから選ぶ') }), 'aria-expanded': 'false',
         onclick: () => {
-          if (!panel.hidden && active === key) panel.hidden = true;
-          else {
-            active = key;
-            palette.setValue(opts[key]);
-            panel.hidden = false;
-          }
-          sync();
+          if (!panel.hidden && active === key) close();
+          else void open(key);
         },
       }, '▾') as HTMLButtonElement;
       buttons.set(key, toggle);
@@ -249,7 +301,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const replacePalette = paletteGroup(['replaceFrom', 'replaceTo']);
   const badgePalette = paletteGroup(['badgeColor']);
   const select = <K extends 'size' | 'shape' | 'badge'>(key: K, options: [string, string][]) =>
-    h('select', { onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (opts as unknown as Record<string, unknown>)[key] = key === 'size' ? Number(v) : v; if (key === 'size' && source?.ico) selectIco(pickIcoEntry(source.ico.entries, opts.size)); else render(); } },
+    h('select', { dataset: { opt: key }, onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (opts as unknown as Record<string, unknown>)[key] = key === 'size' ? Number(v) : v; if (key === 'size' && source?.ico) selectIco(pickIcoEntry(source.ico.entries, opts.size)); else render(); } },
       options.map(([v, t]) => h('option', { value: v, selected: String(opts[key]) === v }, tr(t))));
   const keySwatch = h('span', { class: 'swatch' });
   const cropReset = h('button', { type: 'button', class: 'small', onclick: () => { opts.crop = null; render(); } }, tr('切り抜きを解除'));
@@ -292,6 +344,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const title = target ? tr('アイコンを作る：{name}', { name: el!.getAttribute('id') ?? el!.localName }) : tr('アイコンを作る');
   const modal = openModal(title, content, {
     wide: true,
+    // 開いているパレットがあれば、Esc はパレットだけ閉じる（加工中のアイコンエディタごと閉じて、加工を失わないため）
+    onEscape: () => openPalettes.some((close) => close()),
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, tr('キャンセル')), okButton],
     onClose: () => {
       document.removeEventListener('paste', onPaste);

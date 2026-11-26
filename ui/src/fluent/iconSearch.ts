@@ -14,7 +14,7 @@
 // 速さのために、アイコンの数が増えても重くならないよう、単語 → アイコンの索引を最初に1度だけ作る（単語の全探索をしない）。
 // 前方一致は、並べておいた単語の一覧を二分探索して、当たる範囲だけを見る。
 
-import { isStrokeSet, type FluentIcon, type FluentVariant, type IconSet } from './fluent';
+import type { FluentIcon, FluentVariant, IconSet } from './fluent';
 import { categoryBit, CATEGORIES, categorize } from './iconCategories';
 import { CONCEPTS } from './iconConcepts';
 import { JA_KEYWORDS, normalize } from './iconWords';
@@ -149,7 +149,6 @@ export interface Index {
   sortKey: string[];
   wordCount: Uint8Array;
   setRank: Uint8Array;
-  isStroke: Uint8Array;
 }
 
 const SET_RANK: Readonly<Record<IconSet, number>> = { sash: 0, fluent: 1, tabler: 2, lucide: 3 };
@@ -179,7 +178,6 @@ export function buildIndex(icons: readonly FluentIcon[]): Index {
     sortKey: new Array<string>(n),
     wordCount: new Uint8Array(n),
     setRank: new Uint8Array(n),
-    isStroke: new Uint8Array(n),
   };
   for (let i = 0; i < n; i++) {
     const icon = icons[i]!;
@@ -189,7 +187,6 @@ export function buildIndex(icons: readonly FluentIcon[]): Index {
     idx.wordCount[i] = Math.min(255, icon.words.length);
     // 同じ点のときの並び：Sash のオリジナル（目的を絞って描いたもの）> Fluent > Tabler > Lucide
     idx.setRank[i] = SET_RANK[set];
-    idx.isStroke[i] = isStrokeSet(set) ? 1 : 0;
     icon.words.forEach((w, pos) => push(idx.nameWords, w, i * 8 + Math.min(pos, 7)));
     (icon.tags ?? []).forEach((tag, pos) => {
       const p = Math.min(pos, 127);
@@ -358,8 +355,9 @@ const VIA_LIMIT = 400;
 /** 入力を語に分ける。空白・読点・中黒で区切り、英数字と日本語の境目でも分ける（「CSV出力」→ csv / 出力）。 */
 export function splitQuery(query: string): { raw: string; norm: string }[] {
   const out: { raw: string; norm: string }[] = [];
-  // R&D・Q&A のように、英字のあいだの & は 1 語（RD・QA）として扱う（& で分けると r と d の 1 文字ずつになってしまうため）
-  const text = query.normalize('NFKC').replace(/(?<=[A-Za-z])&(?=[A-Za-z])/g, '');
+  // R&D・Q&A・M&A のように、1 文字の英字どうしをはさむ & は 1 語（RD・QA・MA）として扱う（& で分けると 1 文字ずつの検索になるため）。
+  // drag&drop・black&white のように、長い語をはさむ & は今までどおり分ける
+  const text = query.normalize('NFKC').replace(/(?<![A-Za-z])([A-Za-z])&([A-Za-z])(?![A-Za-z])/g, '$1$2');
   for (const chunk of text.split(/[\s、。,，・/／]+/)) {
     for (const part of chunk.match(/[A-Za-z0-9_-]+|[^A-Za-z0-9_\-]+/g) ?? []) {
       const norm = normalize(part);

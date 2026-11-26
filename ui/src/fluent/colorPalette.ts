@@ -27,6 +27,8 @@ export interface ColorPalette {
   el: HTMLElement;
   /** 外から色が変わったとき（選択の印と、入力欄・メモを合わせる）。 */
   setValue(color: string): void;
+  /** 色の入力欄の読み上げ名を変える（t() のキー。同じパレットを複数の色の入力で使い回すとき、開いている対象に合わせる）。 */
+  setLabel(label: string): void;
   /** 最近使った色を差し替える。 */
   setRecent(list: readonly string[]): void;
 }
@@ -84,7 +86,7 @@ export function buildColorPalette(opts: ColorPaletteOptions): ColorPalette {
   let recentEl: HTMLElement | null = null;
 
   const hex = h('input', {
-    type: 'text', class: 'cp-hex', value, maxLength: 7, spellcheck: false, autocomplete: 'off',
+    type: 'text', class: 'cp-hex', value, spellcheck: false, autocomplete: 'off',
     'aria-label': t(opts.label ?? '色を入力（#RRGGBB）'), title: t('色を入力（#RRGGBB）'), placeholder: '#RRGGBB',
     onchange: () => commitHex(),
     onkeydown: (e: Event) => {
@@ -163,7 +165,11 @@ export function buildColorPalette(opts: ColorPaletteOptions): ColorPalette {
 
   setRecent(opts.recent ?? []);
   setValue(value);
-  return { el, setValue, setRecent };
+  function setLabel(label: string): void {
+    hex.setAttribute('aria-label', t(label));
+  }
+
+  return { el, setValue, setLabel, setRecent };
 }
 
 /** 矢印・Home・End で、グループの中のボタンへフォーカスを移す（cols はグリッドの列数。上下の矢印はその数だけ動く）。 */

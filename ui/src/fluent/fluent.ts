@@ -4,6 +4,8 @@
 // データの作り方は scripts/build-fluent-icons.mjs・scripts/build-tabler-icons.mjs、ライセンス文は LICENSE-*.txt。
 // 検索は iconSearch.ts（概念の辞書は iconConcepts.ts、カテゴリは iconCategories.ts）。
 
+import { ICON_COUNTS } from './iconCounts';
+
 export type FluentVariant = 'regular' | 'filled';
 
 /** 1つのアイコンのパス。パスが複数あるときは配列（1本につなぐと重なった部分の塗りが変わりうるため、分けたまま持つ）。0 はその種類がない。 */
@@ -208,4 +210,13 @@ export function loadIconSet(): Promise<IconSetData> {
       throw e;
     });
   return setCache;
+}
+
+/** 同梱のアイコン集の名前（ツールチップ用）。 */
+export const ICON_SET_NAMES = 'Fluent・Tabler・Lucide・Sash';
+
+/** 同梱のアイコンのおよその個数（100 個単位に丸める。例：8,200）。個数は iconCounts.ts（データから数えたもの）から作る。 */
+export function approxIconCount(): string {
+  const total = Object.values(ICON_COUNTS).reduce((a, b) => a + b, 0);
+  return (Math.round(total / 100) * 100).toLocaleString('en-US');
 }

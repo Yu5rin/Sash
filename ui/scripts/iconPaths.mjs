@@ -42,8 +42,9 @@ export function absoluteStart(d, where) {
   const m = /^m(-?(?:\d+\.?\d*|\.\d+))[ ,]?(-?(?:\d+\.?\d*|\.\d+))(.*)$/s.exec(d);
   if (!m) throw new Error(`M か m で始まりません: ${where}`);
   const rest = m[3];
-  const sep = /^[\d.-]/.test(rest) ? 'l' : '';
-  return `M${m[1]} ${m[2]}${sep}${rest}`;
+  // 残りが（空白をはさんで）数字で始まるなら、暗黙の相対 lineto なので l を足す。正規表現が x と y のあいだの区切りで空白を食べるため、先頭の空白を許す
+  const sep = /^\s*[\d.-]/.test(rest) ? 'l' : '';
+  return `M${m[1]} ${m[2]}${sep}${rest.trimStart()}`;
 }
 
 /** 図形要素（SVG の circle・rect など）を、パスの d に直す。 */

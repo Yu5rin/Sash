@@ -439,7 +439,7 @@ export const en: Readonly<Record<string, string>> = {
   'アイコン：Microsoft Fluent UI System Icons（MIT License）': 'Icons: Microsoft Fluent UI System Icons (MIT License)',
   // アイコン集：Tabler の追加、概念による検索、カテゴリ（fluent/fluentDialog.ts・fluent/iconCategories.ts）
   'アイコン集から選ぶ': 'Choose from the icon set',
-  '同梱のアイコン集（Fluent・Tabler・Lucide・Sash、約 8,200 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます': 'Choose from the bundled icon sets (Fluent, Tabler, Lucide and Sash, about 8,200 icons). Search business, animals, vehicles, food, letters and more with vague words. Works without Excel',
+  '同梱のアイコン集（{sets}、約 {count} 個）から選ぶ。ビジネス・動物・乗り物・食べ物・文字などを、あいまいな言葉で探せます。Excel がなくても使えます': 'Choose from the bundled icon sets ({sets}, about {count} icons). Search business, animals, vehicles, food, letters and more with vague words. Works without Excel',
   'アイコンを検索（例：お金、配送、ねこ、A）': 'Search icons (e.g. money, delivery, cat, A)',
   'アイコン集の出どころ': 'Icon set source',
   'カテゴリで絞り込む': 'Filter by category',
