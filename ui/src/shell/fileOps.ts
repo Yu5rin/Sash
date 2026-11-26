@@ -4,7 +4,7 @@
 // - 未保存の変更があるときは、閉じる・別のファイルを開く・終了の前に「保存する／保存しない／キャンセル」を聞く
 
 import { app } from '../app';
-import { invoke, type PartToSave } from '../bridge';
+import { invoke, type ApplyResult, type PartToSave } from '../bridge';
 import { ask } from '../dialogs/modal';
 import { t } from '../i18n';
 import { exportSash, parseSash, partXml } from '../sashJson';
@@ -13,7 +13,8 @@ import type { PartStore, SaveSnapshot } from '../store';
 import { focus as focusCanvas, tabIdToActivate } from '../views/canvas';
 import { imagesToSend } from './compat';
 import { splitPath } from './text';
-import { toast } from './toast';
+import { slowMessage, STOPPED_WAITING, waitStoppable } from './slowCall';
+import { toast, type ToastHandle } from './toast';
 
 export type BusyKind = 'save' | 'apply' | 'open' | null;
 
@@ -36,7 +37,7 @@ function setBusy(next: BusyKind): void {
 /** 保存・反映の途中なら知らせて true を返す。 */
 function refuseWhileBusy(): boolean {
   if (busy === null) return false;
-  toast({ kind: 'info', message: busy === 'apply' ? t('Excelへの反映が終わるまでお待ちください') : busy === 'save' ? t('保存が終わるまでお待ちください') : t('ファイルを開いています。終わるまでお待ちください') });
+  toast({ kind: 'info', message: busy === 'apply' ? t('Excel への反映が終わるまでお待ちください') : busy === 'save' ? t('保存が終わるまでお待ちください') : t('ファイルを開いています。終わるまでお待ちください') });
   return true;
 }
 
@@ -102,7 +103,7 @@ export async function openFile(path?: string, opts: { force?: boolean } = {}): P
   focusCanvas();
   const s = app.session!;
   if (s.created) toast({ kind: 'info', message: t('このブックにはリボン定義がないので、customUI14 を新しく作りました') });
-  else if (s.parts.size >= 2) toast({ kind: 'info', message: t('customUI と customUI14 の両方があります。2010以降のExcelは customUI14 を優先します') });
+  else if (s.parts.size >= 2) toast({ kind: 'info', message: t('customUI と customUI14 の両方があります。2010以降の Excel は customUI14 を優先します') });
   return true;
 }
 
@@ -178,7 +179,7 @@ async function confirmErrors(action: 'save' | 'apply'): Promise<boolean> {
   const broken = [...s.parts.values()].some((p) => p.syncError);
   const errors = app.problems.filter((p) => p.severity === 'error').length;
   if (!broken && errors === 0) return true;
-  const msg = broken ? t('XMLの構文が壊れています。このまま書き込むと、Excelでリボンが表示されません。') : t('エラーが {n} 件あります。このまま書き込むと、Excelでリボンが表示されない可能性があります。', { n: errors });
+  const msg = broken ? t('XML の構文が壊れています。このまま書き込むと、Excel でリボンが表示されません。') : t('エラーが {n} 件あります。このまま書き込むと、Excel でリボンが表示されない可能性があります。', { n: errors });
   const title = action === 'save' ? t('保存の前に確認') : t('反映の前に確認');
   const go = action === 'save' ? t('このまま保存') : t('このまま反映');
   // 危ないほうを主ボタンにしない（Enter で書き込んでしまわないように）
@@ -215,6 +216,27 @@ export async function save(): Promise<boolean> {
 
 let hintShown = false;
 
+/**
+ * Excel への反映の呼び出し。15 秒を超えたら「Excel の応答を待っています」に変えて［待つのをやめる］を出す（総点検 W-5）。
+ * やめても、ホストの処理は続く。結果が届いたら、そのときに知らせ、成功なら保存済みの印も付ける
+ * （結果が届くまでは付けない。反映できたか分からないため）。
+ */
+async function callApply(s: NonNullable<typeof app.session>, prepared: Prepared, saveIfDirty: boolean, progress: ToastHandle): Promise<ApplyResult | typeof STOPPED_WAITING> {
+  const call = invoke('excel.apply', { path: s.path, parts: prepared.parts, saveIfDirty, activateTab: tabIdToActivate() ?? undefined });
+  return waitStoppable(call, {
+    onSlow: (stop) => progress.update({ kind: 'warning', timeout: 0, message: slowMessage(), action: { label: t('待つのをやめる'), run: stop } }),
+    onLate: (outcome) => {
+      if ('error' in outcome) {
+        toast({ kind: 'error', message: t('反映できませんでした：{message}', { message: (outcome.error as Error).message }) });
+        return;
+      }
+      const res = outcome.value;
+      if ((res.status === 'applied' || res.status === 'written' || res.status === 'blocked') && app.session === s) markAllSaved(prepared, s.path);
+      toast({ kind: res.status === 'blocked' ? 'warning' : 'success', message: res.message });
+    },
+  });
+}
+
 export async function applyToExcel(): Promise<void> {
   flushPendingEdits();
   const s = app.session;
@@ -227,7 +249,7 @@ export async function applyToExcel(): Promise<void> {
     hintShown = true;
     await ask(
       t('リボンのエラーを表示する設定'),
-      t('リボンのXMLに誤りがあると、Excelは何も言わずにリボンを表示しません。原因を確認できるよう、Excelの［ファイル］→［オプション］→［詳細設定］→［全般］にある「アドインのユーザー インターフェイス エラーを表示する」をオンにすることをおすすめします（Sashはこの設定を変更しません）。'),
+      t('リボンの XML に誤りがあると、Excel は何も言わずにリボンを表示しません。原因を確認できるよう、Excel の［ファイル］→［オプション］→［詳細設定］→［全般］にある「アドインのユーザー インターフェイス エラーを表示する」をオンにすることをおすすめします（Sashはこの設定を変更しません）。'),
       [{ value: 'ok', label: t('わかりました'), primary: true }],
     );
     app.settings = await invoke('settings.set', { ribbonErrorsHintShown: true }).catch(() => app.settings);
@@ -235,13 +257,18 @@ export async function applyToExcel(): Promise<void> {
   if (busy !== null || app.session !== s) return;
 
   setBusy('apply');
-  const progress = toast({ kind: 'info', message: app.info.excelInstalled ? t('Excelへ反映しています…') : t('ファイルに書き込んでいます…'), timeout: 0 });
+  const progress = toast({ kind: 'info', message: app.info.excelInstalled ? t('Excel へ反映しています…') : t('ファイルに書き込んでいます…'), timeout: 0 });
   try {
     let prepared = prepare();
-    let res = await invoke('excel.apply', { path: s.path, parts: prepared.parts, saveIfDirty: false, activateTab: tabIdToActivate() ?? undefined });
+    let res = await callApply(s, prepared, false, progress);
+    if (res === STOPPED_WAITING) {
+      progress.close();
+      toast({ kind: 'info', message: t('待つのをやめました。反映の結果は、Excel の応答が戻ったあとで知らせます') });
+      return;
+    }
     if (res.status === 'needsSave') {
       progress.close();
-      const r = await ask(t('Excel側に未保存の変更があります'), t('{file} はExcelで開かれていて、未保存の変更があります。Excelで保存してから反映しますか？', { file: fileNameOf(s.path) }), [
+      const r = await ask(t('Excel 側に未保存の変更があります'), t('{file} は Excel で開かれていて、未保存の変更があります。Excel で保存してから反映しますか？', { file: fileNameOf(s.path) }), [
         { value: 'cancel', label: t('中止') },
         { value: 'go', label: t('保存して反映'), primary: true },
       ]);
@@ -250,7 +277,13 @@ export async function applyToExcel(): Promise<void> {
         return;
       }
       prepared = prepare();
-      res = await invoke('excel.apply', { path: s.path, parts: prepared.parts, saveIfDirty: true, activateTab: tabIdToActivate() ?? undefined });
+      const second = await callApply(s, prepared, true, progress);
+      if (second === STOPPED_WAITING) {
+        progress.close();
+        toast({ kind: 'info', message: t('待つのをやめました。反映の結果は、Excel の応答が戻ったあとで知らせます') });
+        return;
+      }
+      res = second;
     }
     if (res.status === 'applied' || res.status === 'written' || res.status === 'blocked') markAllSaved(prepared, s.path);
     progress.update({ kind: res.status === 'blocked' ? 'warning' : 'success', message: res.message });

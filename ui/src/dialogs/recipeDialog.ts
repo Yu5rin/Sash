@@ -2,6 +2,7 @@
 
 import { app } from '../app';
 import { invoke } from '../bridge';
+import { notifyIfSlow } from '../shell/slowCall';
 import { defaultCallbackName, vba } from '../callbacks';
 import { allElements, pathOf, serialize } from '../model';
 import { builtinRecipes, insertInstance, instantiate, recipeFromElement, type Recipe } from '../recipes';
@@ -12,6 +13,9 @@ import { h } from '../dom';
 import { ask, openModal, type ModalHandle } from './modal';
 import type { Instance } from '../recipes';
 import { t } from '../i18n';
+
+/** VBA の読み書きは、Excel が応答しないと返らない。15 秒を超えたら知らせる（総点検 W-5）。 */
+const vbaInvoke: typeof invoke = (type, payload) => notifyIfSlow(invoke(type, payload));
 
 type Toast = (msg: string, kind?: ToastKind) => void;
 
@@ -185,17 +189,17 @@ export async function applyRecipe(recipe: Recipe): Promise<string> {
   if (!code && !inst.workbookVba) return t('レシピ「{title}」を挿入しました{note}', { title: t(recipe.title), note: renamedNote });
 
   if (vba.canWrite) {
-    const r = await ask(t('VBAも挿入しますか？'), t(inst.workbookVba ? 'レシピのVBAを {module} と ThisWorkbook の末尾に追加します。既存のコードは書き換えません。' : 'レシピのVBAを {module} の末尾に追加します。既存のコードは書き換えません。', { module: app.settings.callbackModule }), [
+    const r = await ask(t('VBA も挿入しますか？'), t(inst.workbookVba ? 'レシピの VBA を {module} と ThisWorkbook の末尾に追加します。既存のコードは書き換えません。' : 'レシピの VBA を {module} の末尾に追加します。既存のコードは書き換えません。', { module: app.settings.callbackModule }), [
       { value: 'insert', label: t('挿入する'), primary: true },
       { value: 'copy', label: t('コピーだけ') },
     ]);
     if (r === 'insert') {
       const needsCore = recipe.needsRibbon && !vba.modules!.some((m) => m.name === RIBBON_HOLDER_MODULE_NAME);
-      if (needsCore) await invoke('vba.insert', { path: s.path, module: RIBBON_HOLDER_MODULE_NAME, code: RIBBON_HOLDER_MODULE, documentModule: false });
-      if (code) await invoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
-      if (inst.workbookVba) await invoke('vba.insert', { path: s.path, module: 'ThisWorkbook', code: inst.workbookVba, documentModule: true });
+      if (needsCore) await vbaInvoke('vba.insert', { path: s.path, module: RIBBON_HOLDER_MODULE_NAME, code: RIBBON_HOLDER_MODULE, documentModule: false });
+      if (code) await vbaInvoke('vba.insert', { path: s.path, module: app.settings.callbackModule, code, documentModule: false });
+      if (inst.workbookVba) await vbaInvoke('vba.insert', { path: s.path, module: 'ThisWorkbook', code: inst.workbookVba, documentModule: true });
       await vba.refresh();
-      return t('レシピ「{title}」をXMLとVBAに挿入しました{note}。Excelでブックを保存してください', { title: t(recipe.title), note: renamedNote });
+      return t('レシピ「{title}」を XML と VBA に挿入しました{note}。Excel でブックを保存してください', { title: t(recipe.title), note: renamedNote });
     }
   }
   // モジュールごとに分けて持つ（コピー失敗時の画面で、貼り付け先ごとに［コピー］を出すため）
@@ -212,7 +216,7 @@ export async function applyRecipe(recipe: Recipe): Promise<string> {
     showCode(modules);
     return t('レシピ「{title}」を挿入しました。VBA はコピーできなかったので、表示した内容を貼り付けてください', { title: t(recipe.title) });
   }
-  return t('レシピ「{title}」を挿入し、VBAをクリップボードにコピーしました{note}', { title: t(recipe.title), note: renamedNote });
+  return t('レシピ「{title}」を挿入し、VBA をクリップボードにコピーしました{note}', { title: t(recipe.title), note: renamedNote });
 }
 
 function samePathOf(el: Element, path: readonly number[]): boolean {
@@ -245,7 +249,7 @@ export async function saveAsRecipe(toast: Toast): Promise<void> {
     modal.close();
     toast(t('レシピ「{title}」を保存しました', { title: recipe.title }));
   };
-  const modal = openModal(t('レシピとして保存'), h('div', { class: 'settings' }, h('label', null, t('名前'), title), h('label', null, t('説明'), desc), h('p', { class: 'muted' }, t('選択中の <{tag}> と、使っているコールバックのVBAを保存します。', { tag: el.localName }))), {
+  const modal = openModal(t('レシピとして保存'), h('div', { class: 'settings' }, h('label', null, t('名前'), title), h('label', null, t('説明'), desc), h('p', { class: 'muted' }, t('選択中の <{tag}> と、使っているコールバックの VBA を保存します。', { tag: el.localName }))), {
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, t('キャンセル')), h('button', { type: 'button', class: 'primary', onclick: () => void save() }, t('保存'))],
   });
 }
