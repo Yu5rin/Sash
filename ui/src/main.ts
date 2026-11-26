@@ -4,9 +4,10 @@
 
 import './boot'; // 最初に評価される（想定外の例外の受け皿。後ろの import の評価中の失敗も拾うため）
 import './styles.css';
+import './styles-v3.css';
 import { app } from './app';
 import { invoke, isHosted, onHostEvent, sendDroppedFiles } from './bridge';
-import { insertStubs, setupRibbonHolder, vba } from './callbacks';
+import { assignableAttr, insertStubs, setupRibbonHolder, vba } from './callbacks';
 import { checkForUpdates, checkOnStartup, initUpdates, notifyUpdated } from './updates';
 import { openCatalog } from './dialogs/catalogDialog';
 import { openDiff } from './dialogs/diffDialog';
@@ -29,7 +30,7 @@ import { mountBottom, showBottomTab } from './views/bottom';
 import { getCanvasMode, mountCanvas, setCanvasGrowHandler, setCanvasMode, startRenameOf, type CanvasMode } from './views/canvas';
 import { setElementMenuHooks } from './views/contextMenu';
 import { mountHome } from './views/home';
-import { flushPendingEdits, mountInspector } from './views/inspector';
+import { flushPendingEdits, mountInspector, runAssignMacro } from './views/inspector';
 import { insertNearSelection, mountPalette, PALETTE_ITEMS } from './views/palette';
 import { filteredTreePaths, focusTreeFilter, mountTree } from './views/tree';
 import { openIdReplaceDialog } from './idReplaceDialog';
@@ -210,6 +211,14 @@ function iconDisabledHint(): string | undefined {
   return canMakeIcon() ? undefined : t('ボタンなど、アイコンを持てるコントロールを選ぶと使えます');
 }
 
+/** 既存のマクロを割り当てられない理由（割り当てられるなら null）。 */
+function assignMacroDisabledReason(): string | null {
+  const store = app.store;
+  if (!store?.selection) return t('ボタンなど、押したときに Sub を呼ぶコントロールを選ぶと使えます');
+  if (store.isMulti) return t('1 つだけ選ぶと使えます');
+  return assignableAttr(store.selectedElement) ? null : t('ボタンなど、押したときに Sub を呼ぶコントロールを選ぶと使えます');
+}
+
 /** 選択中の要素のコールバックのうち、VBE で表示できる最初のもの。 */
 function revealableCallback(): string | null {
   const store = app.store;
@@ -320,6 +329,7 @@ function commands(): AppCommand[] {
     { id: 'tools.replaceIds', group: G.tools, title: t('ID の一括置換…'), keywords: 'id rename replace prefix 置換', enabled: has, run: () => openIdReplaceDialog() },
     { id: 'tools.diff', group: G.tools, title: t('保存済みとの差分…'), keywords: 'diff compare', enabled: has, run: () => void openOnce('diff', openDiff) },
     { id: 'vba.refresh', group: 'VBA', title: t('VBA を再読み込みして照合'), keywords: 'callback vba', enabled: () => has() && app.info.excelInstalled && hasFile(), run: () => void vba.refresh() },
+    { id: 'vba.assign', group: 'VBA', title: t('既存のマクロを選んで割り当てる…'), keywords: 'assign macro button onaction existing マクロ 割り当て ボタン 呼び出し', enabled: () => has() && assignMacroDisabledReason() === null, run: () => { const el = app.store?.selectedElement ?? null; const attr = assignableAttr(el); if (el && attr) void runAssignMacro(el, attr); } },
     { id: 'vba.insert', group: 'VBA', title: t('未実装のコールバックをモジュールに挿入'), keywords: 'callback stub vba', enabled: () => has() && vba.canWrite, run: () => runAndNotify(insertStubs(vba.statuses())) },
     { id: 'vba.holder', group: 'VBA', title: t('onLoad と Invalidate の雛形を入れる'), keywords: 'ribbon invalidate onload', enabled: has, run: () => runAndNotify(setupRibbonHolder()) },
     { id: 'tools.icon', group: G.tools, title: t('選択中のコントロールのアイコンを作る…'), keywords: 'image icon png', enabled: canMakeIcon, run: () => openImageEditor() },
@@ -385,6 +395,7 @@ function disabledReasonFor(c: AppCommand): string | undefined {
     case 'insert.recipes': return has() ? t('XML に構文エラーがあるため、レシピは挿入できません。先に XML エディタで直してください') : t('ファイルを開くと使えます');
     case 'file.quit': return t('ブラウザで動かしているときは使えません');
     case 'view.fitExcel': return t('画面の幅を選び、Excel が見つかっているときに使えます');
+    case 'vba.assign': return has() ? assignMacroDisabledReason() ?? undefined : t('ファイルを開くと使えます');
     case 'vba.refresh': case 'vba.insert': return has() ? t('Excel で開いているブックで使えます') : t('ファイルを開くと使えます');
     default:
   }
@@ -664,6 +675,7 @@ const MENUS: MenuDef[] = [
       {
         label: 'VBA', mnemonic: 'V', items: () => [
           cmd('tools.runMacro', t('マクロを Excel で試す'), { mnemonic: 'M', hint: runMacroHint() }),
+          cmd('vba.assign', t('既存のマクロを割り当てる…'), { mnemonic: 'A', hint: has() ? assignMacroDisabledReason() ?? undefined : undefined }),
           cmd('vba.reveal', t('コールバックを VBE で表示'), { mnemonic: 'V' }),
           cmd('vba.refresh', t('VBA を読み直して照合'), { mnemonic: 'R', hint: app.session && !hasFile() ? t('サンプルは Excel で開かれていないため、VBA と照合できません') : undefined }),
           cmd('vba.insert', t('足りないコールバックを挿入'), { mnemonic: 'I' }),

@@ -22,6 +22,8 @@ export interface VbaProcedure {
   /** 宣言行の全文。 */
   declaration: string;
   isPrivate: boolean;
+  /** Sub か Function か（Function は戻り値があり、リボンのボタンに直接は割り当てられない）。 */
+  kind: 'sub' | 'function';
 }
 
 export type CallbackState = 'implemented' | 'missing' | 'mismatch' | 'unused';
@@ -75,16 +77,16 @@ export function parseProcedures(module: VbaModule): VbaProcedure[] {
     while (/\s_\s*$/.test(text) && i + 1 < lines.length) {
       text = text.replace(/\s_\s*$/, ' ') + lines[++i]!.trim();
     }
-    const m = new RegExp(String.raw`^\s*(?:(Public|Private|Friend)\s+)?(?:Static\s+)?(?:Sub|Function)\s+(${ID_WORD})\s*\((.*)\)`, 'iu').exec(stripComment(text));
+    const m = new RegExp(String.raw`^\s*(?:(Public|Private|Friend)\s+)?(?:Static\s+)?(Sub|Function)\s+(${ID_WORD})\s*\((.*)\)`, 'iu').exec(stripComment(text));
     if (m) {
-      out.push({ module: module.name, name: m[2]!, params: m[3]!.trim(), line: start + 1, declaration: lines[start]!, isPrivate: (m[1] ?? '').toLowerCase() === 'private' });
+      out.push({ module: module.name, name: m[3]!, params: m[4]!.trim(), line: start + 1, declaration: lines[start]!, isPrivate: (m[1] ?? '').toLowerCase() === 'private', kind: m[2]!.toLowerCase() === 'function' ? 'function' : 'sub' });
     }
   }
   return out;
 }
 
 /** 文字列の外にある ' 以降を取り除く。 */
-function stripComment(line: string): string {
+export function stripComment(line: string): string {
   let inString = false;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];

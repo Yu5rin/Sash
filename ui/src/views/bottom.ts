@@ -11,7 +11,7 @@ import { uiIcons } from '../icons';
 import { allElements, displayName, elementAt, pathOf, suggestId, type Path } from '../model';
 import { titleOf } from '../schema';
 import { focusField } from './inspector';
-import { insertStubs, setupRibbonHolder, vba } from '../callbacks';
+import { fixableMacroOf, fixWithWrapper, insertStubs, setupRibbonHolder, vba } from '../callbacks';
 import type { ImageEntry, PartStore } from '../store';
 import { t } from '../i18n';
 import { generateStub, type CallbackState, type CallbackStatus } from '../vba';
@@ -126,6 +126,18 @@ function renderCallbacks(store: PartStore, toast: (msg: string, kind?: ToastKind
                     copy(stubOf(x), t('{name} の雛形をコピーしました', { name: x.name }));
                   },
                 }, t('雛形をコピー'))
+              : null,
+            // onAction などに引数なしのマクロ名が直接書かれているとき、それを呼ぶ Sub を作って付け替える（§23.1）
+            x.state === 'mismatch' && vba.canWrite && fixableMacroOf(x)
+              ? h('button', {
+                  type: 'button',
+                  class: 'small primary cb-fix',
+                  title: t('「{name}」を呼ぶだけの Sub を作り、コールバックの名前をそれに付け替えます', { name: x.name }),
+                  onclick: (e: MouseEvent) => {
+                    e.stopPropagation();
+                    run(fixWithWrapper(x));
+                  },
+                }, t('呼び出し用の Sub を作る'))
               : null,
             x.state === 'missing' && vba.canWrite
               ? h('button', {

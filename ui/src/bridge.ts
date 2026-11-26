@@ -442,6 +442,13 @@ const mockMacroBusy = () => `${t('Excel でマクロを実行中です（Excel �
 /** 実行中に断る要求（ホストの MessageRouter.ThrowIfMacroRunning を呼ぶもの）。 */
 const MOCK_REFUSED_WHILE_MACRO: ReadonlySet<string> = new Set(['excel.apply', 'vba.read', 'vba.insert', 'vba.replaceLine', 'vba.reveal', 'excel.setWindowWidth', 'icons.prefetchStart']);
 
+/** ?excel のときの VBA のダミー（マクロを割り当てる画面の確認用）。 */
+const mockVbaModules: VbaModuleDto[] = [
+  { name: 'modMain', type: 1, code: ['Public Sub 集計()', 'End Sub', '', 'Public Sub データ出力()', 'End Sub', '', 'Private Sub 内部処理()', 'End Sub', '', 'Public Sub 期間を指定(ByVal 開始 As Date)', 'End Sub', '', 'Public Function 件数() As Long', 'End Function', ''].join('\r\n') },
+  { name: 'modUtil', type: 1, code: ['Public Sub 集計()', 'End Sub', '', 'Public Sub 書式を整える()', 'End Sub', ''].join('\r\n') },
+  { name: 'Sheet1', type: 100, code: ['Public Sub シートを更新()', 'End Sub', ''].join('\r\n') },
+];
+
 const mock = {
   settings: { theme: 'system', xmlOnTop: false, iconSize: 32, ribbonErrorsHintShown: false, callbackPattern: 'Ribbon_{id}_{attr}', callbackShared: false, callbackSharedPattern: 'Ribbon_{attr}', callbackModule: 'modRibbon', language: lang, iconLibraryPath: t('(ブラウザ実行中)'), updateCheckOnStartup: false, updateSource: '' } as Settings,
   invoke<K extends keyof HostApi>(type: K, payload: unknown): Promise<HostApi[K]['res']> {
@@ -512,7 +519,10 @@ const mock = {
       case 'library.list':
         return r({ root: t('(ブラウザ実行中)'), icons: [] });
       case 'vba.read':
-        return r({ status: 'noExcel', modules: [] });
+        // ?excel を付けると、Excel で開いているブックの VBA（引数なしの Sub・Private・引数あり・Function・シートのもの）があるものとして動かせる
+        return r(mockExcel ? { status: 'ok', modules: mockVbaModules } : { status: 'noExcel', modules: [] });
+      case 'vba.insert':
+        return r(true);
       case 'backup.restore':
         return r({ backup: null });
       case 'excel.setWindowWidth': {

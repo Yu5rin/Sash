@@ -1,0 +1,21 @@
+/* 0.3.0 で足した画面の見た目（仕様書 §23）。トークンは styles.css の冒頭の一覧に従う。 */
+
+/* ---- マクロを割り当てる（§23.1） ---- */
+.macro-dialog { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; }
+.macro-search { width: 100%; }
+.macro-name { width: 100%; font-family: var(--font-mono); }
+.macro-list { display: flex; flex-direction: column; gap: var(--sp-2); overflow: auto; max-height: 360px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-1); }
+.macro-module h3 { margin: 0; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-xs); font-weight: 600; color: var(--text-subtle); }
+.macro-row { display: flex; align-items: baseline; justify-content: flex-start; gap: var(--sp-3); width: 100%; min-height: var(--ctl-h); padding: 2px var(--sp-2); border: none; border-radius: var(--radius-sm); background: none; color: var(--text); text-align: left; cursor: pointer; }
+.macro-row:hover { background: var(--hover-bg); }
+.macro-row.selected { background: var(--sel-bg); box-shadow: inset 2px 0 0 var(--sel-border); }
+.macro-row.disabled { color: var(--text-disabled); cursor: default; }
+.macro-row.disabled:hover { background: none; }
+.macro-row:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.macro-reason { font-size: var(--fs-xs); white-space: normal; }
+.insp-inline .macro-pick { flex: none; }
+.cb-fix { flex: none; }
+@media (forced-colors: active) {
+  .macro-row.selected { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+.insp-macro { margin-top: var(--sp-1); }
