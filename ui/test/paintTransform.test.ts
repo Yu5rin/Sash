@@ -1,0 +1,146 @@
+import { describe, expect, it } from 'vitest';
+import { createPixels, setPixel } from '../src/icon/paint/pixels';
+import { downsampleBox, fitWithin, recoverFromSource, sourceScale, upscaleNearest } from '../src/icon/paint/transform';
+import { isNewerPaintMeta, readPaintMeta, withPaintMeta, withoutPaintMeta } from '../src/icon/paint/doc';
+import { COLORS, fromTable, toTable } from './helpers/paintTable';
+
+describe('整数倍の拡大と、その逆', () => {
+  it('最近傍で拡大し、ブロックがそろっていれば元に戻る', () => {
+    const px = fromTable(['r.', '.b']);
+    const up = upscaleNearest(px, 2);
+    expect(toTable(up)).toEqual(['rr..', 'rr..', '..bb', '..bb']);
+    expect(toTable(recoverFromSource(up, 2)!)).toEqual(['r.', '.b']);
+    expect(toTable(recoverFromSource(upscaleNearest(px, 4), 2)!)).toEqual(['r.', '.b']);
+    expect(toTable(recoverFromSource(px, 2)!)).toEqual(['r.', '.b']);
+  });
+  it('半透明を含む乱数の絵が往復で一致する（16・32・64、倍率 1・2・4）', () => {
+    let seed = 12345;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    for (const canvas of [16, 32, 64]) {
+      const px = createPixels(canvas, canvas);
+      for (let y = 0; y < canvas; y++) for (let x = 0; x < canvas; x++) setPixel(px, x, y, { r: Math.floor(rnd() * 256), g: Math.floor(rnd() * 256), b: Math.floor(rnd() * 256), a: [0, 255, 128, 17][Math.floor(rnd() * 4)]! });
+      for (const k of [1, 2, 4]) {
+        const back = recoverFromSource(upscaleNearest(px, k), canvas)!;
+        expect(back.data).toEqual(px.data);
+      }
+    }
+  });
+  it('ブロックがそろわない・正方形でない・倍率が 1・2・4 でないときは null', () => {
+    const up = upscaleNearest(fromTable(['r.', '.b']), 2);
+    up.data.set([1, 2, 3, 255], 0);
+    expect(recoverFromSource(up, 2)).toBeNull();
+    expect(recoverFromSource(createPixels(4, 2), 2)).toBeNull();
+    expect(recoverFromSource(createPixels(24, 24), 8)).toBeNull(); // 3 倍
+    expect(recoverFromSource(createPixels(10, 10), 3)).toBeNull();
+    expect(recoverFromSource(createPixels(32, 32), 4)).toBeNull(); // 8 倍
+  });
+  it('出力より小さいキャンバスだけ拡大する倍率', () => {
+    expect(sourceScale(16, 32)).toBe(2);
+    expect(sourceScale(16, 64)).toBe(4);
+    expect(sourceScale(32, 32)).toBe(1);
+    expect(sourceScale(32, 64)).toBe(2);
+    expect(sourceScale(64, 32)).toBe(1);
+  });
+});
+
+describe('縮小（貼り付けの収め方）', () => {
+  it('面積平均で縮める', () => {
+    const px = fromTable(['#w', 'w#']);
+    const d = downsampleBox(px, 1, 1);
+    expect([...d.data]).toEqual([128, 128, 128, 255]);
+  });
+  it('透明な画素は色を混ぜない', () => {
+    const px = fromTable(['r.', '..']);
+    const d = downsampleBox(px, 1, 1);
+    expect([...d.data]).toEqual([255, 0, 0, 64]);
+  });
+  it('収まっていればそのまま、大きければ縦横の比を保って収める', () => {
+    const small = createPixels(3, 2);
+    expect(fitWithin(small, 4)).toBe(small);
+    const big = createPixels(8, 4);
+    const f = fitWithin(big, 4);
+    expect([f.width, f.height]).toEqual([4, 2]);
+  });
+});
+
+describe('保存形式（options.paint）', () => {
+  it('正しい形だけを読む', () => {
+    expect(readPaintMeta({ paint: { v: 1, canvas: 16 } }, 32, 32)).toEqual({ v: 1, canvas: 16 });
+    expect(readPaintMeta({ paint: { v: 1, canvas: 32 } }, 32, 32)).toEqual({ v: 1, canvas: 32 });
+    expect(readPaintMeta({ paint: { v: 1, canvas: 16 } }, 64, 64)).toEqual({ v: 1, canvas: 16 });
+  });
+  it('v が違う・キャンバスの値が変・倍率が合わない・正方形でないものは null（共有フォルダの値は信用しない）', () => {
+    expect(readPaintMeta({ paint: { v: 2, canvas: 16 } }, 32, 32)).toBeNull();
+    expect(readPaintMeta({ paint: { v: 0, canvas: 16 } }, 32, 32)).toBeNull();
+    expect(readPaintMeta({ paint: { v: 1, canvas: 24 } }, 48, 48)).toBeNull();
+    expect(readPaintMeta({ paint: { v: 1, canvas: '16' } }, 32, 32)).toBeNull();
+    expect(readPaintMeta({ paint: { v: 1, canvas: 16 } }, 48, 48)).toBeNull(); // 3 倍
+    expect(readPaintMeta({ paint: { v: 1, canvas: 16 } }, 32, 16)).toBeNull();
+    expect(readPaintMeta({ paint: { v: 1, canvas: 64 } }, 32, 32)).toBeNull(); // 縮小は戻せない
+    expect(readPaintMeta({ paint: null }, 32, 32)).toBeNull();
+    expect(readPaintMeta({ paint: [1] }, 32, 32)).toBeNull();
+    expect(readPaintMeta({}, 32, 32)).toBeNull();
+    expect(readPaintMeta(null, 32, 32)).toBeNull();
+    expect(readPaintMeta('x', 32, 32)).toBeNull();
+  });
+  it('もっと新しい版の形式を見分ける', () => {
+    expect(isNewerPaintMeta({ paint: { v: 2, canvas: 16 } })).toBe(true);
+    expect(isNewerPaintMeta({ paint: { v: 1, canvas: 16 } })).toBe(false);
+    expect(isNewerPaintMeta({})).toBe(false);
+  });
+  it('足す・外すは、元のオブジェクトを変えず、ほかの鍵を残す', () => {
+    const o = { size: 32, padding: 0 };
+    const w = withPaintMeta(o, 16);
+    expect(w).toEqual({ size: 32, padding: 0, paint: { v: 1, canvas: 16 } });
+    expect(o).toEqual({ size: 32, padding: 0 });
+    expect(withoutPaintMeta(w)).toEqual({ size: 32, padding: 0 });
+    expect(COLORS['.']).toBeTruthy();
+  });
+});
+
+import { flipMask, flipPixels, resizeSquare, rotateMask, rotatePixels, trimToCenter } from '../src/icon/paint/transform';
+
+describe('反転・回転・大きさの変更（第 2 段階）', () => {
+  const px = fromTable(['rb.', 'g..']);
+  it('反転は 2 回で元に戻る。回転は 4 回で元に戻り、cw と ccw は逆', () => {
+    expect(toTable(flipPixels(px, 'h'))).toEqual(['.br', '..g']);
+    expect(toTable(flipPixels(px, 'v'))).toEqual(['g..', 'rb.']);
+    expect(toTable(flipPixels(flipPixels(px, 'h'), 'h'))).toEqual(toTable(px));
+    expect(toTable(rotatePixels(px, 'cw'))).toEqual(['gr', '.b', '..']);
+    expect(toTable(rotatePixels(px, 'ccw'))).toEqual(['..', 'b.', 'rg']);
+    let r = px;
+    for (let i = 0; i < 4; i++) r = rotatePixels(r, 'cw');
+    expect(toTable(r)).toEqual(toTable(px));
+    expect(toTable(rotatePixels(rotatePixels(px, 'cw'), 'ccw'))).toEqual(toTable(px));
+  });
+  it('マスクも同じ向きに変形する', () => {
+    const m = Uint8Array.from([255, 0, 0, 0, 0, 0]);
+    expect([...flipMask(m, 3, 2, 'h')]).toEqual([0, 0, 255, 0, 0, 0]);
+    expect([...rotateMask(m, 3, 2, 'cw')]).toEqual([0, 255, 0, 0, 0, 0]);
+  });
+  it('最近傍の拡大・縮小（ドットを保つ）', () => {
+    const small = fromTable(['rb', 'g.']);
+    expect(toTable(resizeSquare(small, 4, 'nearest'))).toEqual(['rrbb', 'rrbb', 'gg..', 'gg..']);
+    expect(toTable(resizeSquare(resizeSquare(small, 4, 'nearest'), 2, 'nearest'))).toEqual(['rb', 'g.']);
+  });
+  it('なめらかな縮小は面積平均、拡大は双一次（真ん中が混ざり、色の端は保つ）', () => {
+    const four = fromTable(['#w', 'w#']);
+    expect([...resizeSquare(four, 1, 'smooth').data]).toEqual([128, 128, 128, 255]);
+    const two = fromTable(['#w', '#w']);
+    const big = resizeSquare(two, 4, 'smooth');
+    expect(big.width).toBe(4);
+    expect(big.data[0]).toBe(0);
+    expect(big.data[3 * 4]).toBe(255);
+    expect(big.data[1 * 4]).toBeGreaterThan(0);
+    expect(big.data[1 * 4]).toBeLessThan(255);
+  });
+  it('同じ大きさなら複製', () => {
+    const a = resizeSquare(px, 2, 'smooth');
+    expect(a.width).toBe(2);
+  });
+  it('余白のカット：不透明な部分の囲みを、同じ大きさの中央へ寄せる。何もなければそのまま', () => {
+    const p = fromTable(['rr..', 'rr..', '....', '....']);
+    expect(toTable(trimToCenter(p))).toEqual(['....', '.rr.', '.rr.', '....']);
+    expect(toTable(trimToCenter(createPixels(2, 2)))).toEqual(['..', '..']);
+  });
+});

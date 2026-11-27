@@ -1,0 +1,99 @@
+/* ペイント画面（描いて編集）。色・大きさ・角丸はアプリのトークンだけを使う（SPEC §22.7）。市松模様とグリッド・選択の点線は canvas の中で描く。 */
+
+.paint-editor { display: flex; flex-direction: column; gap: var(--sp-2); height: 100%; min-height: 0; }
+.paint-top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); min-height: var(--ctl-h-xl); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--border); }
+.paint-group { display: flex; align-items: center; gap: var(--sp-1); }
+.paint-group .icon-button { min-width: var(--ctl-h); min-height: var(--ctl-h); font-size: var(--fs-md); }
+.paint-group select { min-width: 64px; }
+.paint-info { margin-left: auto; white-space: nowrap; }
+.paint-settings { display: flex; align-items: center; gap: var(--sp-3); }
+.paint-settings[hidden] { display: none; }
+.paint-settings label { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); }
+.paint-settings input[type="range"] { width: 120px; }
+.paint-tol-value { min-width: 28px; text-align: right; font-size: var(--fs-xs); color: var(--text-subtle); }
+
+.paint-main { display: grid; grid-template-columns: 84px minmax(0, 1fr) 300px; gap: var(--sp-3); flex: 1; min-height: 0; }
+
+.paint-tools { display: grid; grid-template-columns: repeat(2, 38px); grid-auto-rows: 38px; gap: var(--sp-1); align-content: start; }
+.paint-tools button.paint-tool { width: 38px; height: 38px; min-width: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; border-color: transparent; }
+.paint-tools button.paint-tool[aria-pressed="true"] { background: var(--sel-bg); border-color: var(--sel-border); color: var(--select); }
+.paint-tools button.paint-tool:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+
+.paint-stage-wrap { position: relative; min-width: 0; min-height: 0; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.paint-stage { position: absolute; inset: 0; cursor: crosshair; touch-action: none; outline: none; user-select: none; }
+.paint-stage:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.paint-stage.space, .paint-stage.can-pan[data-tool="select"]:active { cursor: grab; }
+.paint-stage.panning { cursor: grabbing; }
+.paint-canvas { display: block; }
+
+.paint-guide { position: absolute; top: var(--sp-2); left: var(--sp-2); max-width: 340px; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); font-size: var(--fs-sm); line-height: 1.6; }
+.paint-guide p { margin: 0; }
+/* 手引きの下の画素も押せるように、枠はポインタを通す（［わかった］だけ押せる） */
+.paint-guide { pointer-events: none; }
+.paint-guide button { pointer-events: auto; }
+
+.paint-side { min-height: 0; padding-right: var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2); }
+.paint-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); flex: none; }
+.paint-tab { flex: 1; min-width: 0; padding: 0 var(--sp-1); border-color: transparent; border-bottom: 2px solid transparent; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-sm); }
+.paint-tab[aria-selected="true"] { border-bottom-color: var(--select); color: var(--select); font-weight: 600; }
+.paint-tab:focus-visible { outline: var(--focus-ring); outline-offset: -2px; }
+.paint-tabbody { flex: 1; min-height: 0; overflow-y: auto; }
+.paint-tabpanel { display: flex; flex-direction: column; gap: var(--sp-2); }
+.paint-tabpanel[hidden] { display: none; }
+.paint-preview-section { flex: none; }
+.paint-scope { margin: 0; }
+.paint-section { display: flex; flex-direction: column; gap: var(--sp-2); }
+.paint-section h3 { margin: 0; padding: 0 0 var(--sp-1); font-size: var(--fs-xs); font-weight: 600; color: var(--text-subtle); border-bottom: 1px solid var(--border); }
+.paint-colors { display: flex; align-items: center; gap: var(--sp-3); }
+.paint-swatch-pair { position: relative; width: 60px; height: 52px; flex: none; }
+.paint-swatch { position: absolute; width: 34px; height: 34px; min-width: 0; min-height: 0; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
+.paint-swatch[data-which="primary"] { left: 0; top: 0; z-index: 1; }
+.paint-swatch[data-which="secondary"] { right: 0; bottom: 0; }
+.paint-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--select); }
+.paint-swatch:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.paint-swatch-fill { display: block; width: 100%; height: 100%; border-radius: var(--radius-xs); }
+.paint-swatch-fill.transparent { background: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface) 0 50%) 0 0 / 8px 8px; }
+.paint-color-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+/* パレットの印の凡例は、縦に余裕がないので出さない（印そのものは、色のツールチップと下のメモで分かる） */
+.paint-side .cp-legend { display: none; }
+.paint-previews .icon-preview { width: 68px; height: 60px; padding: 6px; }
+.paint-note { margin: 0; color: var(--warning-text); line-height: 1.5; }
+.paint-note[hidden] { display: none; }
+
+.paint-status { display: flex; align-items: center; gap: var(--sp-3); flex: 1; min-width: 0; }
+.modal footer .paint-status .icon-button { min-width: var(--ctl-h); }
+.paint-coords { min-width: 150px; white-space: nowrap; }
+.paint-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.paint-slider { display: grid; grid-template-columns: 52px minmax(0, 1fr) 54px; align-items: center; gap: var(--sp-2); font-size: var(--fs-xs); }
+.paint-slider-label { color: var(--text-subtle); font-size: var(--fs-xs); }
+.paint-num { width: 54px; min-width: 0; text-align: right; }
+.paint-replace-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); }
+.paint-replace-row .paint-slider-label { width: 52px; }
+.paint-color-field { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.paint-mini-swatch { width: 16px; height: 16px; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); background: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface) 0 50%) 0 0 / 8px 8px; }
+.paint-hex { width: 84px; font-family: var(--font-mono); }
+.paint-actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.paint-used { display: grid; grid-template-columns: repeat(8, 22px); gap: 4px; }
+.paint-used-hint { margin: 0; }
+.paint-used > span { grid-column: 1 / -1; }
+.paint-adjust .paint-section { gap: var(--sp-1); }
+.paint-adjust .paint-section h3 { margin-top: var(--sp-1); }
+.modal footer .paint-used button, .paint-used button.paint-used-swatch { width: 22px; height: 22px; min-width: 0; min-height: 0; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.paint-used button.paint-used-swatch:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+.paint-tool-settings-inner { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-4); }
+.paint-shape-fill select { min-width: 96px; }
+.paint-stage.picking { cursor: copy; box-shadow: inset 0 0 0 2px var(--select); }
+
+.paint-help { border-collapse: collapse; font-size: var(--fs-sm); }
+.paint-help th { text-align: left; white-space: nowrap; padding: var(--sp-1) var(--sp-3) var(--sp-1) 0; font-weight: 400; vertical-align: top; }
+.paint-help td { padding: var(--sp-1) 0; color: var(--text-subtle); }
+
+@media (forced-colors: active) {
+  .paint-tools button.paint-tool[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .paint-swatch[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: 2px; }
+}
+.paint-gray-hint { margin: 0; }
+.paint-more > summary { cursor: pointer; padding: var(--sp-1) 0; font-size: var(--fs-xs); font-weight: 600; color: var(--text-subtle); border-bottom: 1px solid var(--border); }
+.paint-more > summary:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.paint-more[open] > summary { margin-bottom: var(--sp-1); }

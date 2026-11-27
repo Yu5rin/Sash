@@ -509,6 +509,8 @@ button.home-drop-note.link:hover { color: var(--text); text-decoration: underlin
 .diff-layout { margin-left: auto; }
 .modal.size-lg, .modal.wide { width: min(920px, 100%); height: min(660px, calc(100vh - 48px)); }
 .modal.wide.tall { height: min(720px, calc(100vh - 32px)); }
+.modal.size-xl { width: min(1320px, 100%); height: min(760px, calc(100vh - 32px)); max-height: none; }
+.modal.size-xl .modal-body { padding: var(--sp-1) var(--sp-4) var(--sp-2); overflow: hidden; }
 .modal.diff-modal { width: min(1200px, calc(100vw - 48px)); }
 .diff-layout[hidden] { display: none; }
 .modal header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-4) var(--sp-3) var(--sp-2) var(--sp-5); }
@@ -875,6 +877,8 @@ button.home-drop-note.link:hover { color: var(--text); text-decoration: underlin
 .icon-right { overflow: auto; padding-right: 4px; }
 .icon-sources { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
 .icon-sources button { width: 100%; min-height: var(--ctl-h-lg); padding: 0 var(--sp-2); }
+.icon-paint-edit { align-self: stretch; }
+.icon-paint-edit[hidden] { display: none; }
 .icon-options { gap: 4px; }
 .icon-opt-section { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0 0 var(--sp-2); }
 .icon-opt-section h4 { margin: var(--sp-4) 0 0; padding: 0 0 var(--sp-1); font-size: var(--fs-xs); font-weight: 600; color: var(--text-subtle); border-bottom: 1px solid var(--border); }
