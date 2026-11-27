@@ -607,6 +607,8 @@ export class PaintSession {
       this.doc.pixels = resizeSquare(this.doc.pixels, size, mode);
       this.doc.size = size;
       this.doc.selection = null;
+      // 大きさが変わったら、前回のカーソルの位置は対応しない。次に出すときは中央から
+      this.lastCursor = null;
     });
   }
 

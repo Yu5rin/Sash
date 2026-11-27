@@ -717,3 +717,17 @@ describe('浮いた選択を押して離すだけ（動かさない）では、�
     expect(s.doc.floating).toMatchObject({ x: 0, y: 0 });
   });
 });
+
+describe('キャンバスの大きさを変えたあとのカーソル', () => {
+  it('カーソルは消え、次に出すときは、前回の位置ではなく新しい絵の中央から', () => {
+    const s = fresh();
+    s.key(key('ArrowLeft')); // (7,8)
+    expect(s.cursor).toEqual({ x: 7, y: 8 });
+    s.resizeCanvas(32, 'nearest');
+    expect(s.cursor).toBeNull();
+    s.key(key(' '));
+    s.keyUp(' ');
+    expect(s.cursor).toEqual({ x: 16, y: 16 });
+    expect(s.history.count).toBe(1); // 大きさの変更だけ（カーソルを出しただけで描かない）
+  });
+});

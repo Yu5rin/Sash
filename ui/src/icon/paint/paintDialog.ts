@@ -150,6 +150,20 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   let spacePending = false;
   /** Space を押した時点の Shift（離したときに、前の点から直線にするため）。 */
   let spaceShift = false;
+  /** Space を押した時点で、カーソルが出ていたか（出ていなければ、Space を押しながらの矢印では描き始めない）。 */
+  let spaceHadCursor = false;
+  let lastCursorKey = '';
+  /** 検査用：カーソルが表示の範囲内に見えているかを、属性に出す（パン・拡大のあとも更新する）。 */
+  const syncCursorAttr = () => {
+    stage.dataset['cursorVisible'] = session.cursor ? String(view.isVisible(session.cursor)) : '';
+  };
+  /** カーソルが出ているのに、表示の外にあるか。そうなら、表示をカーソルへ寄せて true を返す（そのキーでは描かない）。 */
+  const cursorOffscreen = (): boolean => {
+    if (!session.cursor || view.isVisible(session.cursor)) return false;
+    view.ensureVisible(session.cursor);
+    syncCursorAttr();
+    return true;
+  };
   let panning: { x: number; y: number } | null = null;
   /** ドラッグを始めたポインタの情報（ボタン・消しゴム側）。 */
   let active: { id: number; button: 0 | 2; eraser: boolean } | null = null;
@@ -391,6 +405,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     zoomOut.toggleAttribute('disabled', view.zoom <= ZOOMS[0]);
     zoomIn.toggleAttribute('disabled', view.zoom >= ZOOMS[ZOOMS.length - 1]!);
     stage.classList.toggle('can-pan', view.canPan);
+    syncCursorAttr();
   }
 
   function schedulePreview(): void {
@@ -464,6 +479,11 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     view.hoverCells = session.hoverCells;
     // 画面のカーソルは、セッションのカーソルそのもの（食い違わない）。検査のために、描いている位置を属性にも出す
     view.cursor = session.cursor;
+    // カーソルを動かした・出したときは、カーソルが見えるように表示を動かす（画面の外のカーソルで描かないため）
+    const ck = session.cursor ? `${session.cursor.x},${session.cursor.y}` : '';
+    if (session.cursor && ck !== lastCursorKey) view.ensureVisible(session.cursor);
+    lastCursorKey = ck;
+    syncCursorAttr();
     stage.dataset['cursor'] = session.cursor ? `${session.cursor.x},${session.cursor.y}` : '';
     stage.dataset['tool'] = session.tool;
     syncColors();
@@ -604,6 +624,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (e.ctrlKey) view.setZoom(stepZoom(view.zoom, e.deltaY < 0 ? 1 : -1), e);
     else if (e.shiftKey) view.panBy(-e.deltaY, 0);
     else view.panBy(0, -e.deltaY);
+    syncCursorAttr();
   }, { passive: false });
 
   // ---- キー（root で受ける。dialog には付けない） ----
@@ -640,6 +661,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       if (!e.repeat) {
         spacePending = true;
         spaceShift = e.shiftKey;
+        spaceHadCursor = session.cursor !== null;
       }
       // カーソルを出していて、矢印で動かしながら押しているときは、押した位置から描き始める（下の矢印の処理で始める）
       return;
@@ -666,9 +688,16 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       return;
     }
     // Space を押しながら矢印でカーソルを動かすときは、押した位置から描き始める
-    if (spacePending && session.cursor !== null && e.key.startsWith('Arrow')) {
+    // Space を押したまま矢印：カーソルが出ていなかったなら、矢印は動かすだけ（離したときにも描かない）
+    if (spacePending && !spaceHadCursor && e.key.startsWith('Arrow')) spacePending = false;
+    if (spacePending && spaceHadCursor && session.cursor !== null && e.key.startsWith('Arrow')) {
       spacePending = false;
-      session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false });
+      if (!cursorOffscreen()) session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false });
+    }
+    // カーソルが画面の外（パン・拡大で見えなくなった）なら、Enter では描かず、表示をカーソルへ寄せるだけにする
+    if (e.key === 'Enter' && !mod && !session.doc.floating && cursorOffscreen()) {
+      e.preventDefault();
+      return;
     }
     const handled = session.key({ key: e.key, ctrl: mod, shift: e.shiftKey, alt: e.altKey, repeat: e.repeat });
     // カーソルを出すのは、キーボードのカーソルが実際に動いたり使われたとき（選択範囲を矢印で動かしただけ・浮いた選択を Enter で確定しただけでは出さない）
@@ -686,7 +715,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       // Space だけを押して離した：カーソルを出していれば、その位置に 1 点（ツールを 1 回使う）
       spacePending = false;
       // カーソルが出ていなければ、カーソルを出すだけ（見えない場所には描かない）。出ていれば、その位置で使う
-      if (stage === document.activeElement) {
+      if (stage === document.activeElement && !cursorOffscreen()) {
         session.key({ key: ' ', ctrl: false, shift: spaceShift, alt: false });
         session.keyUp(' ');
       }

@@ -945,6 +945,70 @@ console.log('== 14. キーボードのカーソルは 1 つの状態：見えな
   await ctx.close();
 }
 
+// ---------------------------------------------------------------------------------------------
+console.log('== 15. Space を押したままの矢印・画面の外のカーソル・大きさを変えたあとのカーソル');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { localStorage.setItem('sash.paint.guide', '1'); window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 32);
+  const stage = page.locator('.paint-stage');
+  const cur = () => stage.getAttribute('data-cursor');
+  const vis = () => stage.getAttribute('data-cursor-visible');
+  await stage.focus();
+  // カーソルが出ていない状態で、Space を押したまま → → →：描かない（カーソルが出るだけ）
+  await page.keyboard.down(' ');
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+  await page.keyboard.up(' ');
+  check('カーソルが出ていない Space＋矢印では、描かない（Enter と同じ）', await page.locator('.paint-undo').isDisabled() && (await cur()) !== '');
+  // 32 倍に拡大して、カーソルを (0,0) まで動かす：表示がカーソルに追随して、見えている
+  await page.locator('.paint-zoom').selectOption('32');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Control+Shift+ArrowLeft');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Control+Shift+ArrowUp');
+  check('32 倍で (0,0) まで動かしても、カーソルは表示の範囲内', (await cur()) === '0,0' && (await vis()) === 'true', `${await cur()} ${await vis()}`);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  check('見えているカーソルの位置 (0,0) に描かれる（Enter 2 回目）', !(await page.locator('.paint-undo').isDisabled()));
+  // ホイールでパンして、カーソルが画面の外へ出た：Space では描かず、表示をカーソルへ寄せるだけ
+  await stage.hover();
+  await page.mouse.wheel(0, 3000);
+  await page.keyboard.press('Control+ArrowRight');
+  await page.keyboard.press('Control+ArrowLeft');
+  await stage.hover();
+  await page.mouse.wheel(0, 3000);
+  await page.mouse.wheel(0, 3000);
+  await page.keyboard.press('Control+ArrowRight');
+  await page.keyboard.press('Control+ArrowLeft'); // カーソルを出す（位置は表示内に寄る）
+  await stage.hover();
+  await page.mouse.wheel(0, 3000);
+  await page.mouse.wheel(0, 3000);
+  // hover でカーソルが消えるので、出し直してからパンで外へ
+  await stage.focus();
+  await page.keyboard.press('Control+ArrowRight');
+  await page.evaluate(() => document.querySelector('.paint-stage').dispatchEvent(new WheelEvent('wheel', { deltaY: 3000, bubbles: true, cancelable: true })));
+  const away = await vis();
+  check('パンで、カーソルが画面の外へ出る（検査の前提）', away === 'false', String(away));
+  await page.keyboard.press(' ');
+  check('画面の外のカーソルでの Space は、描かず、表示をカーソルへ寄せる', (await vis()) === 'true');
+  await page.keyboard.press('Control+z');
+  check('描かれたのは、最初の 1 回だけ（元に戻すで履歴が空になる）', await page.locator('.paint-undo').isDisabled());
+  // 大きさを変える（32 → 64）：カーソルは消え、次に出す位置は中央
+  await page.keyboard.press('Control+ArrowLeft');
+  await page.locator('#paint-tab-image').click();
+  await page.locator('.paint-image select').first().selectOption('64');
+  await page.locator('.paint-image button:has-text("大きさを変える"), .paint-image button:has-text("Resize")').click();
+  await page.waitForTimeout(200);
+  check('大きさを変えると、カーソルが消える', (await cur()) === '');
+  await stage.focus();
+  await page.keyboard.press(' ');
+  check('次に出すカーソルは、新しい絵の中央（32,32）', (await cur()) === '32,32', String(await cur()));
+  await ctx.close();
+}
+
 await browser.close();
 console.log(failures === 0 ? '\n全部 OK' : `\n失敗 ${failures} 件`);
 process.exit(failures === 0 ? 0 : 1);

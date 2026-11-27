@@ -149,6 +149,27 @@ export class PaintView {
     this.render();
   }
 
+  /** 画素 (x, y) の全体が、表示の枠の中に見えているか。 */
+  isVisible(p: { x: number; y: number }): boolean {
+    const o = this.origin;
+    const z = this.zoom;
+    const left = o.x + p.x * z;
+    const top = o.y + p.y * z;
+    return left >= 0 && top >= 0 && left + z <= this.viewW && top + z <= this.viewH;
+  }
+
+  /** 画素 (x, y) が見えるように、表示を動かす（見えていれば何もしない）。キーボードのカーソルが、画面の外へ出ないようにする。 */
+  ensureVisible(p: { x: number; y: number }): void {
+    if (this.isVisible(p)) return;
+    const o = this.origin;
+    const z = this.zoom;
+    const left = o.x + p.x * z;
+    const top = o.y + p.y * z;
+    const dx = left < 0 ? -left : left + z > this.viewW ? this.viewW - (left + z) : 0;
+    const dy = top < 0 ? -top : top + z > this.viewH ? this.viewH - (top + z) : 0;
+    this.panBy(dx, dy);
+  }
+
   /** 絵が枠より大きく、動かせるか。 */
   get canPan(): boolean {
     const len = this.getDoc().size * this.zoom;
