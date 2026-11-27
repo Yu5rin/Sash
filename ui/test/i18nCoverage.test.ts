@@ -18,6 +18,7 @@ const FILES = [
   // 0.4.0：アイコンのペイント機能（SPEC §25）
   '../src/icon/paint/paintDialog.ts',
   '../src/icon/paint/session.ts',
+  '../src/icon/paint/paintPanels.ts',
 ];
 
 // ペイント画面の英語の訳は、画面の塊を読み込んだときに足される（起動時の辞書に入れない）。その経路のまま確かめる

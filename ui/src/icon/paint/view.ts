@@ -2,7 +2,8 @@
 // 絵の処理そのものは持たない（DOM と canvas だけ）。拡大は整数倍だけ。
 
 import { brushOffsets, type Brush } from './raster';
-import { flatten, type PaintDoc } from './doc';
+import type { PaintDoc } from './doc';
+import type { Pixels } from './pixels';
 
 /** 選べる拡大率（整数倍だけ。ドットがにじまない）。 */
 export const ZOOMS = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32] as const;
@@ -50,6 +51,8 @@ export class PaintView {
   /** 筆先の枠を出す画素（ポインタが絵の上にあるとき）。 */
   hover: { x: number; y: number } | null = null;
   hoverBrush: Brush | null = null;
+  /** キーボードのカーソルの画素（矢印で動かしているとき）。 */
+  cursor: { x: number; y: number } | null = null;
   private panX = 0;
   private panY = 0;
   private dpr = 1;
@@ -61,7 +64,7 @@ export class PaintView {
   private timer = 0;
   private raf = 0;
 
-  constructor(private readonly stage: HTMLElement, private readonly getDoc: () => PaintDoc, private readonly onResize: () => void = () => undefined) {
+  constructor(private readonly stage: HTMLElement, private readonly getDoc: () => PaintDoc, private readonly getPixels: () => Pixels, private readonly onResize: () => void = () => undefined) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'paint-canvas';
     stage.append(this.canvas);
@@ -209,7 +212,7 @@ export class PaintView {
     ctx.restore();
 
     // 絵（拡大してもにじまない）
-    const px = flatten(doc);
+    const px = this.getPixels();
     this.off.width = px.width;
     this.off.height = px.height;
     this.off.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(px.data), px.width, px.height), 0, 0);
@@ -218,7 +221,8 @@ export class PaintView {
 
     if (this.gridOn && this.zoom >= 6) this.drawGrid(ctx, o, doc.size);
     if (doc.selection) this.drawSelection(ctx, o, doc);
-    if (this.hover && this.hoverBrush) this.drawHover(ctx, o);
+    if (this.hover && this.hoverBrush) this.drawHover(ctx, o, this.hover, false);
+    if (this.cursor) this.drawHover(ctx, o, this.cursor, true);
   }
 
   private drawGrid(ctx: CanvasRenderingContext2D, o: { x: number; y: number }, size: number): void {
@@ -270,14 +274,15 @@ export class PaintView {
     ctx.restore();
   }
 
-  private drawHover(ctx: CanvasRenderingContext2D, o: { x: number; y: number }): void {
+  private drawHover(ctx: CanvasRenderingContext2D, o: { x: number; y: number }, at: { x: number; y: number }, dashed: boolean): void {
     const size = this.getDoc().size;
     const z = this.zoom;
     ctx.save();
     ctx.lineWidth = 1;
-    for (const [dx, dy] of brushOffsets(this.hoverBrush!)) {
-      const x = this.hover!.x + dx;
-      const y = this.hover!.y + dy;
+    if (dashed) ctx.setLineDash([3, 2]);
+    for (const [dx, dy] of brushOffsets(this.hoverBrush ?? { size: 1, round: false })) {
+      const x = at.x + dx;
+      const y = at.y + dy;
       if (x < 0 || y < 0 || x >= size || y >= size) continue;
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
       ctx.strokeRect(o.x + x * z + 0.5, o.y + y * z + 0.5, z - 1, z - 1);

@@ -12,10 +12,13 @@ import { buildColorPalette, colorLabel, type ColorPalette } from '../../fluent/c
 import { normalizeHex, pushRecent } from '../../fluent/iconPalette';
 import { analyzePixels } from '../../imageStats';
 import { notify } from '../../clipboard';
+import { extractColors } from './adjust';
 import { TRANSPARENT, parseRgba, rgbaToHex, type Rgba } from './color';
 import { flatten, type CanvasSize } from './doc';
 import { getPixel, type Pixels } from './pixels';
-import { maskBounds } from './selection';
+import { buildAdjustPanel, buildImagePanel, buildToolSettings } from './paintPanels';
+import { encodePng } from './png';
+import { maskBounds, sampleDoc } from './selection';
 import { PaintSession, toolName, TOOL_IDS, type PointerInfo, type ToolId } from './session';
 import { sourceScale, upscaleNearest } from './transform';
 import { PaintView, ZOOMS, stepZoom } from './view';
@@ -46,21 +49,35 @@ const ICONS = {
   fill: wrap('<path d="M5 12L12 5l7 7-7 7z"/><path d="M3 12h16"/><path d="M20.5 15.5s2 2.3 2 3.7a2 2 0 01-4 0c0-1.4 2-3.7 2-3.7z"/>'),
   picker: wrap('<path d="M15 4l5 5-3 1-1.5-1.5L6 18l-3 3v-3l9.5-9.5L11 7z"/><path d="M14 5l5 5"/>'),
   select: wrap('<rect x="4" y="4" width="16" height="16" stroke-dasharray="3 3"/>'),
+  brush: wrap('<path d="M18.5 3.5a2.1 2.1 0 013 3L12 16l-4 1 1-4z"/><path d="M8 17c-2 0-3 1.5-3 3.5C7 21 9.5 20 8 17z"/>'),
+  line: wrap('<path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.4"/><circle cx="19" cy="5" r="1.4"/>'),
+  rect: wrap('<rect x="4" y="6" width="16" height="12" rx="1"/>'),
+  ellipse: wrap('<ellipse cx="12" cy="12" rx="8.5" ry="6"/>'),
+  ellipseSelect: wrap('<ellipse cx="12" cy="12" rx="8.5" ry="6" stroke-dasharray="3 3"/>'),
+  lasso: wrap('<path d="M12 4c-4.4 0-8 2-8 4.5S7.6 13 12 13s8-2 8-4.5S16.4 4 12 4z" stroke-dasharray="3 3"/><path d="M8 13c0 2 1 3 2 4s0 3-2 3"/>'),
+  wand: wrap('<path d="M5 19L15 9"/><path d="M15 4v3M15 11v3M10.5 9h3M16.5 9H19M12 6l1.5 1.5M17 6l-1.5 1.5"/>'),
   grid: wrap('<rect x="4" y="4" width="16" height="16"/><path d="M4 12h16M12 4v16M8 4v16M16 4v16M4 8h16M4 16h16"/>', 18),
   swap: wrap('<path d="M7 4L3 8l4 4M3 8h12M17 20l4-4-4-4M21 16H9"/>', 16),
   help: wrap('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 015 .5c0 1.7-2.5 2-2.5 3.5M12 17v.2"/>', 16),
 } as const;
 
-const TOOL_KEYS: Record<ToolId, string> = { pencil: 'P', eraser: 'E', fill: 'G', picker: 'I', select: 'M' };
+const TOOL_KEYS: Record<ToolId, string> = { pencil: 'P', brush: 'B', eraser: 'E', fill: 'G', picker: 'I', line: 'L', rect: 'R', ellipse: 'O', select: 'M', ellipseSelect: 'Shift+M', lasso: 'Shift+L', wand: 'W' };
 
 /** 使い方の一行（状態の行に出す。初めての人向けの手引き）。 */
 function toolHint(id: ToolId): string {
   switch (id) {
     case 'pencil': return t('鉛筆：左クリックで前景色、右クリックで背景色（最初は透明）で描きます。Shift+クリックで前の点から直線を引きます');
+    case 'brush': return t('ブラシ：太さ・硬さ・不透明度を変えて描きます。なめらかを入れると、縁がなめらかになります');
     case 'eraser': return t('消しゴム：ドラッグしたところを透明にします。右の太さで大きさを変えます');
     case 'fill': return t('塗りつぶし：クリックした所と同じ色の範囲を塗ります。許容差を上げると、近い色もまとめて塗ります');
     case 'picker': return t('スポイト：クリックした所の色を前景色に取ります（右クリックは背景色）。透明も取れます');
-    case 'select': return t('四角形の選択：ドラッグで範囲を選び、中をドラッグで動かします。Alt を押しながらで複製、Delete で消去、Esc で確定');
+    case 'line': return t('直線：ドラッグで引きます。Shift で水平・垂直・45° に揃います');
+    case 'rect': return t('四角形：ドラッグで描きます。Shift で正方形。線・塗り・両方を選べます');
+    case 'ellipse': return t('楕円：ドラッグで描きます。Shift で正円。線・塗り・両方を選べます');
+    case 'select': return t('四角形の選択：ドラッグで範囲を選び、中をドラッグで動かします。Ctrl を押しながらで複製、Shift で足す、Alt で引く、Delete で消去');
+    case 'ellipseSelect': return t('楕円の選択：ドラッグで楕円の範囲を選びます。Shift で足す、Alt で引く');
+    case 'lasso': return t('なげなわ：ドラッグでなぞった囲みの中を選びます。Shift で足す、Alt で引く');
+    case 'wand': return t('自動選択：クリックした所と同じ色の範囲を選びます。許容差を上げると近い色まで選びます。Shift で足す、Alt で引く');
   }
 }
 
@@ -68,10 +85,17 @@ function toolHint(id: ToolId): string {
 function toolTip(id: ToolId): string {
   const tip: Record<ToolId, string> = {
     pencil: t('1 ドットずつ描きます。左クリックは前景色、右クリックは背景色（透明なら消えます）。太さは上の欄で変えられます'),
+    brush: t('太さ・硬さ・不透明度を変えて描きます。1 回のなぞりの中では、重ねても濃くなりません'),
     eraser: t('描いたところを透明にします。太さは上の欄で変えられます'),
     fill: t('クリックした所とつながった同じ色の範囲を、前景色で塗ります。右クリックは背景色で塗ります'),
-    picker: t('絵の中の色を取って、前景色にします。右クリックは背景色にします。鉛筆と塗りつぶしの途中でも、Alt を押している間はスポイトになります'),
-    select: t('四角形で範囲を選びます。中をドラッグして動かし、Alt で複製、Delete で消去、Ctrl+C / X / V で切り取り・貼り付けができます'),
+    picker: t('絵の中の色を取って、前景色にします。右クリックは背景色にします。鉛筆・ブラシ・塗りつぶしの途中でも、Alt を押している間はスポイトになります'),
+    line: t('ドラッグで直線を引きます（離すまではプレビュー）。Shift で水平・垂直・45° に揃えます'),
+    rect: t('ドラッグで四角形を描きます。Shift で正方形。線だけ・塗りだけ・両方を選べます'),
+    ellipse: t('ドラッグで楕円を描きます。Shift で正円。線だけ・塗りだけ・両方を選べます'),
+    select: t('四角形で範囲を選びます。中をドラッグして動かし、Ctrl で複製、Shift で足す、Alt で引く、Delete で消去、Ctrl+C / X / V で切り取り・貼り付けができます'),
+    ellipseSelect: t('楕円で範囲を選びます。Shift で足す、Alt で引きます'),
+    lasso: t('なぞった囲みの中を選びます。Shift で足す、Alt で引きます'),
+    wand: t('クリックした所と同じ色の範囲を選びます（許容差・つながった所だけを設定できます）。Shift で足す、Alt で引きます'),
   };
   return t('{name} ({key})：{tip}', { name: toolName(id), key: TOOL_KEYS[id], tip: tip[id] });
 }
@@ -115,6 +139,10 @@ function guideSeen(): boolean {
 /** ペイント画面を開く。 */
 export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   const session = new PaintSession(o.canvas, o.pixels);
+  /** いまのキャンバスの大きさ（［キャンバス］で変えられる）。 */
+  const canvasSize = () => session.doc.size;
+  /** 次にキャンバスをクリックした色を渡す相手（スポイト）。 */
+  let pickingHandler: ((c: Rgba) => void) | null = null;
   /** パレットで色を選ぶと、どちらの色が変わるか。 */
   let target: 'primary' | 'secondary' = 'primary';
   let spaceDown = false;
@@ -122,10 +150,12 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   /** ドラッグを始めたポインタの情報（ボタン・消しゴム側）。 */
   let active: { id: number; button: 0 | 2; eraser: boolean } | null = null;
   let previewTimer = 0;
+  /** キーボードのカーソルを画面に出しているか（マウスを動かすと消える）。 */
+  let cursorShown = false;
 
   // ---- 部品 ----
 
-  const stage = h('div', { class: 'paint-stage', tabIndex: 0, role: 'application', 'aria-roledescription': t('ドット絵のキャンバス'), 'aria-label': t('{size} × {size} のアイコン。ツールは P・E・G・I・M のキーで切り替えます', { size: o.canvas }) });
+  const stage = h('div', { class: 'paint-stage', tabIndex: 0, role: 'application', 'aria-roledescription': t('ドット絵のキャンバス'), 'aria-label': t('{size} × {size} のアイコン。ツールは P・B・E・G・I・L・R・O・M・W のキーで切り替え、矢印キーでカーソルを動かし、Enter か Space で描きます', { size: o.canvas }) });
   const live = h('div', { class: 'sr-only', 'aria-live': 'polite', role: 'status' });
 
   const btn = (cls: string, icon: string, label: string, onclick: () => void) =>
@@ -147,21 +177,13 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     } }, svg(ICONS.grid)) as HTMLButtonElement;
 
   // ツールの設定（ツールによって出し分ける）
-  const sizeSelect = h('select', { 'aria-label': t('太さ'), title: t('筆先の太さ（1〜8 ドット）'), onchange: () => session.setSettings({ size: Number(sizeSelect.value) }) },
-    [1, 2, 3, 4, 5, 6, 7, 8].map((n) => h('option', { value: String(n) }, `${n}`))) as HTMLSelectElement;
-  const roundBox = h('input', { type: 'checkbox', onchange: () => session.setSettings({ round: roundBox.checked }) }) as HTMLInputElement;
-  const tolInput = h('input', { type: 'range', min: 0, max: 100, value: 0, 'aria-label': t('許容差'), title: t('0 は同じ色だけ。上げると近い色もまとめて塗ります'),
-    oninput: () => session.setSettings({ tolerance: Number(tolInput.value) }) }) as HTMLInputElement;
-  const tolValue = h('span', { class: 'paint-tol-value' }, '0');
-  const contigBox = h('input', { type: 'checkbox', checked: true, onchange: () => session.setSettings({ contiguous: contigBox.checked }) }) as HTMLInputElement;
-  const brushSettings = h('div', { class: 'paint-settings' }, h('label', null, t('太さ'), sizeSelect), h('label', { class: 'check' }, roundBox, t('丸い筆先')));
-  const fillSettings = h('div', { class: 'paint-settings' }, h('label', null, t('許容差'), tolInput, tolValue), h('label', { class: 'check' }, contigBox, t('つながった所だけ')));
+  const toolSettings = buildToolSettings(session);
   const canvasInfo = h('span', { class: 'paint-info muted small' }, t('キャンバス {size} × {size} → 出力 {out} × {out}', { size: o.canvas, out: o.outputSize }));
 
   const top = h('div', { class: 'paint-top' },
     h('div', { class: 'paint-group' }, undoBtn, redoBtn),
     h('div', { class: 'paint-group' }, zoomOut, zoomSelect, zoomIn, zoomFit, gridBtn),
-    h('div', { class: 'paint-group paint-tool-settings' }, brushSettings, fillSettings),
+    h('div', { class: 'paint-group paint-tool-settings' }, toolSettings.el),
     canvasInfo);
 
   // ツールのボタン（矢印キーで移れるように、Tab で止まるのは 1 つだけ）
@@ -201,7 +223,17 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   const previews = h('div', { class: 'icon-preview-row paint-previews' });
   const bgNote = h('p', { class: 'paint-note small', hidden: true });
 
-  const side = h('div', { class: 'paint-side' },
+  const adjustPanel = buildAdjustPanel(session, {
+    pickFromCanvas: (cb) => {
+      pickingHandler = cb;
+      stage.classList.add('picking');
+      stage.focus();
+      session.onAnnounce(t('絵の中の色をクリックしてください'));
+    },
+  });
+  const imagePanel = buildImagePanel(session, { afterResize: () => view.fit() });
+  const usedColors = h('div', { class: 'paint-used', role: 'group', 'aria-label': t('この絵の色') });
+  const colorsPanel = h('div', { class: 'paint-colors-panel' },
     h('section', { class: 'paint-section' },
       h('h3', null, t('色')),
       h('div', { class: 'paint-colors' },
@@ -209,6 +241,50 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
         h('div', { class: 'paint-color-actions' }, swapBtn, resetBtn, transparentBtn)),
       palette.el),
     h('section', { class: 'paint-section' },
+      h('h3', null, t('この絵の色')),
+      h('p', { class: 'muted small paint-used-hint' }, t('押すと前景色、Shift を押しながら（右クリックも）で、色の置き換えの元の色にします')),
+      usedColors));
+
+  // 右の列は 3 つのタブ（色・選択範囲の色・画像）。プレビューは、どのタブでも見えるように、その下に置く
+  type TabId = 'colors' | 'adjust' | 'image';
+  const tabDefs: { id: TabId; label: string; panel: HTMLElement }[] = [
+    { id: 'colors', label: t('色'), panel: colorsPanel },
+    { id: 'adjust', label: t('選択範囲の色'), panel: adjustPanel.el },
+    { id: 'image', label: t('画像'), panel: imagePanel.el },
+  ];
+  const tabButtons = new Map<TabId, HTMLButtonElement>();
+  const showTab = (id: TabId, focus = false) => {
+    for (const d of tabDefs) {
+      const on = d.id === id;
+      d.panel.hidden = !on;
+      const b = tabButtons.get(d.id)!;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+      if (on && focus) b.focus();
+    }
+  };
+  for (const d of tabDefs) {
+    tabButtons.set(d.id, h('button', { type: 'button', role: 'tab', class: 'paint-tab', id: `paint-tab-${d.id}`, 'aria-selected': 'false', 'aria-controls': `paint-panel-${d.id}`, onclick: () => showTab(d.id) }, d.label) as HTMLButtonElement);
+    d.panel.id = `paint-panel-${d.id}`;
+    d.panel.setAttribute('role', 'tabpanel');
+    d.panel.setAttribute('aria-labelledby', `paint-tab-${d.id}`);
+    d.panel.classList.add('paint-tabpanel');
+  }
+  const tabList = h('div', { class: 'paint-tabs', role: 'tablist', 'aria-label': t('右の列') }, [...tabButtons.values()]);
+  tabList.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const i = tabDefs.findIndex((d) => tabButtons.get(d.id) === document.activeElement);
+    if (i < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    showTab(tabDefs[(i + (e.key === 'ArrowRight' ? 1 : tabDefs.length - 1)) % tabDefs.length]!.id, true);
+  });
+  showTab('colors');
+
+  const side = h('div', { class: 'paint-side' },
+    tabList,
+    h('div', { class: 'paint-tabbody' }, tabDefs.map((d) => d.panel)),
+    h('section', { class: 'paint-section paint-preview-section' },
       h('h3', null, t('プレビュー（実寸）')),
       previews,
       bgNote));
@@ -242,7 +318,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   const doneBtn = h('button', { type: 'button', class: 'primary', onclick: () => finish() }, t('完了'));
 
   // 表示の部品は、ほかの部品がそろってから作る（作った直後に拡大率の表示を更新するため）
-  const view = new PaintView(stage, () => session.doc, () => updateZoomUi());
+  const view = new PaintView(stage, () => session.doc, () => session.displayPixels(), () => updateZoomUi());
 
   const modal = openModal(t('描いて編集：{name}', { name: o.name }), root, {
     size: 'xl',
@@ -251,7 +327,15 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     initialFocus: stage,
     footer: [statusBox, cancelBtn, doneBtn],
     // Esc は内側から順に処理する（ドラッグの取り消し → 浮いた選択の確定 → 選択の解除）。何もなければ閉じる確認へ
-    onEscape: () => session.escape(),
+    onEscape: () => {
+      // スポイト（色の置き換えの元の色を絵から取る）の途中なら、それをやめる
+      if (pickingHandler) {
+        pickingHandler = null;
+        stage.classList.remove('picking');
+        return true;
+      }
+      return session.escape();
+    },
     beforeClose: async () => {
       if (!session.changed) return true;
       const a = await ask(t('描いた内容を捨てますか？'), t('描いた内容は、［完了］を押さないと反映されません。'), [
@@ -312,8 +396,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
 
   /** 出力と同じ作り方（整数倍の最近傍。出力より大きいキャンバスは縮める）で、16・32px の実寸を並べる。 */
   function renderPreviews(): void {
-    const px = flatten(session.doc);
-    const k = sourceScale(o.canvas, o.outputSize);
+    const px = session.displayPixels();
+    const k = sourceScale(canvasSize(), o.outputSize);
     const big = upscaleNearest(px, k);
     const src = document.createElement('canvas');
     src.width = big.width;
@@ -331,6 +415,27 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     const stats = analyzePixels(px.data, px.width, px.height);
     bgNote.hidden = stats.solidBackground === null;
     bgNote.textContent = stats.solidBackground === null ? '' : t('背景が透明になっていません。背景を残したくないときは、消しゴムか、背景色（透明）での右クリックで消してください');
+    renderUsedColors(px);
+  }
+
+  /** この絵の色（多い順に 16 色）。押すと前景色、Shift・右クリックは置き換えの元の色。 */
+  function renderUsedColors(px: Pixels): void {
+    const used = extractColors(px, 16);
+    usedColors.replaceChildren(...used.map((u) => {
+      const b = h('button', { type: 'button', class: 'paint-used-swatch', title: t('{color}（{n} 画素）。押すと前景色にします', { color: u.hex.toUpperCase(), n: u.count }), 'aria-label': t('{color}（{n} 画素）', { color: u.hex.toUpperCase(), n: u.count }), style: `background:${u.hex}` }) as HTMLButtonElement;
+      const asSource = () => {
+        const c = parseRgba(u.hex)!;
+        adjustPanel.setFrom(c);
+        showTab('adjust');
+      };
+      b.addEventListener('click', (e) => (e.shiftKey ? asSource() : session.setColor('primary', parseRgba(u.hex)!)));
+      b.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        asSource();
+      });
+      return b;
+    }));
+    if (used.length === 0) usedColors.replaceChildren(h('span', { class: 'muted small' }, t('まだ色がありません')));
   }
 
   function updateUi(): void {
@@ -342,16 +447,15 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     redoBtn.disabled = !session.history.canRedo;
     undoBtn.title = session.history.undoLabel ? t('元に戻す (Ctrl+Z)：{label}', { label: session.history.undoLabel }) : t('元に戻す (Ctrl+Z)');
     redoBtn.title = session.history.redoLabel ? t('やり直す (Ctrl+Y)：{label}', { label: session.history.redoLabel }) : t('やり直す (Ctrl+Y)');
-    brushSettings.hidden = !(session.tool === 'pencil' || session.tool === 'eraser');
-    fillSettings.hidden = session.tool !== 'fill';
-    sizeSelect.value = String(session.settings.size);
-    roundBox.checked = session.settings.round;
-    tolInput.value = String(session.settings.tolerance);
-    tolValue.textContent = `${session.settings.tolerance}`;
-    contigBox.checked = session.settings.contiguous;
+    toolSettings.sync();
+    adjustPanel.sync();
+    imagePanel.sync();
+    canvasInfo.textContent = t('キャンバス {size} × {size} → 出力 {out} × {out}', { size: canvasSize(), out: o.outputSize });
+    stage.setAttribute('aria-label', t('{size} × {size} のアイコン。ツールは P・B・E・G・I・L・R・O・M・W のキーで切り替え、矢印キーでカーソルを動かし、Enter か Space で描きます', { size: canvasSize() }));
     hint.textContent = toolHint(session.tool);
     hint.title = hint.textContent;
-    view.hoverBrush = session.tool === 'pencil' || session.tool === 'eraser' ? session.brush : session.tool === 'fill' || session.tool === 'picker' ? { size: 1, round: false } : null;
+    view.hoverBrush = session.hoverBrush;
+    view.cursor = cursorShown ? session.cursor : null;
     stage.dataset['tool'] = session.tool;
     syncColors();
     view.requestRender();
@@ -365,14 +469,17 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     window.setTimeout(() => (live.textContent = m), 30);
   };
   session.onColorUsed = (hex) => palette.setRecent(rememberColor(hex));
+  // 適用していないプレビューが、描き始めなどで捨てられたら、スライダーを元に戻す
+  session.onPreviewDropped = () => adjustPanel.reset();
 
   function updateCoords(x: number, y: number): void {
-    const inside = x >= 0 && y >= 0 && x < o.canvas && y < o.canvas;
-    const sel = session.doc.selection ? maskBounds(session.doc.selection, o.canvas) : null;
+    const n = canvasSize();
+    const inside = x >= 0 && y >= 0 && x < n && y < n;
+    const sel = session.doc.selection ? maskBounds(session.doc.selection, n) : null;
     const parts: string[] = [];
     if (inside) {
       parts.push(`x ${x}, y ${y}`);
-      parts.push(hexOf(getPixel(flatten(session.doc), x, y)));
+      parts.push(hexOf(getPixel(session.displayPixels(), x, y)));
     }
     if (sel) parts.push(t('選択 {w} × {h}', { w: sel.width, h: sel.height }));
     coords.textContent = parts.join(t('・'));
@@ -391,6 +498,19 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   stage.addEventListener('pointerdown', (e) => {
     stage.focus({ preventScroll: true });
     if (active || panning) return;
+    // 色の置き換えの元の色を、絵から取るとき
+    if (pickingHandler && e.button === 0) {
+      e.preventDefault();
+      const p = view.toPixel(e.clientX, e.clientY);
+      if (p.x >= 0 && p.y >= 0 && p.x < canvasSize() && p.y < canvasSize()) {
+        const cb = pickingHandler;
+        pickingHandler = null;
+        stage.classList.remove('picking');
+        cb(sampleDoc(session.doc, p.x, p.y));
+      }
+      return;
+    }
+    cursorShown = false;
     // 中ボタン・Space を押しながらのドラッグは、画面を動かす
     if (e.button === 1 || (spaceDown && e.button === 0)) {
       e.preventDefault();
@@ -419,6 +539,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
       for (const ev of events.length ? events : [e]) session.pointerMove(infoOf(ev, active.button, active.eraser));
     }
+    cursorShown = false;
+    view.cursor = null;
     const p = view.toPixel(e.clientX, e.clientY);
     view.hover = p;
     view.requestRender();
@@ -485,12 +607,15 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (field && (e.key === ' ' || e.key.startsWith('Arrow'))) return;
     // ツールの並びの上下の矢印は、並びの中で移る
     if (target.closest('.paint-tools') && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return;
+    if (target.closest('.paint-tabs') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
     const onButton = target.closest('button') !== null;
-    // Space はパン。ボタンの上では、ボタンを押す（既定の動き）
+    // Space は、ポインタと一緒ならパン、単独ならキーボードのカーソルの位置で描く。ボタンの上では、ボタンを押す（既定の動き）
     if (e.key === ' ' && !onButton) {
       e.preventDefault();
       spaceDown = true;
       stage.classList.add('space');
+      cursorShown = true;
+      session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false, repeat: e.repeat });
       return;
     }
     // Enter・Space でボタンを押す動きは、そのまま
@@ -512,7 +637,10 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       e.preventDefault();
       return;
     }
-    const handled = session.key({ key: e.key, ctrl: mod, shift: e.shiftKey, alt: e.altKey });
+    const handled = session.key({ key: e.key, ctrl: mod, shift: e.shiftKey, alt: e.altKey, repeat: e.repeat });
+    if (handled && (e.key.startsWith('Arrow') || e.key === 'Enter')) cursorShown = true;
+    // コピー・切り取りは、OS のクリップボードにも画像として入れる（ほかのアプリへ貼り付けられるように）
+    if (handled && mod && (e.key === 'c' || e.key === 'C' || e.key === 'x' || e.key === 'X') && session.clipboard) void copyToOsClipboard(session.clipboard);
     // キャンバスの上の Enter は、［完了］を押さない（浮いた選択の確定だけ）
     if (handled || (e.key === 'Enter' && target === stage)) e.preventDefault();
   }, true);
@@ -521,6 +649,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       spaceDown = false;
       stage.classList.remove('space');
     }
+    if ((e.key === ' ' || e.key === 'Enter') && session.keyUp(e.key)) e.preventDefault();
   }, true);
   // フォーカスを持てない所（余白・見出し）を押したときは、フォーカスをキャンバスへ戻す（ショートカットが効き続けるように）
   modal.root.addEventListener('mousedown', (e) => {
@@ -567,16 +696,33 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     }
   }
 
+  let clipboardWarned = false;
+  /** 選択範囲（なければ全体）を、画像として OS のクリップボードに入れる。許可されない環境では、この画面の中の貼り付けだけになる。 */
+  async function copyToOsClipboard(px: Pixels): Promise<void> {
+    try {
+      const blob = new Blob([encodePng(px)], { type: 'image/png' });
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    } catch {
+      if (clipboardWarned) return;
+      clipboardWarned = true;
+      notify({ kind: 'warning', message: t('ほかのアプリ用のクリップボードにはコピーできませんでした。この画面の中では貼り付けられます') });
+    }
+  }
+
   function showHelp(): void {
     const rows: [string, string][] = [
-      ['P / E / G / I / M', t('鉛筆 / 消しゴム / 塗りつぶし / スポイト / 四角形の選択')],
+      ['P / B / E / G / I', t('鉛筆 / ブラシ / 消しゴム / 塗りつぶし / スポイト')],
+      ['L / R / O', t('直線 / 四角形 / 楕円（Shift で 45°・正方形・正円）')],
+      ['M / Shift+M / Shift+L / W', t('四角形の選択 / 楕円の選択 / なげなわ / 自動選択（Shift で足す、Alt で引く）')],
+      ['[ / ]', t('いまのツールの太さを 1 小さく / 大きく')],
       ['X / D', t('前景色と背景色を入れ替え / 既定の色に戻す')],
       ['Ctrl+Z / Ctrl+Y', t('元に戻す / やり直す')],
       ['Ctrl+A / Ctrl+D', t('すべて選択 / 選択を解除')],
-      ['Ctrl+C / X / V', t('コピー / 切り取り / 貼り付け')],
+      ['Ctrl+C / X / V', t('コピー / 切り取り / 貼り付け（選択がなければ全体をコピー）')],
       ['Delete', t('選択範囲を消す')],
-      ['← ↑ → ↓', t('選択範囲を 1 ドット動かす（Shift で 4 ドット）')],
-      ['Enter / Esc', t('浮いた選択を確定 / ドラッグの取り消し・確定・選択の解除の順')],
+      ['← ↑ → ↓', t('キーボードのカーソルを動かす（選択があるときは選択範囲を動かす。Ctrl でいつもカーソル。Shift で 4 ドット）')],
+      ['Enter / Space', t('カーソルの位置で描く（押している間。矢印で動かすと線になる。Shift で前の点から直線）')],
+      ['Esc', t('プレビュー・ドラッグの取り消し → 浮いた選択の確定 → 選択の解除 → 閉じる確認の順')],
       [t('Space + ドラッグ'), t('画面を動かす（中ボタンのドラッグ、ホイールでも）')],
       ['1〜6 / 0 / + / -', t('拡大（1・2・4・8・16・32 倍）/ 全体 / 拡大 / 縮小')],
     ];
@@ -588,7 +734,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
 
   function finish(): void {
     // 浮いた選択も重ねた、見たままの絵を返す
-    o.onDone({ pixels: flatten(session.doc), canvas: o.canvas });
+    o.onDone({ pixels: flatten(session.doc), canvas: canvasSize() });
     modal.close();
   }
 
