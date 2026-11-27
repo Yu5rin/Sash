@@ -138,7 +138,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     onchange: () => view.setZoom(Number(zoomSelect.value)) }, ZOOMS.map((z) => h('option', { value: String(z) }, `${z}×`))) as HTMLSelectElement;
   const zoomOut = h('button', { type: 'button', class: 'icon-button', title: t('縮小 (-)'), 'aria-label': t('縮小'), onclick: () => view.setZoom(stepZoom(view.zoom, -1)) }, '−');
   const zoomIn = h('button', { type: 'button', class: 'icon-button', title: t('拡大 (+)'), 'aria-label': t('拡大'), onclick: () => view.setZoom(stepZoom(view.zoom, 1)) }, '+');
-  const zoomFit = h('button', { type: 'button', class: 'small', title: t('全体が入る、いちばん大きい倍率にします (0)'), onclick: () => view.fit() }, t('全体'));
+  const zoomFit = h('button', { type: 'button', class: 'small', title: t('全体が入る、いちばん大きい倍率にします (0)'), onclick: () => view.fit() }, t('全体表示'));
   const gridBtn = h('button', { type: 'button', class: 'icon-button paint-grid', 'aria-pressed': 'true', title: t('ピクセルのグリッド（6 倍以上で表示されます）'), 'aria-label': t('ピクセルのグリッド'),
     onclick: () => {
       view.gridOn = !view.gridOn;
@@ -246,6 +246,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
 
   const modal = openModal(t('描いて編集：{name}', { name: o.name }), root, {
     size: 'xl',
+    // 入力欄・チェックボックス・スライダーの上の Enter で、［完了］が押されて描いた内容が確定しないようにする
+    submitOnEnter: false,
     initialFocus: stage,
     footer: [statusBox, cancelBtn, doneBtn],
     // Esc は内側から順に処理する（ドラッグの取り消し → 浮いた選択の確定 → 選択の解除）。何もなければ閉じる確認へ
@@ -373,14 +375,16 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       parts.push(hexOf(getPixel(flatten(session.doc), x, y)));
     }
     if (sel) parts.push(t('選択 {w} × {h}', { w: sel.width, h: sel.height }));
-    coords.textContent = parts.join('・');
+    coords.textContent = parts.join(t('・'));
   }
 
   // ---- ポインタ ----
 
+  let lastPointer: PointerInfo | null = null;
   const infoOf = (e: PointerEvent, button: 0 | 2, eraser: boolean): PointerInfo => {
     const p = view.toPixel(e.clientX, e.clientY);
-    return { x: p.x, y: p.y, button, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, eraser };
+    lastPointer = { x: p.x, y: p.y, button, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, eraser };
+    return lastPointer;
   };
 
   stage.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -420,6 +424,21 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     view.requestRender();
     updateCoords(p.x, p.y);
   });
+  /** ポインタが離れた通知が届かなかったとき（別のウィンドウへ移った・取り込みが外れた）、そこまでを確定してドラッグを終える。 */
+  const releaseDrag = () => {
+    if (!active) return;
+    const a = active;
+    active = null;
+    if (lastPointer) session.pointerUp({ ...lastPointer, button: a.button, eraser: a.eraser });
+    else session.cancelDrag();
+  };
+  stage.addEventListener('lostpointercapture', (e) => {
+    if (panning) {
+      panning = null;
+      stage.classList.remove('panning');
+    }
+    if (active && e.pointerId === active.id) releaseDrag();
+  });
   const end = (e: PointerEvent) => {
     if (panning) {
       panning = null;
@@ -454,10 +473,18 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   // ---- キー（root で受ける。dialog には付けない） ----
 
   const ZOOM_KEYS: Record<string, number> = { '1': 1, '2': 2, '3': 4, '4': 8, '5': 16, '6': 32 };
-  root.addEventListener('keydown', (e) => {
+  // ダイアログの中身（modal.root の capture）で受ける。フォーカスがキャンバスの外（チェックボックス・スライダー・余白）にあっても、
+  // ショートカットが効き、Enter で［完了］が押されない
+  modal.root.addEventListener('keydown', (e) => {
     if (e.isComposing) return;
     const target = e.target as HTMLElement;
-    if (target.closest('input, select, textarea')) return;
+    const field = target.closest<HTMLElement>('input, select, textarea');
+    const type = field instanceof HTMLInputElement ? field.type : '';
+    // 文字を入力する欄と選択欄では、キーはその欄のもの。チェックボックスとスライダーでは、Space と矢印だけがその欄のもの
+    if (field && (field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement || !['checkbox', 'range', 'radio', 'color', 'button'].includes(type))) return;
+    if (field && (e.key === ' ' || e.key.startsWith('Arrow'))) return;
+    // ツールの並びの上下の矢印は、並びの中で移る
+    if (target.closest('.paint-tools') && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return;
     const onButton = target.closest('button') !== null;
     // Space はパン。ボタンの上では、ボタンを押す（既定の動き）
     if (e.key === ' ' && !onButton) {
@@ -488,12 +515,18 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     const handled = session.key({ key: e.key, ctrl: mod, shift: e.shiftKey, alt: e.altKey });
     // キャンバスの上の Enter は、［完了］を押さない（浮いた選択の確定だけ）
     if (handled || (e.key === 'Enter' && target === stage)) e.preventDefault();
-  });
-  root.addEventListener('keyup', (e) => {
+  }, true);
+  modal.root.addEventListener('keyup', (e) => {
     if (e.key === ' ') {
       spaceDown = false;
       stage.classList.remove('space');
     }
+  }, true);
+  // フォーカスを持てない所（余白・見出し）を押したときは、フォーカスをキャンバスへ戻す（ショートカットが効き続けるように）
+  modal.root.addEventListener('mousedown', (e) => {
+    if ((e.target as HTMLElement).closest('input, select, textarea, button, a, [tabindex]')) return;
+    e.preventDefault();
+    stage.focus({ preventScroll: true });
   });
 
   // 貼り付け：OS のクリップボードの画像か、この画面の中でコピーした絵
@@ -509,7 +542,14 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (file) void pasteImage(file);
   });
   // 別のアプリへ移ったあとは、OS のクリップボードの画像のほうが新しいかもしれない
-  const onBlur = () => (session.clipboardFresh = false);
+  const onBlur = () => {
+    session.clipboardFresh = false;
+    // 別のウィンドウへ移ると、Space を離したことも、ポインタを離したことも届かない。押したままの状態を戻す
+    spaceDown = false;
+    stage.classList.remove('space', 'panning');
+    panning = null;
+    releaseDrag();
+  };
   window.addEventListener('blur', onBlur);
 
   async function pasteImage(file: File): Promise<void> {
@@ -537,7 +577,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       ['Delete', t('選択範囲を消す')],
       ['← ↑ → ↓', t('選択範囲を 1 ドット動かす（Shift で 4 ドット）')],
       ['Enter / Esc', t('浮いた選択を確定 / ドラッグの取り消し・確定・選択の解除の順')],
-      ['Space + ドラッグ', t('画面を動かす（中ボタンのドラッグ、ホイールでも）')],
+      [t('Space + ドラッグ'), t('画面を動かす（中ボタンのドラッグ、ホイールでも）')],
       ['1〜6 / 0 / + / -', t('拡大（1・2・4・8・16・32 倍）/ 全体 / 拡大 / 縮小')],
     ];
     const m = openModal(t('ショートカットの一覧'), h('table', { class: 'paint-help' }, h('tbody', null, rows.map(([k, v]) => h('tr', null, h('th', null, h('kbd', null, k)), h('td', null, v))))), {

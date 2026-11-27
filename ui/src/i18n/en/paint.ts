@@ -82,4 +82,7 @@ export const en: Readonly<Record<string, string>> = {
   '貼り付けました。ドラッグで動かし、Enter で確定します': 'Pasted. Drag to move it and press Enter to confirm.',
   'スポイト': 'Eyedropper',
   '四角形の選択': 'Rectangle select',
+  '全体表示': 'Fit',
+  'Space + ドラッグ': 'Space + drag',
+  '・': ' · ',
 };

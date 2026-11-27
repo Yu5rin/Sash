@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { openModal } from '../src/dialogs/modal';
+import { confirmOpenDialogs, openModal } from '../src/dialogs/modal';
 import { h } from '../src/dom';
 
 // beforeClose：×・Esc・背景のクリックで閉じる前に確かめる（描いた内容を、確かめずに捨てないため）。渡さないダイアログは今までどおり。
@@ -80,5 +80,28 @@ describe('モーダルの beforeClose', () => {
     const m = openModal('t', h('div'), { size: 'xl' });
     expect(m.root.classList.contains('size-xl')).toBe(true);
     m.close();
+  });
+
+  it('confirmOpenDialogs：確認を持つダイアログが断れば false（ウィンドウの × で終わる前の確認）', async () => {
+    const plain = openModal('a', h('div'));
+    const guarded = openModal('b', h('div'), { beforeClose: () => false });
+    expect(await confirmOpenDialogs()).toBe(false);
+    guarded.close();
+    expect(await confirmOpenDialogs()).toBe(true);
+    plain.close();
+  });
+
+  it('submitOnEnter: false のダイアログは、Enter で主ボタンを押さない', () => {
+    let clicked = 0;
+    const primary = h('button', { type: 'button', class: 'primary', onclick: () => clicked++ }, 'ok');
+    const input = h('input', { type: 'checkbox' });
+    const m = openModal('t', h('div', null, input), { footer: [primary], submitOnEnter: false });
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(clicked).toBe(0);
+    m.close();
+    const m2 = openModal('t', h('div', null, h('input', { type: 'checkbox' })), { footer: [primary] });
+    m2.root.querySelector('input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(clicked).toBe(1);
+    m2.close();
   });
 });

@@ -32,6 +32,8 @@ export interface ModalOptions {
    * 描いた内容を確かめずに捨ててしまわないためのもの。渡さないダイアログは今までどおり。handle.close() は確かめずに閉じる。
    */
   beforeClose?: () => boolean | Promise<boolean>;
+  /** false なら、Enter で主ボタンを押さない（作業画面。入力欄・チェックボックス・スライダーの上の Enter で、描いた内容ごと閉じてしまわないように）。 */
+  submitOnEnter?: boolean;
   /** false なら Esc・×・背景のクリックで閉じない（更新中など、途中で閉じると困るもの）。 */
   closable?: boolean;
   /** 同じダイアログを二重に開かないための名前。開いていれば、そのダイアログを前に出して返す。 */
@@ -49,6 +51,7 @@ interface Layer {
   dialog: HTMLElement;
   close: () => void;
   requestClose: () => void;
+  beforeClose?: () => boolean | Promise<boolean>;
   closable: boolean;
   onEscape?: () => boolean;
   handle: ModalHandle;
@@ -57,6 +60,22 @@ interface Layer {
 const layers: Layer[] = [];
 let nextLayerId = 1;
 let keyListening = false;
+
+/**
+ * 開いているダイアログのうち、閉じる前の確認（beforeClose）を持つものを、上から順に確かめる。
+ * 1 つでも断られたら false（ウィンドウの × で終わる前に、描いた内容などを確かめずに捨てないため）。
+ */
+export async function confirmOpenDialogs(): Promise<boolean> {
+  for (const layer of [...layers].reverse()) {
+    if (!layer.beforeClose) continue;
+    try {
+      if (!(await layer.beforeClose())) return false;
+    } catch {
+      // 確かめる処理が失敗しても、終われなくならないようにする
+    }
+  }
+  return true;
+}
 
 /** ダイアログやコマンドパレットが開いているか（開いている間はアプリ全体のショートカットを止める）。 */
 export function isModalOpen(): boolean {
@@ -125,6 +144,7 @@ export function pushLayer(opts: { element: HTMLElement; dialog: HTMLElement; clo
     dialog: opts.dialog,
     closable: opts.closable ?? true,
     onEscape: opts.onEscape,
+    beforeClose: opts.beforeClose,
     close: () => {
       if (closed) return;
       closed = true;
@@ -219,7 +239,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
   });
   // Enter で主ボタンを押す。複数行の入力欄・ボタン・リンクの上、日本語の変換中は除く
   dialog.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || e.defaultPrevented) return;
+    if (opts.submitOnEnter === false || e.key !== 'Enter' || e.isComposing || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || e.defaultPrevented) return;
     const target = e.target as HTMLElement;
     if (target.closest('textarea, button, a, select, [contenteditable="true"], [role="option"], [role="listbox"], .monaco-editor')) return;
     const primary = dialog.querySelector<HTMLButtonElement>('footer button.primary:not(:disabled)');

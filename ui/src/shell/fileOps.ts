@@ -5,7 +5,7 @@
 
 import { app } from '../app';
 import { invoke, type ApplyResult, type Fingerprint, type PartToSave } from '../bridge';
-import { ask } from '../dialogs/modal';
+import { ask, confirmOpenDialogs } from '../dialogs/modal';
 import { askExternalChange } from '../dialogs/externalChangeDialog';
 import { askRecovery } from '../dialogs/recoveryDialog';
 import { checkExternalChange, isWatchable, refreshBaseline } from '../externalChange';
@@ -173,6 +173,8 @@ export async function quit(): Promise<boolean> {
   }
   quitting = true;
   try {
+    // 開いているダイアログに、描いた内容など捨てると困るものがあれば、先に確かめる
+    if (!(await confirmOpenDialogs())) return false;
     if (!(await confirmDiscard())) return false;
     // 保存した・「保存しない」を選んだ。残す編集はないので退避を消してから終わる
     await discardCurrentRecovery();
