@@ -105,6 +105,12 @@ export class PaintSession {
   clipboardFresh = false;
   /** キーボードのカーソル（矢印で動かす）。まだ使っていなければ null。 */
   cursor: { x: number; y: number } | null = null;
+  /**
+   * キーボードのカーソルが「いま生きている」か。直前の操作が、カーソルを矢印で動かす・Enter／Space で使う、のどれかのときだけ true。
+   * それ以外の操作（マウス・ツールの切り替え・選択の作成／確定／解除・選択範囲の矢印移動・元に戻す／やり直し・色の変更・Esc）が来たら false。
+   * Space を離したときに描くのは、これが true のときだけ（SPEC §25.14 の遷移表）。
+   */
+  cursorLive = false;
   /** 色の変更のプレビュー（適用するまで、見た目だけに出す）。 */
   preview: ColorOp | null = null;
   /** 状態が変わったとき（画面の描き直しと、ボタンの表示の更新）。 */
@@ -148,6 +154,7 @@ export class PaintSession {
   // ---- 履歴 ----
 
   private begin(): void {
+    this.cursorLive = false;
     this.dropPreview();
     this.before = snapshotDoc(this.doc);
   }
@@ -176,6 +183,7 @@ export class PaintSession {
 
   undo(): boolean {
     if (this.drag) return false;
+    this.cursorLive = false;
     this.dropPreview();
     const e = this.history.undo();
     this.arrow = null;
@@ -191,6 +199,7 @@ export class PaintSession {
 
   redo(): boolean {
     if (this.drag) return false;
+    this.cursorLive = false;
     this.dropPreview();
     const e = this.history.redo();
     this.arrow = null;
@@ -208,6 +217,7 @@ export class PaintSession {
 
   setTool(id: ToolId): void {
     if (this.drag || id === this.tool) return;
+    this.cursorLive = false;
     // 浮いた選択は、動かせる選択ツールの間だけ持ち続ける（ほかのツールで描くと、枠の中に重ねて描けてしまうため）
     if (!MARQUEE_TOOLS.includes(id) && this.doc.floating) this.commitFloating();
     this.tool = id;
@@ -284,6 +294,7 @@ export class PaintSession {
     // キーボードで描いている途中にマウスが押されたら、キーボードの描画を終える（そこまでを確定する）
     if (this.kbdActive) this.releaseKeyboard();
     if (this.drag) return;
+    this.cursorLive = false;
     this.arrow = null;
     const tool = this.effectiveTool(p);
     if (tool === 'pencil' || tool === 'brush' || tool === 'eraser') this.downStroke(p, tool);
@@ -636,6 +647,7 @@ export class PaintSession {
 
   /** Esc：ドラッグの取り消し → 浮いた選択の確定 → 選択の解除 の順に、できることを 1 つだけする。何もなければ false。 */
   escape(): boolean {
+    this.cursorLive = false;
     if (this.preview) {
       this.dropPreview();
       this.onChange();
@@ -725,6 +737,11 @@ export class PaintSession {
     return true;
   }
 
+  /** マウスがキャンバスの上を動いた。キーボードのカーソルは、画面から消えたものとして、描かない。 */
+  dropCursor(): void {
+    this.cursorLive = false;
+  }
+
   /** キーボードの描画を、いまの位置で確定して終える（ウィンドウが離れたとき・マウスが押されたとき）。 */
   releaseKeyboard(): void {
     if (!this.kbdActive) return;
@@ -739,6 +756,8 @@ export class PaintSession {
     if (this.drag || this.kbdActive) return true;
     const c = this.ensureCursor();
     this.pointerDown({ x: c.x, y: c.y, button: 0, shift: e.shift, alt: false, ctrl: false });
+    // 描画の入口（pointerDown）はカーソルを下ろすので、ここで、使ったカーソルを生かし直す
+    this.cursorLive = true;
     // 塗りつぶし・自動選択のように、押した瞬間に終わるツールは、離すまで続ける描画がない
     this.kbdActive = this.drag !== null;
     return true;
@@ -757,6 +776,7 @@ export class PaintSession {
     const c = this.ensureCursor();
     const size = this.doc.size;
     this.cursor = { x: clamp(c.x + dx, 0, size - 1), y: clamp(c.y + dy, 0, size - 1) };
+    this.cursorLive = true;
     if (this.kbdActive) this.pointerMove({ x: this.cursor.x, y: this.cursor.y, button: 0, shift, alt: false, ctrl: false });
     const color = sampleDoc(this.doc, this.cursor.x, this.cursor.y);
     const hex = rgbaToHex(color);
@@ -784,6 +804,7 @@ export class PaintSession {
     const dx = key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0;
     const dy = key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0;
     this.dropPreview();
+    this.cursorLive = false;
     const merge = this.arrow !== null && this.arrow.key === key && this.now() - this.arrow.at < ARROW_MERGE_MS && this.history.last === this.arrow.entry;
     const before = merge ? null : snapshotDoc(this.doc);
     if (!this.doc.floating && !liftSelection(this.doc, false)) return true;

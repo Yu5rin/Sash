@@ -154,8 +154,6 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   /** ドラッグを始めたポインタの情報（ボタン・消しゴム側）。 */
   let active: { id: number; button: 0 | 2; eraser: boolean } | null = null;
   let previewTimer = 0;
-  /** キーボードのカーソルを画面に出しているか（マウスを動かすと消える）。 */
-  let cursorShown = false;
 
   // ---- 部品 ----
 
@@ -464,7 +462,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     hint.textContent = toolHint(session.tool);
     hint.title = hint.textContent;
     view.hoverCells = session.hoverCells;
-    view.cursor = cursorShown ? session.cursor : null;
+    view.cursor = session.cursorLive ? session.cursor : null;
     stage.dataset['tool'] = session.tool;
     syncColors();
     view.requestRender();
@@ -519,7 +517,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       }
       return;
     }
-    cursorShown = false;
+    session.dropCursor();
     spacePending = false;
     // 初回の手引きは、描き始めたら閉じる（左上の画素に重なって、押せなくなるため）
     if (guide) dismissGuide();
@@ -551,7 +549,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
       for (const ev of events.length ? events : [e]) session.pointerMove(infoOf(ev, active.button, active.eraser));
     }
-    cursorShown = false;
+    session.dropCursor();
     view.cursor = null;
     const p = view.toPixel(e.clientX, e.clientY);
     view.hover = p;
@@ -664,13 +662,12 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       return;
     }
     // Space を押しながら矢印でカーソルを動かすときは、押した位置から描き始める
-    if (spacePending && cursorShown && e.key.startsWith('Arrow')) {
+    if (spacePending && session.cursorLive && e.key.startsWith('Arrow')) {
       spacePending = false;
       session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false });
     }
     const handled = session.key({ key: e.key, ctrl: mod, shift: e.shiftKey, alt: e.altKey, repeat: e.repeat });
     // カーソルを出すのは、キーボードのカーソルが実際に動いたり使われたとき（選択範囲を矢印で動かしただけ・浮いた選択を Enter で確定しただけでは出さない）
-    if (handled && session.cursor !== null && (e.key.startsWith('Arrow') || e.key === 'Enter')) cursorShown = true;
     // コピー・切り取りは、OS のクリップボードにも画像として入れる（ほかのアプリへ貼り付けられるように）
     if (handled && mod && (e.key === 'c' || e.key === 'C' || e.key === 'x' || e.key === 'X') && session.clipboard) void copyToOsClipboard(session.clipboard);
     // キャンバスの上の Enter は、［完了］を押さない（浮いた選択の確定だけ）
@@ -684,7 +681,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (e.key === ' ' && spacePending) {
       // Space だけを押して離した：カーソルを出していれば、その位置に 1 点（ツールを 1 回使う）
       spacePending = false;
-      if (cursorShown && session.cursor !== null && stage === document.activeElement) {
+      if (session.cursorLive && stage === document.activeElement) {
         session.key({ key: ' ', ctrl: false, shift: spaceShift, alt: false });
         session.keyUp(' ');
       }

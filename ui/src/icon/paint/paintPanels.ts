@@ -205,7 +205,8 @@ export function buildAdjustPanel(session: PaintSession, hooks: AdjustHooks): Pan
           const { from, tolerance } = rep;
           apply(t('この色を透明にする'), (px, m) => makeTransparentMasked(px, m, from!, tolerance));
         }))),
-    section(t('そのほか'),
+    // 使う回数が少ないので、折りたたんでおく（768px の高さでも、スクロールを減らすため）
+    h('details', { class: 'paint-section paint-more' }, h('summary', null, t('そのほか')),
       h('div', { class: 'paint-actions' },
         small(t('単色化'), t('絵のシルエットを、前景色の 1 色にします（アルファは保ちます）'), () => {
           const c = { ...session.primary };

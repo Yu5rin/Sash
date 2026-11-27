@@ -113,9 +113,10 @@ export function liftSelection(doc: PaintDoc, duplicate: boolean): boolean {
 /** 浮いた選択の位置を変える（選択の枠も一緒に動く）。 */
 export function setFloatingPos(doc: PaintDoc, x: number, y: number): void {
   if (!doc.floating) return;
+  // 位置が変わったときだけ、回転の中心を捨てる（動かさずに押して離しただけでは、捨てない）
+  if (doc.floating.x !== x || doc.floating.y !== y) delete doc.floating.center;
   doc.floating.x = x;
   doc.floating.y = y;
-  delete doc.floating.center;
   syncSelection(doc);
 }
 

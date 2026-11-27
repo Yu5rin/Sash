@@ -850,6 +850,46 @@ console.log('== 12. 最終確認の指摘：カーソルを出していない Sp
   await ctx.close();
 }
 
+// ---------------------------------------------------------------------------------------------
+console.log('== 13. キーボードのカーソルを一度使ったあとの Space（状態の遷移）');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { localStorage.setItem('sash.paint.guide', '1'); window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 32);
+  const S = 32;
+  await page.locator('.paint-stage').focus();
+  // 先にキーボードのカーソルを使う：← → Space で (15,16) に点 → Ctrl+Z
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press(' ');
+  await page.keyboard.press('Control+z');
+  // マウスで線 → 四角形選択で (19,19)-(24,24) → ↓ 2 回 → 鉛筆に替えて Ctrl+D → Space だけ
+  await drag(page, S, [[2, 2], [6, 2]]);
+  await page.keyboard.press('m');
+  await drag(page, S, [[19, 19], [24, 24]]);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Control+d');
+  await page.keyboard.press('p');
+  await page.keyboard.press(' ');
+  // ツールを替えたあとの Space も、描かない
+  await page.keyboard.press('Control+ArrowLeft');
+  await page.keyboard.press('b');
+  await page.keyboard.press(' ');
+  await page.screenshot({ path: `${SHOTS}/52-cursor-state.png` });
+  await finishPaint(page);
+  await apply(page);
+  const out = await storedPixels(page);
+  check('カーソルを使ったあと、マウスで描き・選択して矢印で動かし・Ctrl+D のあとの Space で、古いカーソル位置 (15,16) に点が付かない', rgbaAt(out, 15, 16)[3] === 0 && rgbaAt(out, 14, 16)[3] === 0);
+  check('ツールを替えたあとの Space でも、描かない', rgbaAt(out, 14, 16)[3] === 0 && rgbaAt(out, 14, 15)[3] === 0);
+  check('マウスで引いた線 (2..6,2) は残っている', [2, 3, 4, 5, 6].every((x) => rgbaAt(out, x, 2)[3] === 255));
+  await ctx.close();
+}
+
 await browser.close();
 console.log(failures === 0 ? '\n全部 OK' : `\n失敗 ${failures} 件`);
 process.exit(failures === 0 ? 0 : 1);

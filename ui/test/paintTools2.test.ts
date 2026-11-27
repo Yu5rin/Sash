@@ -535,3 +535,95 @@ describe('最終確認の指摘', () => {
     expect(s.cursor).toBeNull();
   });
 });
+
+describe('キーボードのカーソルの状態（cursorLive）の遷移', () => {
+  const live = () => {
+    const s = fresh(['rr']);
+    s.key(key('ArrowRight', { ctrl: true }));
+    expect(s.cursorLive).toBe(true);
+    return s;
+  };
+  it('カーソルを動かす・Enter／Space で使うと、生きる', () => {
+    const s = fresh();
+    expect(s.cursorLive).toBe(false);
+    s.key(key('ArrowLeft'));
+    expect(s.cursorLive).toBe(true);
+    s.key(key('Enter'));
+    s.keyUp('Enter');
+    expect(s.cursorLive).toBe(true);
+    s.key(key(' '));
+    s.keyUp(' ');
+    expect(s.cursorLive).toBe(true);
+  });
+  it('マウスで描く・押す・動かす（dropCursor）と、止まる', () => {
+    const s = live();
+    drag(s, [[1, 1], [3, 1]]);
+    expect(s.cursorLive).toBe(false);
+    const t = live();
+    t.dropCursor();
+    expect(t.cursorLive).toBe(false);
+  });
+  it('ツールを替える・元に戻す・やり直す・Esc・選択の作成／確定／解除・色の変更で止まる', () => {
+    const steps: [string, (s: PaintSession) => void][] = [
+      ['ツール', (s) => s.setTool('brush')],
+      ['元に戻す', (s) => { drag(s, [[0, 0]]); s.key(key('ArrowRight', { ctrl: true })); s.undo(); }],
+      ['やり直す', (s) => { drag(s, [[0, 0]]); s.undo(); s.key(key('ArrowRight', { ctrl: true })); s.redo(); }],
+      ['Esc', (s) => { s.escape(); }],
+      ['すべて選択', (s) => s.selectAllPixels()],
+      ['選択を解除', (s) => { s.selectAllPixels(); s.key(key('ArrowRight', { ctrl: true })); s.clearSelection(); }],
+      ['色の変更', (s) => s.applyColor('x', () => undefined)],
+      ['反転', (s) => s.transform('flipH')],
+    ];
+    for (const [name, act] of steps) {
+      const s = live();
+      act(s);
+      expect(s.cursorLive, name).toBe(false);
+    }
+  });
+  it('選択範囲を矢印で動かす・Enter で浮いた選択を確定しても、生きない（以前にカーソルを使っていても）', () => {
+    const s = fresh(['rr']);
+    s.key(key('ArrowLeft')); // 一度カーソルを使う
+    s.setTool('select');
+    drag(s, [[0, 0], [1, 0]]); // マウスで選択（止まる）
+    expect(s.cursorLive).toBe(false);
+    s.key(key('ArrowDown')); // 選択範囲を動かす
+    expect(s.doc.floating).not.toBeNull();
+    expect(s.cursorLive).toBe(false);
+    s.key(key('Enter')); // 浮いた選択の確定
+    expect(s.cursorLive).toBe(false);
+  });
+  it('再現手順：カーソルで点 → Ctrl+Z → マウスで線 → 選択して矢印 → 止まったまま（古い位置で描かない）', () => {
+    const s = fresh();
+    s.key(key('ArrowLeft'));
+    s.key(key(' '));
+    s.keyUp(' ');
+    s.undo();
+    drag(s, [[1, 1], [4, 1]]);
+    s.setTool('select');
+    drag(s, [[8, 8], [12, 12]]);
+    s.key(key('ArrowDown'));
+    s.key(key('ArrowDown'));
+    expect(s.cursorLive).toBe(false);
+  });
+  it('止まったあとで、Ctrl+矢印・矢印（選択なし）でカーソルを動かすと、また生きる', () => {
+    const s = live();
+    s.setTool('brush');
+    expect(s.cursorLive).toBe(false);
+    s.key(key('ArrowLeft'));
+    expect(s.cursorLive).toBe(true);
+  });
+});
+
+describe('浮いた選択を押して離すだけ（動かさない）では、回転の中心を捨てない', () => {
+  it('回す → 選択をクリック（移動量 0）→ 戻す で、位置が元に戻る', () => {
+    const s = fresh();
+    s.setTool('select');
+    drag(s, [[0, 0], [15, 0]]);
+    s.transform('rotateCw');
+    expect(s.doc.floating!.center).toBeDefined();
+    drag(s, [[8, 1]]); // 浮いた選択の中で、押して離すだけ
+    expect(s.doc.floating!.center).toBeDefined();
+    s.transform('rotateCcw');
+    expect(s.doc.floating).toMatchObject({ x: 0, y: 0 });
+  });
+});

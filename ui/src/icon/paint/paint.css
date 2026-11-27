@@ -94,3 +94,6 @@
   .paint-swatch[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: 2px; }
 }
 .paint-gray-hint { margin: 0; }
+.paint-more > summary { cursor: pointer; padding: var(--sp-1) 0; font-size: var(--fs-xs); font-weight: 600; color: var(--text-subtle); border-bottom: 1px solid var(--border); }
+.paint-more > summary:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.paint-more[open] > summary { margin-bottom: var(--sp-1); }
