@@ -376,3 +376,23 @@ describe('元に戻す・やり直し', () => {
     expect(said.at(-1)).toContain('鉛筆');
   });
 });
+
+describe('見直しの指摘（第 1 段階）', () => {
+  it('ドラッグのあとの Shift+クリックは、ドラッグの終点から直線を引く', () => {
+    const s = fresh();
+    drag(s, [[0, 0], [2, 0]]);
+    drag(s, [[2, 2]], { shift: true });
+    expect(top(s)).toEqual(['rrr.', '..r.', '..r.', '....']);
+  });
+  it('浮いた選択を絵の外へ全部出して Delete しても、空の選択は残らず、描ける', () => {
+    const s = fresh(['rr', 'rr']);
+    s.setTool('select');
+    drag(s, [[0, 0], [1, 1]]);
+    drag(s, [[0, 0], [30, 30]]);
+    expect(s.key(key('Delete'))).toBe(true);
+    expect(s.doc.selection).toBeNull();
+    s.setTool('pencil');
+    drag(s, [[3, 3]]);
+    expect(top(s)[3]).toBe('...r');
+  });
+});

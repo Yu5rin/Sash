@@ -132,6 +132,8 @@ export function dropFloating(doc: PaintDoc): boolean {
 export function deleteSelection(doc: PaintDoc): boolean {
   if (doc.floating) {
     doc.floating = null;
+    // 全部が絵の外へ出ていたら、空の選択を残さない（残すと、どこにも描けなくなる）
+    if (doc.selection && !maskBounds(doc.selection, doc.size)) doc.selection = null;
     return true;
   }
   if (!doc.selection) return false;

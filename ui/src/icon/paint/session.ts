@@ -223,6 +223,8 @@ export class PaintSession {
     if (d.kind === 'draw') {
       stampLine(this.doc.pixels, d.last.x, d.last.y, p.x, p.y, this.brush, d.color, this.doc.selection);
       d.last = { x: p.x, y: p.y };
+      // Shift+クリックの直線は、ドラッグの終点から引く
+      this.lastPoint = { x: p.x, y: p.y };
     } else if (d.kind === 'pick') {
       this.pick(p.x, p.y, d.which);
     } else if (d.kind === 'sel') {
