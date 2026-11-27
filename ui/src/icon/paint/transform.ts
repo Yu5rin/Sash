@@ -93,3 +93,130 @@ export function fitWithin(px: Pixels, size: number): Pixels {
   const scale = size / Math.max(px.width, px.height);
   return downsampleBox(px, Math.max(1, Math.round(px.width * scale)), Math.max(1, Math.round(px.height * scale)));
 }
+
+// ---- 反転・90° 回転・大きさの変更（第 2 段階） ----
+
+export type Flip = 'h' | 'v';
+export type Rotation = 'cw' | 'ccw';
+
+/** 1 画素 channels バイトの格子（画素なら 4、マスクなら 1）を、左右・上下に反転する。 */
+function flipBytes(src: Uint8ClampedArray | Uint8Array, w: number, h: number, channels: number, axis: Flip): Uint8Array {
+  const out = new Uint8Array(src.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const sx = axis === 'h' ? w - 1 - x : x;
+      const sy = axis === 'v' ? h - 1 - y : y;
+      for (let c = 0; c < channels; c++) out[(y * w + x) * channels + c] = src[(sy * w + sx) * channels + c]!;
+    }
+  }
+  return out;
+}
+
+/** 90° 回転した格子（幅と高さが入れ替わる）。 */
+function rotateBytes(src: Uint8ClampedArray | Uint8Array, w: number, h: number, channels: number, dir: Rotation): Uint8Array {
+  const out = new Uint8Array(src.length);
+  // 回転後の幅は h、高さは w
+  for (let y = 0; y < w; y++) {
+    for (let x = 0; x < h; x++) {
+      // cw：回転後の (x, y) は、元の (y, h-1-x)。ccw：元の (w-1-y, x)
+      const sx = dir === 'cw' ? y : w - 1 - y;
+      const sy = dir === 'cw' ? h - 1 - x : x;
+      for (let c = 0; c < channels; c++) out[(y * h + x) * channels + c] = src[(sy * w + sx) * channels + c]!;
+    }
+  }
+  return out;
+}
+
+export function flipPixels(px: Pixels, axis: Flip): Pixels {
+  return { data: new Uint8ClampedArray(flipBytes(px.data, px.width, px.height, 4, axis)), width: px.width, height: px.height };
+}
+
+export function rotatePixels(px: Pixels, dir: Rotation): Pixels {
+  return { data: new Uint8ClampedArray(rotateBytes(px.data, px.width, px.height, 4, dir)), width: px.height, height: px.width };
+}
+
+export function flipMask(mask: Uint8Array, w: number, h: number, axis: Flip): Uint8Array {
+  return flipBytes(mask, w, h, 1, axis);
+}
+
+export function rotateMask(mask: Uint8Array, w: number, h: number, dir: Rotation): Uint8Array {
+  return rotateBytes(mask, w, h, 1, dir);
+}
+
+export type ResizeMode = 'nearest' | 'smooth';
+
+/** 正方形の絵を size × size にする。nearest は最近傍（ドットを保つ）、smooth は縮小が面積平均・拡大が双一次（半透明は乗算済みで混ぜる）。 */
+export function resizeSquare(px: Pixels, size: number, mode: ResizeMode): Pixels {
+  if (px.width === size && px.height === size) return { data: new Uint8ClampedArray(px.data), width: size, height: size };
+  if (mode === 'nearest') {
+    const out = createPixels(size, size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const si = (Math.floor((y * px.height) / size) * px.width + Math.floor((x * px.width) / size)) * 4;
+        out.data.set(px.data.subarray(si, si + 4), (y * size + x) * 4);
+      }
+    }
+    return out;
+  }
+  if (size < px.width) return downsampleBox(px, size, size);
+  // 拡大：双一次補間（乗算済みアルファで混ぜる）
+  const out = createPixels(size, size);
+  const at = (x: number, y: number): [number, number, number, number] => {
+    const i = (Math.min(px.height - 1, Math.max(0, y)) * px.width + Math.min(px.width - 1, Math.max(0, x))) * 4;
+    const a = px.data[i + 3]! / 255;
+    return [px.data[i]! * a, px.data[i + 1]! * a, px.data[i + 2]! * a, px.data[i + 3]!];
+  };
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const fx = ((x + 0.5) * px.width) / size - 0.5;
+      const fy = ((y + 0.5) * px.height) / size - 0.5;
+      const x0 = Math.floor(fx);
+      const y0 = Math.floor(fy);
+      const tx = fx - x0;
+      const ty = fy - y0;
+      const mix = [0, 0, 0, 0];
+      for (const [dx, dy, w] of [[0, 0, (1 - tx) * (1 - ty)], [1, 0, tx * (1 - ty)], [0, 1, (1 - tx) * ty], [1, 1, tx * ty]] as const) {
+        const v = at(x0 + dx, y0 + dy);
+        for (let c = 0; c < 4; c++) mix[c]! += v[c]! * w;
+      }
+      const a = mix[3]!;
+      if (a <= 0) continue;
+      const o = (y * size + x) * 4;
+      out.data[o] = Math.round((mix[0]! * 255) / a);
+      out.data[o + 1] = Math.round((mix[1]! * 255) / a);
+      out.data[o + 2] = Math.round((mix[2]! * 255) / a);
+      out.data[o + 3] = Math.round(a);
+    }
+  }
+  return out;
+}
+
+/** 不透明な部分（アルファが 0 でない画素）を、同じ大きさの絵の中央に寄せる（余白のカット）。何も描かれていなければそのまま。 */
+export function trimToCenter(px: Pixels): Pixels {
+  let minX = px.width;
+  let minY = px.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < px.height; y++) {
+    for (let x = 0; x < px.width; x++) {
+      if (px.data[(y * px.width + x) * 4 + 3] === 0) continue;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < 0) return { data: new Uint8ClampedArray(px.data), width: px.width, height: px.height };
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
+  const out = createPixels(px.width, px.height);
+  const ox = Math.floor((px.width - bw) / 2);
+  const oy = Math.floor((px.height - bh) / 2);
+  for (let y = 0; y < bh; y++) {
+    for (let x = 0; x < bw; x++) {
+      const si = ((minY + y) * px.width + minX + x) * 4;
+      out.data.set(px.data.subarray(si, si + 4), ((oy + y) * px.width + ox + x) * 4);
+    }
+  }
+  return out;
+}

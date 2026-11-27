@@ -97,3 +97,50 @@ describe('保存形式（options.paint）', () => {
     expect(COLORS['.']).toBeTruthy();
   });
 });
+
+import { flipMask, flipPixels, resizeSquare, rotateMask, rotatePixels, trimToCenter } from '../src/icon/paint/transform';
+
+describe('反転・回転・大きさの変更（第 2 段階）', () => {
+  const px = fromTable(['rb.', 'g..']);
+  it('反転は 2 回で元に戻る。回転は 4 回で元に戻り、cw と ccw は逆', () => {
+    expect(toTable(flipPixels(px, 'h'))).toEqual(['.br', '..g']);
+    expect(toTable(flipPixels(px, 'v'))).toEqual(['g..', 'rb.']);
+    expect(toTable(flipPixels(flipPixels(px, 'h'), 'h'))).toEqual(toTable(px));
+    expect(toTable(rotatePixels(px, 'cw'))).toEqual(['gr', '.b', '..']);
+    expect(toTable(rotatePixels(px, 'ccw'))).toEqual(['..', 'b.', 'rg']);
+    let r = px;
+    for (let i = 0; i < 4; i++) r = rotatePixels(r, 'cw');
+    expect(toTable(r)).toEqual(toTable(px));
+    expect(toTable(rotatePixels(rotatePixels(px, 'cw'), 'ccw'))).toEqual(toTable(px));
+  });
+  it('マスクも同じ向きに変形する', () => {
+    const m = Uint8Array.from([255, 0, 0, 0, 0, 0]);
+    expect([...flipMask(m, 3, 2, 'h')]).toEqual([0, 0, 255, 0, 0, 0]);
+    expect([...rotateMask(m, 3, 2, 'cw')]).toEqual([0, 255, 0, 0, 0, 0]);
+  });
+  it('最近傍の拡大・縮小（ドットを保つ）', () => {
+    const small = fromTable(['rb', 'g.']);
+    expect(toTable(resizeSquare(small, 4, 'nearest'))).toEqual(['rrbb', 'rrbb', 'gg..', 'gg..']);
+    expect(toTable(resizeSquare(resizeSquare(small, 4, 'nearest'), 2, 'nearest'))).toEqual(['rb', 'g.']);
+  });
+  it('なめらかな縮小は面積平均、拡大は双一次（真ん中が混ざり、色の端は保つ）', () => {
+    const four = fromTable(['#w', 'w#']);
+    expect([...resizeSquare(four, 1, 'smooth').data]).toEqual([128, 128, 128, 255]);
+    const two = fromTable(['#w', '#w']);
+    const big = resizeSquare(two, 4, 'smooth');
+    expect(big.width).toBe(4);
+    expect(big.data[0]).toBe(0);
+    expect(big.data[3 * 4]).toBe(255);
+    expect(big.data[1 * 4]).toBeGreaterThan(0);
+    expect(big.data[1 * 4]).toBeLessThan(255);
+  });
+  it('同じ大きさなら複製', () => {
+    const a = resizeSquare(px, 2, 'smooth');
+    expect(a.width).toBe(2);
+  });
+  it('余白のカット：不透明な部分の囲みを、同じ大きさの中央へ寄せる。何もなければそのまま', () => {
+    const p = fromTable(['rr..', 'rr..', '....', '....']);
+    expect(toTable(trimToCenter(p))).toEqual(['....', '.rr.', '.rr.', '....']);
+    expect(toTable(trimToCenter(createPixels(2, 2)))).toEqual(['..', '..']);
+  });
+});

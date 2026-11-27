@@ -1,10 +1,11 @@
 // 選択（マスク）と、浮いた選択（持ち上げ・移動・確定）、コピー・貼り付け。DOM に触らない。
 // 浮いた選択を確定するとき、透明な部分は下の絵を消さない（blendOver）。はみ出した部分は捨てる。
 
+import type { ColorOp } from './adjust';
 import { TRANSPARENT, type Rgba } from './color';
-import type { Floating, PaintDoc } from './doc';
+import { flatten, snapshotDoc, type Floating, type PaintDoc } from './doc';
 import { blendOver, clonePixels, createPixels, getPixel, inBounds, setPixel, type Pixels } from './pixels';
-import { fitWithin } from './transform';
+import { fitWithin, flipMask, flipPixels, rotateMask, rotatePixels } from './transform';
 
 export interface Rect {
   x: number;
@@ -191,3 +192,119 @@ export function sampleDoc(doc: PaintDoc, x: number, y: number): Rgba {
 }
 
 export type { Floating };
+
+// ---- 楕円・なげなわ・合成・反転・回転（第 2 段階） ----
+
+/** 2 つの角（両端を含む）に内接する楕円のマスク。画素の中心が楕円の中にあれば選ぶ。 */
+export function maskEllipse(size: number, x0: number, y0: number, x1: number, y1: number): Uint8Array {
+  const m = new Uint8Array(size * size);
+  const minX = Math.min(x0, x1);
+  const maxX = Math.max(x0, x1) + 1;
+  const minY = Math.min(y0, y1);
+  const maxY = Math.max(y0, y1) + 1;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const a = (maxX - minX) / 2;
+  const b = (maxY - minY) / 2;
+  for (let y = Math.max(0, minY); y < Math.min(size, maxY); y++) {
+    for (let x = Math.max(0, minX); x < Math.min(size, maxX); x++) {
+      if (((x + 0.5 - cx) / a) ** 2 + ((y + 0.5 - cy) / b) ** 2 <= 1) m[y * size + x] = 255;
+    }
+  }
+  return m;
+}
+
+/** 多角形（なげなわ）の中のマスク。画素の中心が、閉じた多角形の中（偶奇の規則）にあれば選ぶ。3 点未満は空。 */
+export function maskPolygon(size: number, points: readonly (readonly [number, number])[]): Uint8Array {
+  const m = new Uint8Array(size * size);
+  if (points.length < 3) return m;
+  for (let y = 0; y < size; y++) {
+    const cy = y + 0.5;
+    const xs: number[] = [];
+    for (let i = 0; i < points.length; i++) {
+      // 点は画素の中心の座標（x + 0.5）で扱う
+      const [ax, ay] = points[i]!;
+      const [bx, by] = points[(i + 1) % points.length]!;
+      const y0 = ay + 0.5;
+      const y1 = by + 0.5;
+      if ((y0 <= cy && y1 > cy) || (y1 <= cy && y0 > cy)) xs.push(ax + 0.5 + ((cy - y0) / (y1 - y0)) * (bx - ax));
+    }
+    xs.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      for (let x = Math.max(0, Math.ceil(xs[k]! - 0.5)); x < Math.min(size, Math.ceil(xs[k + 1]! - 0.5)); x++) m[y * size + x] = 255;
+    }
+  }
+  return m;
+}
+
+export type SelectMode = 'replace' | 'add' | 'subtract';
+
+/**
+ * 今の選択（null は選択なし）に、新しい形を合成する。add は和、subtract は差。
+ * 選択がないときの add は新しい形そのもの、subtract は何もしない。結果が空なら null。
+ */
+export function combineMask(base: Uint8Array | null, shape: Uint8Array, mode: SelectMode, size: number): Uint8Array | null {
+  let out: Uint8Array | null;
+  if (mode === 'replace' || (mode === 'add' && !base)) out = new Uint8Array(shape);
+  else if (!base) out = null;
+  else {
+    out = new Uint8Array(base.length);
+    for (let i = 0; i < out.length; i++) out[i] = mode === 'add' ? (base[i] !== 0 || shape[i] !== 0 ? 255 : 0) : base[i] !== 0 && shape[i] === 0 ? 255 : 0;
+  }
+  return out && maskBounds(out, size) ? out : null;
+}
+
+/** 選択範囲を反転する（浮いた選択は先に確定する）。選択がなければ何もしない。反転して空になるなら選択なしにする。 */
+export function invertSelection(doc: PaintDoc): boolean {
+  dropFloating(doc);
+  if (!doc.selection) return false;
+  const m = new Uint8Array(doc.selection.length);
+  for (let i = 0; i < m.length; i++) m[i] = doc.selection[i] === 0 ? 255 : 0;
+  doc.selection = maskBounds(m, doc.size) ? m : null;
+  return true;
+}
+
+export type TransformKind = 'flipH' | 'flipV' | 'rotateCw' | 'rotateCcw';
+
+/**
+ * 反転・回転する。選択（浮いた選択）があればその中身だけ（持ち上げて、中心を保ったまま変形し、浮いたままにする）、なければ絵の全体。
+ * 変形した（または変形できる対象があった）ら true。
+ */
+export function transformContent(doc: PaintDoc, kind: TransformKind): boolean {
+  if (doc.selection || doc.floating) {
+    if (!doc.floating && !liftSelection(doc, false)) return false;
+    const f = doc.floating!;
+    const w = f.pixels.width;
+    const h = f.pixels.height;
+    if (kind === 'flipH' || kind === 'flipV') {
+      const axis = kind === 'flipH' ? 'h' : 'v';
+      f.pixels = flipPixels(f.pixels, axis);
+      f.mask = flipMask(f.mask, w, h, axis);
+    } else {
+      const dir = kind === 'rotateCw' ? 'cw' : 'ccw';
+      f.pixels = rotatePixels(f.pixels, dir);
+      f.mask = rotateMask(f.mask, w, h, dir);
+      // 中心が動かないように、左上の位置を直す
+      f.x = Math.round(f.x + w / 2 - h / 2);
+      f.y = Math.round(f.y + h / 2 - w / 2);
+    }
+    syncSelection(doc);
+    return true;
+  }
+  if (kind === 'flipH' || kind === 'flipV') doc.pixels = flipPixels(doc.pixels, kind === 'flipH' ? 'h' : 'v');
+  else doc.pixels = rotatePixels(doc.pixels, kind === 'rotateCw' ? 'cw' : 'ccw');
+  return true;
+}
+
+/** 色の変更を、浮いた選択があればその中身に、なければ選択範囲の中（選択がなければ全体）に適用する。 */
+export function applyColorOp(doc: PaintDoc, op: ColorOp): void {
+  if (doc.floating) op(doc.floating.pixels, doc.floating.mask);
+  else op(doc.pixels, doc.selection);
+}
+
+/** 色の変更を適用したあとの、見たままの絵（doc は変えない）。プレビューに使う。 */
+export function previewColorOp(doc: PaintDoc, op: ColorOp): Pixels {
+  const copy: PaintDoc = { size: doc.size, ...snapshotDoc(doc) };
+  applyColorOp(copy, op);
+  return flatten(copy);
+}
