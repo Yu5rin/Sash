@@ -9,4 +9,7 @@ export const en: Readonly<Record<string, string>> = {
   '描く絵の大きさを選んでください。16 × 16 はドット絵向きで、出力の大きさに合わせて拡大されます。': 'Choose the size of the picture. 16 × 16 suits pixel art and is enlarged to the output size.',
   '新しく描く': 'Draw new',
   '空の絵を、鉛筆や塗りつぶしで一から描きます（16 × 16 のドット絵も描けます）': 'Draw from a blank picture with the pencil and fill tools (16 × 16 pixel art is also possible)',
+  '描いた絵を捨てますか？': 'Discard the picture you drew?',
+  '描いた絵は、［設定する］を押さないと、ブックに入りません。': 'The picture is not added to the workbook unless you press [Apply].',
+  '戻る': 'Go back',
 };

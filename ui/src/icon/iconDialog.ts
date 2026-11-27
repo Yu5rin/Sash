@@ -166,6 +166,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   let dragStart: { x: number; y: number } | null = null;
   /** ペイント画面を開いている間 true。下のアイコンエディタが、貼り付けやドロップを受けて元画像を入れ替えないようにする。 */
   let paintOpen = false;
+  /** このダイアログで描いた絵が、まだブックに設定（追加）されていないか。そのまま閉じると消えるので、閉じる前に確かめる。 */
+  let unappliedPaint = false;
 
   const fileInput = h('input', { type: 'file', accept: ACCEPT, hidden: true, onchange: () => fileInput.files?.[0] && void loadFile(fileInput.files[0]).catch(reportError) });
   const folderInput = h('input', { type: 'file', hidden: true, multiple: true, webkitdirectory: true, onchange: () => folderInput.files && void bulkImport(Array.from(folderInput.files)) });
@@ -353,6 +355,14 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const title = target ? tr('アイコンを作る：{name}', { name: el!.getAttribute('id') ?? el!.localName }) : tr('アイコンを作る');
   const modal = openModal(title, content, {
     wide: true,
+    beforeClose: async () => {
+      if (!unappliedPaint || applied) return true;
+      const a = await ask<'discard' | 'cancel'>(tr('描いた絵を捨てますか？'), tr('描いた絵は、［設定する］を押さないと、ブックに入りません。'), [
+        { value: 'discard', label: tr('捨てる'), danger: true },
+        { value: 'cancel', label: tr('戻る'), primary: true },
+      ]);
+      return a === 'discard';
+    },
     // 開いているパレットがあれば、Esc はパレットだけ閉じる（加工中のアイコンエディタごと閉じて、加工を失わないため）
     onEscape: () => openPalettes.some((close) => close()),
     footer: [h('button', { type: 'button', onclick: () => modal.close() }, tr('キャンセル')), okButton],
@@ -450,6 +460,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       opts.crop = null;
       // 新しく読み込んだ画像は、描いた絵ではない（前の元画像の印を残さない）
       delete opts.paint;
+      unappliedPaint = false;
       // 背景色は四隅から推定しておく（透過を有効にしたときの初期値）
       opts.key = cornerColor(rasterize(source, Math.min(source.width, 256), Math.min(source.height, 256)));
     } else if (opts.paint !== undefined) {
@@ -494,7 +505,11 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   // ---- 描いて編集（ペイント画面。SPEC §25） ----
 
   /** 元画像の画素を読む（描いた絵の復元用）。 */
-  function readSourcePixels(src: Source): { data: Uint8ClampedArray; width: number; height: number } {
+  async function readSourcePixels(src: Source): Promise<{ data: Uint8ClampedArray; width: number; height: number }> {
+    // Sash が書いた PNG は、画素をそのまま読む（canvas を通すと、半透明の画素が乗算済みアルファで丸められてずれる）
+    const { decodePng } = await import('./paint/png');
+    const exact = decodePng(new Uint8Array(await src.blob.arrayBuffer()));
+    if (exact) return exact;
     const c = document.createElement('canvas');
     c.width = src.width;
     c.height = src.height;
@@ -511,31 +526,33 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   async function checkPaintSource(): Promise<void> {
     if (!source) return;
     const { readPaintMeta, isNewerPaintMeta } = await import('./paint/doc');
-    const { recoverFromSource } = await import('./paint/transform');
+    const { recoverFromSource, sourceScale } = await import('./paint/transform');
     if (isNewerPaintMeta(opts)) {
       notify({ kind: 'info', message: tr('もっと新しい版の Sash で描いた絵です。見た目はそのまま使えますが、描き直しはできません') });
       delete opts.paint;
       return;
     }
     const meta = readPaintMeta(opts, source.width, source.height);
-    if (!meta || !recoverFromSource(readSourcePixels(source), meta.canvas)) {
+    const px = meta ? recoverFromSource(await readSourcePixels(source), meta.canvas) : null;
+    if (!meta || !px) {
       delete opts.paint;
       return;
     }
     opts.paint = meta;
     source.paint = { canvas: meta.canvas };
+    // 0.3.1 などで出力の大きさを変えて保存したものは、元画像の倍率が今の出力の大きさに合わない（ぼけて見える）。絵から作り直す
+    if (source.width !== meta.canvas * sourceScale(meta.canvas, opts.size)) {
+      source = await paintedSource(px, meta.canvas, source.name);
+    }
   }
 
   /** 描いた絵（キャンバスの大きさ）から、出力の大きさに合わせた整数倍の元画像を作る。 */
   async function paintedSource(pixels: { data: Uint8ClampedArray; width: number; height: number }, canvas: CanvasSize, fileName: string): Promise<Source> {
     const { sourceScale, upscaleNearest } = await import('./paint/transform');
+    const { encodePng } = await import('./paint/png');
     const big = upscaleNearest(pixels, sourceScale(canvas, opts.size));
-    const c = document.createElement('canvas');
-    c.width = big.width;
-    c.height = big.height;
-    c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(big.data), big.width, big.height), 0, 0);
-    // toBlob ではなく toDataURL（同期）で PNG にする。toBlob は、画面が忙しいと 1 秒ほど待たされることがある
-    const blob = dataUrlToBlob(c.toDataURL('image/png'));
+    // 画素をそのまま書く PNG（canvas を通すと、半透明の画素がずれる）。canvas の toBlob は、画面が忙しいと 1 秒ほど待たされることもある
+    const blob = new Blob([encodePng(big)], { type: 'image/png' });
     return { name: fileName, blob, image: await createImageBitmap(blob), isSvg: false, width: big.width, height: big.height, paint: { canvas } };
   }
 
@@ -543,7 +560,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   async function rebuildPaintSource(): Promise<void> {
     if (!source?.paint) return;
     const { recoverFromSource } = await import('./paint/transform');
-    const px = recoverFromSource(readSourcePixels(source), source.paint.canvas);
+    const px = recoverFromSource(await readSourcePixels(source), source.paint.canvas);
     if (!px) {
       render();
       return;
@@ -568,6 +585,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     exeList.replaceChildren();
     renderIcoList();
     syncControls();
+    unappliedPaint = true;
     render();
   }
 
@@ -612,7 +630,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     if (!source || paintOpen) return;
     if (source.paint) {
       const { recoverFromSource } = await import('./paint/transform');
-      const px = recoverFromSource(readSourcePixels(source), source.paint.canvas);
+      const px = recoverFromSource(await readSourcePixels(source), source.paint.canvas);
       if (px) {
         await openPaint(source.paint.canvas, px);
         return;
