@@ -81,6 +81,7 @@ async function drag(page, size, pts, button = 'left') {
 const click = (page, size, x, y, button = 'left') => drag(page, size, [[x, y]], button);
 
 async function setPrimary(page, hex) {
+  await page.locator('#paint-tab-colors').click();
   const input = page.locator('.paint-side .cp-hex');
   await input.fill(hex);
   await input.press('Enter');
@@ -505,6 +506,15 @@ for (const v of [{ name: 'light', o: {} }, { name: 'dark', o: { dark: true } }, 
   await page.keyboard.press('m');
   await drag(page, 32, [[6, 6], [12, 12]]);
   await page.screenshot({ path: `${SHOTS}/21-${v.name}-paint.png` });
+  await page.locator('#paint-tab-adjust').click();
+  await page.screenshot({ path: `${SHOTS}/22-${v.name}-adjust.png` });
+  const sideOverflow = await page.evaluate(() => { const b = document.querySelector('.paint-tabbody'); return b.scrollWidth > b.clientWidth + 1; });
+  check(`${v.name}：選択範囲の色のタブが横にあふれない`, !sideOverflow);
+  await page.locator('#paint-tab-image').click();
+  await page.screenshot({ path: `${SHOTS}/23-${v.name}-image.png` });
+  await page.locator('#paint-tab-colors').click();
+  await page.keyboard.press('r');
+  await page.screenshot({ path: `${SHOTS}/24-${v.name}-shape-tool.png` });
   const overflow = await page.evaluate(() => {
     const m = document.querySelector('.modal.size-xl').getBoundingClientRect();
     const body = document.querySelector('.paint-main').getBoundingClientRect();
@@ -515,6 +525,190 @@ for (const v of [{ name: 'light', o: {} }, { name: 'dark', o: { dark: true } }, 
   check(`${v.name}：ダイアログが画面に収まり、横にあふれない`, overflow.withinViewport && overflow.footerBelow && !overflow.hScroll, JSON.stringify(overflow));
   console.log('     ', JSON.stringify(overflow));
   await page.context().close();
+}
+
+// ---------------------------------------------------------------------------------------------
+console.log('== 8. 第 2 段階：図形・選択範囲だけの色の変更・色の置き換え・反転・ブラシ・楕円');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 700 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { localStorage.setItem('sash.paint.guide', '1'); window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 32);
+  const S = 32;
+  const settings = page.locator('.paint-tool-settings');
+  // 四角形（塗りだけ）：赤と緑
+  await setPrimary(page, '#ff0000');
+  await page.keyboard.press('r');
+  await settings.locator('select[aria-label="塗り"], select[aria-label="Fill"]').selectOption('fill');
+  await drag(page, S, [[2, 2], [9, 9]]);
+  await setPrimary(page, '#00ff00');
+  await page.keyboard.press('r');
+  await drag(page, S, [[12, 2], [19, 9]]);
+  await page.screenshot({ path: `${SHOTS}/30-rects.png` });
+  // 選択（赤い四角を含む範囲）→ 色相を +120 回す（赤 → 緑）。プレビューが見え、適用で 1 手になる
+  await page.keyboard.press('m');
+  await drag(page, S, [[0, 0], [10, 10]]);
+  await page.locator('#paint-tab-adjust').click();
+  const hue = page.locator('.paint-adjust input[type=range]').first();
+  await hue.fill('120');
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${SHOTS}/31-hue-preview.png` });
+  const histBefore = await page.locator('.paint-undo').isEnabled();
+  await page.locator('.paint-adjust button:has-text("適用"), .paint-adjust button:has-text("Apply")').first().click();
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${SHOTS}/32-hue-applied.png` });
+  check('色相のプレビューと適用ができる（元に戻すが使える）', histBefore && (await page.locator('.paint-undo').isEnabled()));
+  // 選択を外し、色の置き換え：緑 → 青（絵全体）
+  await page.keyboard.press('Control+d');
+  const fromHex = page.locator('.paint-adjust input.paint-hex').first();
+  await fromHex.fill('#00ff00');
+  await fromHex.press('Tab');
+  await page.waitForTimeout(100);
+  await page.screenshot({ path: `${SHOTS}/33-replace-preview.png` });
+  const toHex = page.locator('.paint-adjust input.paint-hex').nth(1);
+  await toHex.fill('#0000ff');
+  await toHex.press('Tab');
+  await page.locator('.paint-adjust button:has-text("適用"), .paint-adjust button:has-text("Apply")').nth(1).click();
+  await page.waitForTimeout(150);
+  // 楕円（線だけ・前景色 赤）
+  await setPrimary(page, '#ff0000');
+  await page.keyboard.press('o');
+  await settings.locator('select[aria-label="塗り"], select[aria-label="Fill"]').selectOption('outline');
+  await drag(page, S, [[22, 22], [30, 30]]);
+  // ブラシ（太さ 2・硬さ 100・ぼかしなし）
+  await page.keyboard.press('b');
+  await settings.locator('select[aria-label="太さ"], select[aria-label="Thickness"]').first().selectOption('2').catch(() => undefined);
+  await drag(page, S, [[2, 26], [8, 26]]);
+  await page.screenshot({ path: `${SHOTS}/34-ellipse-brush.png` });
+  // 画像の左右反転（選択なし）
+  await page.locator('#paint-tab-image').click();
+  await page.locator('.paint-image button:has-text("左右反転"), .paint-image button:has-text("Flip horizontally")').click();
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${SHOTS}/35-flipped.png` });
+  await finishPaint(page);
+  await apply(page);
+  const out = await storedPixels(page);
+  const BLUE = [0, 0, 255, 255];
+  const at = (x, y) => rgbaAt(out, x, y);
+  check('色相 +120（選択範囲だけ）と置き換え（緑 → 青）の結果：左右反転後、(25,5) が青', same(at(25, 5), BLUE), String(at(25, 5)));
+  check('置き換え（緑 → 青）：もう一方の四角形も青 (15,5)', same(at(15, 5), BLUE), String(at(15, 5)));
+  check('反転して、元の左の位置 (5,5) は透明', at(5, 5)[3] === 0, String(at(5, 5)));
+  check('楕円（線だけ）：反転後の左右の縁は赤、中心は透明', same(at(1, 26), RED) && same(at(9, 26), RED) && at(5, 26)[3] === 0 && at(5, 22)[3] > 0, `${at(1, 26)} ${at(5, 26)}`);
+  check('ブラシの線（太さ 2）：反転後 (26,26) が赤、離れた (26,20) は透明', same(at(26, 26), RED) && at(26, 20)[3] === 0, `${at(26, 26)} ${at(26, 20)}`);
+  const legacy = await legacyOutput(page, 'img_btnSummary', 32);
+  check('互換：第 2 段階の絵も 0.3.1 の手順で画素が一致する', same(legacy, out.data));
+  await ctx.close();
+}
+
+console.log('== 9. 見直し 9 件：フォーカスが外にあるときのショートカット・Enter・確認・blur');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 700 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { localStorage.setItem('sash.paint.guide', '1'); window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 32);
+  const S = 32;
+  await drag(page, S, [[3, 3], [8, 3]]);
+  const open = () => page.locator('.paint-canvas').count();
+  // 「丸い筆先」のチェックボックスにフォーカスして Enter：［完了］は押されない
+  const roundBox = page.locator('.paint-tool-settings input[type=checkbox]').first();
+  await roundBox.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(200);
+  check('チェックボックスの上で Enter を押しても、［完了］は押されない', (await open()) === 1);
+  // そこで E キー：ショートカットが効く
+  await page.keyboard.press('e');
+  check('チェックボックスにフォーカスがあっても、ショートカット（E）が効く', (await page.locator('.paint-tool[data-tool="eraser"]').getAttribute('aria-pressed')) === 'true');
+  // スライダーの上で Ctrl+Z：元に戻る
+  await page.keyboard.press('Control+z');
+  check('フォーカスがキャンバスの外でも Ctrl+Z が効く', (await page.locator('.paint-undo').isDisabled()));
+  // 見出し（フォーカスを持たない所）を押すと、フォーカスがキャンバスに戻る
+  await page.locator('.paint-side h3').first().click();
+  await page.keyboard.press('p');
+  check('見出しを押してもショートカットが効く（フォーカスがキャンバスへ戻る）', (await page.locator('.paint-tool[data-tool="pencil"]').getAttribute('aria-pressed')) === 'true');
+  // ダイアログ本体（DIV.modal）にフォーカスがあるとき Enter：［完了］は押されない
+  await page.evaluate(() => [...document.querySelectorAll('.modal')].at(-1).focus());
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(200);
+  check('ダイアログ本体で Enter を押しても［完了］は押されない', (await open()) === 1);
+  // blur：Space を押したまま別のウィンドウへ移ると、パンのまま残らない
+  await page.locator('.paint-stage').focus();
+  await page.keyboard.down(' ');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  const spaceClass = await page.evaluate(() => document.querySelector('.paint-stage').classList.contains('space'));
+  await page.keyboard.up(' ');
+  check('別のウィンドウへ移ったあと、Space（パン）の状態が残らない', !spaceClass);
+  // ウィンドウの × で終わる前に、描いた内容を確かめる
+  await drag(page, S, [[3, 6], [8, 6]]);
+  const asked = page.evaluate(async () => (await window.__mod('dialogs/modal.ts')).confirmOpenDialogs());
+  await page.waitForTimeout(400);
+  check('終了の前に、描いた内容を捨てる確認が出る', /捨てますか|Discard/.test(await topModal(page).textContent()));
+  await topModal(page).locator('footer button.primary').click();
+  check('［戻る］を選ぶと、終了をやめる（confirmOpenDialogs が false）', (await asked) === false);
+  // 完了 → アイコンエディタを Esc で閉じようとすると、描いた絵を捨てる確認が出る
+  await finishPaint(page);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  check('［設定する］の前に Esc で閉じようとすると、描いた絵を捨てる確認が出る', /描いた絵を捨てますか|Discard the picture/.test(await topModal(page).textContent()));
+  await topModal(page).locator('footer button.primary').click();
+  await page.waitForTimeout(200);
+  check('［戻る］でアイコンエディタに戻る（開いたまま）', (await page.locator('.icon-editor').count()) === 1);
+  await apply(page);
+  check('［設定する］のあとは確認なしで閉じる', (await page.locator('.modal').count()) === 0);
+  await ctx.close();
+}
+
+console.log('== 10. キーボードのカーソルで描く・OS のクリップボードへのコピー・描き直しでの半透明の往復');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 700 }, colorScheme: 'light', permissions: ['clipboard-read', 'clipboard-write'] });
+  await ctx.addInitScript(() => { localStorage.setItem('sash.paint.guide', '1'); window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 32);
+  await page.locator('.paint-stage').focus();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+  await page.keyboard.down('Enter');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.up('Enter');
+  await page.screenshot({ path: `${SHOTS}/40-keyboard-draw.png` });
+  // 半透明の色（不透明度 50%）で、ブラシを 1 点
+  await page.keyboard.press('b');
+  await page.locator('.paint-tool-settings input[type=range][aria-label="不透明度"], .paint-tool-settings input[type=range][aria-label="Opacity"]').last().fill('50');
+  await page.locator('.paint-stage').focus();
+  await click(page, 32, 3, 3);
+  // 全体をコピー（選択なし）→ OS のクリップボードに画像が入る
+  await page.keyboard.press('Control+c');
+  await page.waitForTimeout(400);
+  const clip = await page.evaluate(async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      const t = items[0]?.types ?? [];
+      if (!t.includes('image/png')) return { types: t };
+      const blob = await items[0].getType('image/png');
+      const bmp = await createImageBitmap(blob);
+      return { types: t, w: bmp.width, h: bmp.height };
+    } catch (e) { return { error: String(e) }; }
+  });
+  check('Ctrl+C で、OS のクリップボードに画像（32×32）が入る', clip.w === 32 && clip.h === 32, JSON.stringify(clip));
+  await finishPaint(page);
+  await apply(page);
+  const out = await storedPixels(page);
+  const grey = [0x42, 0x42, 0x42, 255];
+  check('キーボードのカーソルで描いた線（x 19〜21、y 16）', same(rgbaAt(out, 19, 16), grey) && same(rgbaAt(out, 21, 16), grey) && rgbaAt(out, 22, 16)[3] === 0, `${rgbaAt(out, 19, 16)} ${rgbaAt(out, 21, 16)}`);
+  const half = rgbaAt(out, 3, 3);
+  check('ブラシの不透明度 50%：半透明の画素になる（アルファ 128 付近）', half[3] > 100 && half[3] < 150, String(half));
+  await ctx.close();
 }
 
 await browser.close();

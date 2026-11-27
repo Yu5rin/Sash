@@ -141,13 +141,21 @@ export function buildAdjustPanel(session: PaintSession, hooks: AdjustHooks): Pan
   let opacityPct = 100;
 
   const preview = (op: ColorOp | null) => session.setPreview(op);
-  const hslOp = (): ColorOp => (px, m) => adjustHsl(px, m, { ...hsl });
+  // 適用のとき、スライダーを戻す処理（reset）が先に走っても変わらないよう、値は作る時点で写しておく
+  const hslOp = (): ColorOp => {
+    const v = { ...hsl };
+    return (px, m) => adjustHsl(px, m, v);
+  };
   const hslNeutral = () => hsl.hue === 0 && hsl.saturation === 0 && hsl.lightness === 0;
   const hueRow = sliderRow(t('色相'), -180, 180, 0, (v) => { hsl.hue = v; preview(hslNeutral() ? null : hslOp()); }, t('色相を回します（−180〜180°）'));
   const satRow = sliderRow(t('彩度'), -100, 100, 0, (v) => { hsl.saturation = v; preview(hslNeutral() ? null : hslOp()); }, t('鮮やかさ。−100 で灰色になります'));
   const lightRow = sliderRow(t('明るさ'), -100, 100, 0, (v) => { hsl.lightness = v; preview(hslNeutral() ? null : hslOp()); }, t('−100 で黒、100 で白に近づけます'));
 
-  const repOp = (): ColorOp | null => (rep.from ? (px, m) => replaceColorMasked(px, m, rep.from!, rep.to, rep.tolerance) : null);
+  const repOp = (): ColorOp | null => {
+    if (!rep.from) return null;
+    const { from, to, tolerance } = rep;
+    return (px, m) => replaceColorMasked(px, m, from, to, tolerance);
+  };
   const fromField = colorField(t('置き換える前の色'), null, (c) => { rep.from = c; preview(repOp()); });
   const toField = colorField(t('置き換えたあとの色'), rep.to, (c) => { rep.to = c; preview(repOp()); });
   const tolRow = sliderRow(t('許容差'), 0, 100, rep.tolerance, (v) => { rep.tolerance = v; preview(repOp()); }, t('0 は同じ色だけ。上げると近い色（縁の混ざった色も）まで置き換えます'));
@@ -157,7 +165,11 @@ export function buildAdjustPanel(session: PaintSession, hooks: AdjustHooks): Pan
     return false;
   };
 
-  const opRow = sliderRow(t('不透明度'), 0, 100, 100, (v) => { opacityPct = v; preview(opacityPct === 100 ? null : (px, m) => opacityMasked(px, m, opacityPct)); }, t('今の濃さの何 % にするか。0 で透明になります'));
+  const opacityOp = (): ColorOp => {
+    const pct = opacityPct;
+    return (px, m) => opacityMasked(px, m, pct);
+  };
+  const opRow = sliderRow(t('不透明度'), 0, 100, 100, (v) => { opacityPct = v; preview(opacityPct === 100 ? null : opacityOp()); }, t('今の濃さの何 % にするか。0 で透明になります'));
 
   const reset = () => {
     hsl.hue = hsl.saturation = hsl.lightness = 0;
@@ -188,14 +200,21 @@ export function buildAdjustPanel(session: PaintSession, hooks: AdjustHooks): Pan
       tolRow.el,
       h('div', { class: 'paint-actions' },
         small(t('適用'), t('元の色に近い色を、新しい色に置き換えます。縁の半透明にも、近さに応じて効きます'), () => { const op = repOp(); if (needFrom() && op) apply(t('色の置き換え'), op); }),
-        small(t('この色を透明にする'), t('元の色に近い色を透明にします（背景を抜くときに使います）'), () => { if (needFrom()) apply(t('この色を透明にする'), (px, m) => makeTransparentMasked(px, m, rep.from!, rep.tolerance)); }))),
+        small(t('この色を透明にする'), t('元の色に近い色を透明にします（背景を抜くときに使います）'), () => {
+          if (!needFrom()) return;
+          const { from, tolerance } = rep;
+          apply(t('この色を透明にする'), (px, m) => makeTransparentMasked(px, m, from!, tolerance));
+        }))),
     section(t('そのほか'),
       h('div', { class: 'paint-actions' },
-        small(t('単色化'), t('絵のシルエットを、前景色の 1 色にします（アルファは保ちます）'), () => apply(t('単色化'), (px, m) => monochromeMasked(px, m, session.primary))),
+        small(t('単色化'), t('絵のシルエットを、前景色の 1 色にします（アルファは保ちます）'), () => {
+          const c = { ...session.primary };
+          apply(t('単色化'), (px, m) => monochromeMasked(px, m, c));
+        }),
         small(t('色の反転'), t('色を反転します（アルファは保ちます）'), () => apply(t('色の反転'), invertColorsMasked)),
         small(t('グレースケール'), t('明るさだけの灰色にします'), () => apply(t('グレースケール'), grayscaleMasked))),
       opRow.el,
-      h('div', { class: 'paint-actions' }, small(t('不透明度を適用'), t('選択範囲（なければ全体）の濃さを、スライダーの割合にします'), () => { if (opacityPct !== 100) apply(t('不透明度'), (px, m) => opacityMasked(px, m, opacityPct)); }))));
+      h('div', { class: 'paint-actions' }, small(t('不透明度を適用'), t('選択範囲（なければ全体）の濃さを、スライダーの割合にします'), () => { if (opacityPct !== 100) apply(t('不透明度'), opacityOp()); }))));
 
   return {
     el,

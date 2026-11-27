@@ -609,6 +609,13 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (target.closest('.paint-tools') && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return;
     if (target.closest('.paint-tabs') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
     const onButton = target.closest('button') !== null;
+    // Enter・Space・矢印（カーソルの移動と描画）は、キャンバス（か、フォーカスがどこにもないとき）だけのもの。
+    // チェックボックスやスライダーの上の Enter で、描いてしまわない
+    const onStage = target === stage || target === document.body || target.classList.contains('modal');
+    if (!onStage && (e.key === 'Enter' || e.key === ' ' || e.key.startsWith('Arrow'))) {
+      if (e.key === 'Enter' && !onButton) e.preventDefault();
+      return;
+    }
     // Space は、ポインタと一緒ならパン、単独ならキーボードのカーソルの位置で描く。ボタンの上では、ボタンを押す（既定の動き）
     if (e.key === ' ' && !onButton) {
       e.preventDefault();
