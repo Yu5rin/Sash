@@ -5,6 +5,7 @@ import type { ColorOp } from './adjust';
 import { TRANSPARENT, type Rgba } from './color';
 import { flatten, snapshotDoc, type Floating, type PaintDoc } from './doc';
 import { blendOver, clonePixels, createPixels, getPixel, inBounds, setPixel, type Pixels } from './pixels';
+import { line } from './raster';
 import { fitWithin, flipMask, flipPixels, rotateMask, rotatePixels } from './transform';
 
 export interface Rect {
@@ -233,6 +234,14 @@ export function maskPolygon(size: number, points: readonly (readonly [number, nu
     for (let k = 0; k + 1 < xs.length; k += 2) {
       for (let x = Math.max(0, Math.ceil(xs[k]! - 0.5)); x < Math.min(size, Math.ceil(xs[k + 1]! - 0.5)); x++) m[y * size + x] = 255;
     }
+  }
+  // 囲みの線そのものの画素も選ぶ（そうしないと、右と下の縁の画素が選ばれず、なぞったとおりにならない）
+  for (let i = 0; i < points.length; i++) {
+    const [ax, ay] = points[i]!;
+    const [bx, by] = points[(i + 1) % points.length]!;
+    line(Math.round(ax), Math.round(ay), Math.round(bx), Math.round(by), (x, y) => {
+      if (x >= 0 && y >= 0 && x < size && y < size) m[y * size + x] = 255;
+    });
   }
   return m;
 }

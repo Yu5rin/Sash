@@ -163,8 +163,8 @@ describe('楕円・なげなわ・合成・反転（第 2 段階）', () => {
     expect(maskBounds(maskEllipse(4, -3, -3, 1, 1), 4)).not.toBeNull();
   });
   it('なげなわ（多角形）のマスク：三角形・凹んだ形・3 点未満は空', () => {
-    expect(maskTable(maskPolygon(6, [[0, 0], [5, 0], [0, 5]]), 6)).toEqual(['#####.', '####..', '###...', '##....', '#.....', '......']);
-    const concave = maskPolygon(8, [[0, 0], [7, 0], [7, 7], [4, 7], [4, 3], [3, 3], [3, 7], [0, 7]]);
+    expect(maskTable(maskPolygon(6, [[0, 0], [5, 0], [0, 5]]), 6)).toEqual(['######', '#####.', '####..', '###...', '##....', '#.....']);
+    const concave = maskPolygon(8, [[0, 0], [7, 0], [7, 7], [5, 7], [5, 3], [2, 3], [2, 7], [0, 7]]);
     expect(maskTable(concave, 8)[5]).toBe('###..###');
     expect(maskBounds(maskPolygon(5, [[0, 0], [4, 4]]), 5)).toBeNull();
   });
