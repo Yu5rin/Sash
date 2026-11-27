@@ -82,7 +82,7 @@ export function buildToolSettings(session: PaintSession): Panel {
   const aa = check(t('なめらか'), t('縁をなめらか（アンチエイリアス）にします。ドット絵では切っておくと、くっきり描けます'), (v) => session.setSettings({ antialias: v }));
   const aaShape = check(t('なめらか'), t('線と楕円の縁をなめらか（アンチエイリアス）にします。切ると、ドットがくっきりします'), (v) => session.setSettings({ antialias: v }));
   const width = numSelect(t('線の太さ'), t('線の太さ（1〜8 ドット）。[ ] キーでも変えられます'), 8, (n) => session.setSettings({ shapeWidth: n }));
-  const fill = h('select', { 'aria-label': t('塗り'), title: t('線だけ、塗りだけ、線と塗りの両方。線は前景色、塗りは背景色です（右ボタンのドラッグは逆）'), onchange: (e: Event) => session.setSettings({ shapeFill: (e.target as HTMLSelectElement).value as ShapeFill }) },
+  const fill = h('select', { 'aria-label': t('塗り'), title: t('線だけ、塗りだけ、線と塗りの両方。線は前景色、塗りは背景色です（右ボタンのドラッグは逆）。背景色が透明のときは、線と塗りでも塗りは付きません'), onchange: (e: Event) => session.setSettings({ shapeFill: (e.target as HTMLSelectElement).value as ShapeFill }) },
     h('option', { value: 'outline' }, t('線だけ')), h('option', { value: 'fill' }, t('塗りだけ')), h('option', { value: 'both' }, t('線と塗り'))) as HTMLSelectElement;
   const tol = sliderRowLite(t('許容差'), 0, 100, 0, (v) => session.setSettings({ tolerance: v }), t('0 は同じ色だけ。上げると近い色もまとめて扱います'));
   const contig = check(t('つながった所だけ'), t('クリックした所とつながった範囲だけにします。切ると、絵の全体から同じ色を探します'), (v) => session.setSettings({ contiguous: v }));
@@ -148,7 +148,7 @@ export function buildAdjustPanel(session: PaintSession, hooks: AdjustHooks): Pan
   };
   const hslNeutral = () => hsl.hue === 0 && hsl.saturation === 0 && hsl.lightness === 0;
   const hueRow = sliderRow(t('色相'), -180, 180, 0, (v) => { hsl.hue = v; preview(hslNeutral() ? null : hslOp()); }, t('色相を回します（−180〜180°）'));
-  const satRow = sliderRow(t('彩度'), -100, 100, 0, (v) => { hsl.saturation = v; preview(hslNeutral() ? null : hslOp()); }, t('鮮やかさ。−100 で灰色になります'));
+  const satRow = sliderRow(t('彩度'), -100, 100, 0, (v) => { hsl.saturation = v; preview(hslNeutral() ? null : hslOp()); }, t('鮮やかさ（今の彩度に掛けます）。−100 で灰色、+100 で 2 倍。灰色は変わりません'));
   const lightRow = sliderRow(t('明るさ'), -100, 100, 0, (v) => { hsl.lightness = v; preview(hslNeutral() ? null : hslOp()); }, t('−100 で黒、100 で白に近づけます'));
 
   const repOp = (): ColorOp | null => {

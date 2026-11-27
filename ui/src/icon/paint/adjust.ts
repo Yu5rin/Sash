@@ -67,7 +67,7 @@ function each(px: Pixels, mask: Mask, fn: (i: number) => void): void {
 export interface HslAdjust {
   /** 色相を回す角度（−180〜180）。 */
   hue: number;
-  /** 彩度（−100〜100。−100 で灰色、100 で最大）。 */
+  /** 彩度（−100〜100。今の彩度に掛ける：−100 で灰色、+100 で 2 倍（最大 1）。灰色は上げても灰色のまま）。 */
   saturation: number;
   /** 明るさ（−100〜100。−100 で黒、100 で白）。 */
   lightness: number;
@@ -82,7 +82,8 @@ export function adjustHsl(px: Pixels, mask: Mask, a: HslAdjust): void {
   each(px, mask, (i) => {
     let [h, s, l] = rgbToHsl(d[i]!, d[i + 1]!, d[i + 2]!);
     h = (h + a.hue + 360) % 360;
-    s = ds >= 0 ? s + (1 - s) * ds : s * (1 + ds);
+    // 彩度は掛け算で変える（+100 で 2 倍、−100 で 0）。無彩色（s=0）は色相がないので、上げても灰色のまま
+    s = Math.min(1, s * (1 + ds));
     l = dl >= 0 ? l + (1 - l) * dl : l * (1 + dl);
     const [r, g, b] = hslToRgb(h, s, l);
     d[i] = r;

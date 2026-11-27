@@ -720,6 +720,72 @@ console.log('== 10. キーボードのカーソルで描く・OS のクリップ
   await ctx.close();
 }
 
+// ---------------------------------------------------------------------------------------------
+console.log('== 11. 第 2 段階の見直し：Space+ドラッグ（パン）で描かない・灰色の彩度・プレビュー中の完了・blur');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 700 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { localStorage.setItem('sash.paint.guide', '1'); window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 64);
+  const S = 64;
+  await page.locator('.paint-zoom').selectOption('12');
+  const primaryLabel = () => page.locator('.paint-swatch[data-which="primary"]').getAttribute('aria-label');
+  const label0 = await primaryLabel();
+  for (const [k, name] of [['p', '鉛筆'], ['g', '塗りつぶし'], ['i', 'スポイト'], ['w', '自動選択'], ['b', 'ブラシ'], ['m', '四角形の選択']]) {
+    await page.locator('.paint-stage').focus();
+    await page.keyboard.press(k);
+    const c0 = await cell(page, 32, 32, S);
+    await page.keyboard.down(' ');
+    await page.mouse.move(c0.x, c0.y);
+    await page.mouse.down();
+    await page.mouse.move(c0.x - 60, c0.y - 40, { steps: 3 });
+    await page.mouse.up();
+    await page.keyboard.up(' ');
+    const untouched = await page.locator('.paint-undo').isDisabled();
+    check(`Space+ドラッグ（パン）でツール「${name}」を使わない（履歴が増えない）`, untouched && (await primaryLabel()) === label0);
+    await page.keyboard.press('0');
+    await page.locator('.paint-zoom').selectOption('12');
+  }
+  // 単独の Space は、カーソルを出していないときは何もしない
+  await page.locator('.paint-stage').focus();
+  await page.keyboard.press('p');
+  await page.keyboard.press(' ');
+  check('カーソルを出していない Space 単独では描かない', await page.locator('.paint-undo').isDisabled());
+  await page.screenshot({ path: `${SHOTS}/10-paint-zoom12-pan.png` });
+  // 灰色の四角を描き、全体に彩度 +50：灰色のまま（赤くならない）
+  await setPrimary(page, '#808080');
+  await page.keyboard.press('0');
+  await page.keyboard.press('r');
+  await page.locator('.paint-tool-settings select[aria-label="塗り"], .paint-tool-settings select[aria-label="Fill"]').selectOption('fill');
+  await drag(page, S, [[5, 5], [20, 20]]);
+  await page.locator('#paint-tab-adjust').click();
+  const sat = page.locator('.paint-adjust input[type=range]').nth(1);
+  await sat.fill('50');
+  await page.waitForTimeout(150);
+  // プレビュー中に別のタブへ替えると、プレビューは捨てられる
+  await page.locator('#paint-tab-image').click();
+  await page.locator('#paint-tab-adjust').click();
+  check('タブを替えると、プレビューが捨てられ、スライダーが 0 に戻る', (await sat.inputValue()) === '0');
+  await sat.fill('50');
+  await page.waitForTimeout(100);
+  // プレビュー中の［完了］：適用するか尋ねる（既定は適用）
+  await topModal(page).locator('footer button.primary').click();
+  await page.waitForTimeout(300);
+  check('プレビュー中の［完了］で、適用するかを尋ねる', /プレビュー|previewed/.test(await topModal(page).textContent()));
+  await page.screenshot({ path: `${SHOTS}/36-finish-with-preview.png` });
+  await topModal(page).locator('footer button.primary').click();
+  await page.waitForTimeout(600);
+  await apply(page);
+  const out = await storedPixels(page);
+  check('灰色（128,128,128）に彩度 +50 をかけても、灰色のまま', same(rgbaAt(out, 7, 7), [128, 128, 128, 255]), String(rgbaAt(out, 7, 7))); // 64 の絵は出力 32 に縮むので、四角形（5〜20）の内側の (7,7)
+  check('パンした間に、絵に何も描かれていない（四角形の外は透明）', rgbaAt(out, 25, 25)[3] === 0 && rgbaAt(out, 1, 1)[3] === 0);
+  await ctx.close();
+}
+
 await browser.close();
 console.log(failures === 0 ? '\n全部 OK' : `\n失敗 ${failures} 件`);
 process.exit(failures === 0 ? 0 : 1);

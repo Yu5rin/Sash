@@ -22,13 +22,17 @@ export interface BrushShape {
 }
 
 /** 筆先を (cx, cy)（画素の座標。中心は画素の真ん中）に 1 回押す。cov には最大値で足す。 */
-export function stampBrush(cov: Coverage, size: number, cx: number, cy: number, b: BrushShape): void {
+export function stampBrush(cov: Coverage, size: number, px: number, py: number, b: BrushShape): void {
+  // 偶数の太さは、鉛筆の筆先と同じく、中心の画素の右下に半画素ずらす（太さ 2 は 2×2、4 は 4×4 の丸）
+  const half = Math.round(b.size) % 2 === 0 ? 0.5 : 0;
+  const cx = px + half;
+  const cy = py + half;
   const r = Math.max(0.5, b.size / 2);
   const h = Math.min(1, Math.max(0, b.hardness / 100));
   const reach = Math.ceil(r) + 1;
-  for (let y = cy - reach; y <= cy + reach; y++) {
+  for (let y = Math.floor(cy) - reach; y <= Math.floor(cy) + reach; y++) {
     if (y < 0 || y >= size) continue;
-    for (let x = cx - reach; x <= cx + reach; x++) {
+    for (let x = Math.floor(cx) - reach; x <= Math.floor(cx) + reach; x++) {
       if (x < 0 || x >= size) continue;
       const d = Math.hypot(x - cx, y - cy);
       // 縁：なめらかなら 1 画素分の幅で下がり、そうでなければ半径の内か外か
@@ -41,6 +45,16 @@ export function stampBrush(cov: Coverage, size: number, cx: number, cy: number, 
       if (c > cov[y * size + x]!) cov[y * size + x] = c;
     }
   }
+}
+
+/** 筆先が描く範囲（中心の画素からのずれ。濃さが半分以上の画素）。筆先の枠の表示に使う。 */
+export function brushFootprint(b: BrushShape): [number, number][] {
+  const n = 41;
+  const cov = newCoverage(n);
+  stampBrush(cov, n, 20, 20, b);
+  const out: [number, number][] = [];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (cov[y * n + x]! >= 128) out.push([x - 20, y - 20]);
+  return out;
 }
 
 /** 2 点の間を筆先で引く。 */

@@ -13,6 +13,8 @@ export interface Floating {
   mask: Uint8Array;
   x: number;
   y: number;
+  /** 回転の中心（小数）。回すたびに位置を丸めて少しずつずれないよう、回している間だけ持つ。動かしたら捨てる。 */
+  center?: { x: number; y: number };
 }
 
 export interface PaintDoc {
@@ -41,7 +43,7 @@ export function snapshotDoc(doc: PaintDoc): DocSnapshot {
     size: doc.size,
     pixels: clonePixels(doc.pixels),
     selection: doc.selection ? new Uint8Array(doc.selection) : null,
-    floating: doc.floating ? { pixels: clonePixels(doc.floating.pixels), mask: new Uint8Array(doc.floating.mask), x: doc.floating.x, y: doc.floating.y } : null,
+    floating: doc.floating ? { pixels: clonePixels(doc.floating.pixels), mask: new Uint8Array(doc.floating.mask), x: doc.floating.x, y: doc.floating.y, ...(doc.floating.center ? { center: { ...doc.floating.center } } : {}) } : null,
   };
 }
 

@@ -146,6 +146,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   /** パレットで色を選ぶと、どちらの色が変わるか。 */
   let target: 'primary' | 'secondary' = 'primary';
   let spaceDown = false;
+  /** Space を押して、まだ何にも使っていない（パンも描画も始まっていない）。 */
+  let spacePending = false;
   let panning: { x: number; y: number } | null = null;
   /** ドラッグを始めたポインタの情報（ボタン・消しゴム側）。 */
   let active: { id: number; button: 0 | 2; eraser: boolean } | null = null;
@@ -254,6 +256,11 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   ];
   const tabButtons = new Map<TabId, HTMLButtonElement>();
   const showTab = (id: TabId, focus = false) => {
+    // 色の変更のプレビューは、そのタブの中だけのもの（ほかのタブでは適用も取り消しもできないので、捨てる）
+    if (id !== 'adjust' && session.preview) {
+      session.setPreview(null);
+      adjustPanel.reset();
+    }
     for (const d of tabDefs) {
       const on = d.id === id;
       d.panel.hidden = !on;
@@ -315,7 +322,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   const helpBtn = h('button', { type: 'button', class: 'icon-button', title: t('ショートカットの一覧'), 'aria-label': t('ショートカットの一覧'), onclick: () => showHelp() }, svg(ICONS.help));
   const statusBox = h('div', { class: 'footer-start paint-status' }, helpBtn, coords, hint);
   const cancelBtn = h('button', { type: 'button', onclick: () => modal.requestClose() }, t('キャンセル'));
-  const doneBtn = h('button', { type: 'button', class: 'primary', onclick: () => finish() }, t('完了'));
+  const doneBtn = h('button', { type: 'button', class: 'primary', onclick: () => void finish() }, t('完了'));
 
   // 表示の部品は、ほかの部品がそろってから作る（作った直後に拡大率の表示を更新するため）
   const view = new PaintView(stage, () => session.doc, () => session.displayPixels(), () => updateZoomUi());
@@ -454,7 +461,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     stage.setAttribute('aria-label', t('{size} × {size} のアイコン。ツールは P・B・E・G・I・L・R・O・M・W のキーで切り替え、矢印キーでカーソルを動かし、Enter か Space で描きます', { size: canvasSize() }));
     hint.textContent = toolHint(session.tool);
     hint.title = hint.textContent;
-    view.hoverBrush = session.hoverBrush;
+    view.hoverCells = session.hoverCells;
     view.cursor = cursorShown ? session.cursor : null;
     stage.dataset['tool'] = session.tool;
     syncColors();
@@ -511,6 +518,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       return;
     }
     cursorShown = false;
+    spacePending = false;
     // 中ボタン・Space を押しながらのドラッグは、画面を動かす
     if (e.button === 1 || (spaceDown && e.button === 0)) {
       e.preventDefault();
@@ -621,8 +629,9 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       e.preventDefault();
       spaceDown = true;
       stage.classList.add('space');
-      cursorShown = true;
-      session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false, repeat: e.repeat });
+      // すぐには描かない。マウスのドラッグが続けばパン、何も続かずに離したら（カーソルを出しているときだけ）カーソルの位置で描く
+      if (!e.repeat) spacePending = true;
+      // カーソルを出していて、矢印で動かしながら押しているときは、押した位置から描き始める（下の矢印の処理で始める）
       return;
     }
     // Enter・Space でボタンを押す動きは、そのまま
@@ -644,6 +653,11 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       e.preventDefault();
       return;
     }
+    // Space を押しながら矢印でカーソルを動かすときは、押した位置から描き始める
+    if (spacePending && cursorShown && e.key.startsWith('Arrow')) {
+      spacePending = false;
+      session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false });
+    }
     const handled = session.key({ key: e.key, ctrl: mod, shift: e.shiftKey, alt: e.altKey, repeat: e.repeat });
     if (handled && (e.key.startsWith('Arrow') || e.key === 'Enter')) cursorShown = true;
     // コピー・切り取りは、OS のクリップボードにも画像として入れる（ほかのアプリへ貼り付けられるように）
@@ -655,6 +669,15 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (e.key === ' ') {
       spaceDown = false;
       stage.classList.remove('space');
+    }
+    if (e.key === ' ' && spacePending) {
+      // Space だけを押して離した：カーソルを出していれば、その位置に 1 点（ツールを 1 回使う）
+      spacePending = false;
+      if (cursorShown && stage === document.activeElement) {
+        session.key({ key: ' ', ctrl: false, shift: false, alt: false });
+        session.keyUp(' ');
+      }
+      return;
     }
     if ((e.key === ' ' || e.key === 'Enter') && session.keyUp(e.key)) e.preventDefault();
   }, true);
@@ -682,9 +705,12 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     session.clipboardFresh = false;
     // 別のウィンドウへ移ると、Space を離したことも、ポインタを離したことも届かない。押したままの状態を戻す
     spaceDown = false;
+    spacePending = false;
     stage.classList.remove('space', 'panning');
     panning = null;
     releaseDrag();
+    // キーボードで描いている途中なら、そこまでを確定する（次のクリックで、カーソルからの線が引かれないように）
+    session.releaseKeyboard();
   };
   window.addEventListener('blur', onBlur);
 
@@ -739,7 +765,18 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     });
   }
 
-  function finish(): void {
+  async function finish(): Promise<void> {
+    // 色の変更をプレビューしたままなら、適用するか尋ねる（黙って捨てない）
+    if (session.preview) {
+      const a = await ask(t('色の変更をプレビューしたままです'), t('プレビュー中の色の変更を適用して完了しますか？'), [
+        { value: 'apply', label: t('適用して完了'), primary: true },
+        { value: 'skip', label: t('適用せずに完了') },
+        { value: 'cancel', label: t('戻る') },
+      ]);
+      if (a === 'apply') session.commitPreview(t('色の変更'));
+      else if (a === 'skip') session.setPreview(null);
+      else return;
+    }
     // 浮いた選択も重ねた、見たままの絵を返す
     o.onDone({ pixels: flatten(session.doc), canvas: canvasSize() });
     modal.close();

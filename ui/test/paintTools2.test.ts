@@ -382,3 +382,110 @@ describe('ツールのショートカット（第 2 段階）', () => {
     expect(s.doc.floating).toBeNull();
   });
 });
+
+import { brushFootprint, newCoverage, stampBrush } from '../src/icon/paint/stroke';
+import { transformContent } from '../src/icon/paint/selection';
+import { createDoc } from '../src/icon/paint/doc';
+
+describe('見直し（第 2 段階）', () => {
+  it('色の変更をプレビューしただけでも「変わった」と数え、［完了］の適用（commitPreview）で確定する', () => {
+    const s = fresh(['rr']);
+    expect(s.changed).toBe(false);
+    s.setPreview((px, m) => monochromeMasked(px, m, { r: 0, g: 0, b: 255 }));
+    expect(s.changed).toBe(true);
+    s.commitPreview('色の変更');
+    expect(s.preview).toBeNull();
+    expect(rows(s, 1, 4)).toEqual(['bb..']);
+    expect(s.history.count).toBe(1);
+  });
+  it('キーボードで描いている途中に blur（releaseKeyboard）：そこまでを確定し、次のクリックでカーソルからの線を引かない', () => {
+    const s = fresh();
+    s.key(key('ArrowLeft'));
+    s.key(key('Enter'));
+    s.key(key('ArrowRight'));
+    s.releaseKeyboard();
+    expect(s.dragging).toBe(false);
+    const n = s.history.count;
+    expect(n).toBe(1);
+    drag(s, [[2, 2]]);
+    expect(rows(s, 3, 16).map((r) => r.replace(/\./g, '')).join('')).toBe('r');
+    expect(getPixel(s.doc.pixels, 2, 2)).toEqual(COLORS['r']);
+  });
+  it('キーボードで描いている途中にマウスが押されたら、キーボードの描画を終えてからマウスの操作を始める', () => {
+    const s = fresh();
+    s.key(key('Enter'));
+    s.pointerDown(P(2, 2));
+    s.pointerUp(P(2, 2));
+    s.keyUp('Enter');
+    expect(s.history.count).toBe(2);
+    expect(getPixel(s.doc.pixels, 2, 2)).toEqual(COLORS['r']);
+    expect(getPixel(s.doc.pixels, 5, 2).a).toBe(0);
+  });
+  it('「線と塗り」で背景色が透明なら、塗らない（下の絵を消さない）。知らせる', () => {
+    const s = fresh(['bbbbbb', 'bbbbbb', 'bbbbbb', 'bbbbbb']);
+    const said: string[] = [];
+    s.onAnnounce = (m) => said.push(m);
+    s.setTool('rect');
+    s.setSettings({ shapeFill: 'both' });
+    drag(s, [[0, 0], [5, 3]]);
+    expect(rows(s, 4, 6)).toEqual(['rrrrrr', 'rbbbbr', 'rbbbbr', 'rrrrrr']);
+    expect(said.some((m) => m.includes('塗りは付きません'))).toBe(true);
+  });
+  it('選択がなければ Ctrl+X は処理しない（false）。あれば true', () => {
+    const s = fresh(['rr']);
+    expect(s.key(key('x', { ctrl: true }))).toBe(false);
+    s.setTool('select');
+    drag(s, [[0, 0], [1, 0]]);
+    expect(s.key(key('x', { ctrl: true }))).toBe(true);
+  });
+  it('浮いた選択の回転：右 4 回・右と左で、位置が元に戻る（回すたびに丸めてずれない）', () => {
+    const mk = () => {
+      const d = createDoc(16, fromTable(['rrr'.padEnd(16, '.'), 'rrr'.padEnd(16, '.'), ...Array(14).fill('.'.repeat(16))]));
+      d.selection = maskTable2(d);
+      return d;
+    };
+    const maskTable2 = (d: ReturnType<typeof createDoc>) => {
+      const m = new Uint8Array(256);
+      for (let y = 2; y < 4; y++) for (let x = 2; x < 5; x++) m[y * 16 + x] = 255;
+      d.pixels = fromTable(Array.from({ length: 16 }, (_, y) => (y >= 2 && y < 4 ? '..rrr'.padEnd(16, '.') : '.'.repeat(16))));
+      return m;
+    };
+    const d = mk();
+    transformContent(d, 'rotateCw');
+    transformContent(d, 'rotateCcw');
+    expect(d.floating).toMatchObject({ x: 2, y: 2 });
+    for (let i = 0; i < 4; i++) transformContent(d, 'rotateCw');
+    expect(d.floating).toMatchObject({ x: 2, y: 2 });
+    expect(d.floating!.pixels.width).toBe(3);
+  });
+  it('回転ではみ出す選択は、絵の中に収まる位置へ寄せる（収まらないときは知らせる）', () => {
+    const s = fresh();
+    s.setTool('select');
+    drag(s, [[0, 15], [7, 15]]); // 下端の 8×1 の帯
+    s.key(key('r', { ctrl: false }));
+    s.setTool('select');
+    s.transform('rotateCw');
+    const f = s.doc.floating!;
+    expect(f.pixels.width).toBe(1);
+    expect(f.pixels.height).toBe(8);
+    expect(f.y + f.pixels.height).toBeLessThanOrEqual(16);
+    expect(f.y).toBeGreaterThanOrEqual(0);
+    expect(f.x + f.pixels.width).toBeLessThanOrEqual(16);
+  });
+  it('ブラシの偶数の太さ：描かれる範囲・筆先の枠・鉛筆の丸い筆先が一致する', () => {
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      const c = newCoverage(15);
+      stampBrush(c, 15, 7, 7, { size: n, hardness: 100, antialias: false });
+      const drawn = new Set<string>();
+      for (let i = 0; i < c.length; i++) if (c[i]! >= 128) drawn.add(`${(i % 15) - 7},${Math.floor(i / 15) - 7}`);
+      const foot = new Set(brushFootprint({ size: n, hardness: 100, antialias: false }).map(([x, y]) => `${x},${y}`));
+      expect(foot).toEqual(drawn);
+    }
+    expect(brushFootprint({ size: 2, hardness: 100, antialias: false })).toHaveLength(4);
+    expect(brushFootprint({ size: 4, hardness: 100, antialias: false })).toHaveLength(12);
+    const s = fresh();
+    s.setTool('brush');
+    s.setSettings({ brushSize: 2 });
+    expect(s.hoverCells).toHaveLength(4);
+  });
+});

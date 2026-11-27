@@ -8,13 +8,13 @@ import { createDoc, flatten, restoreDoc, sameSnapshot, snapshotBytes, snapshotDo
 import { floodFill, regionMask } from './fill';
 import { History } from './history';
 import { clonePixels, equalPixels, type Pixels } from './pixels';
-import type { Brush } from './raster';
+import { brushOffsets, type Brush } from './raster';
 import {
   applyColorOp, combineMask, copySelection, deleteSelection, deselect, dropFloating, inSelection, invertSelection, liftSelection, maskEllipse, maskPolygon, maskRect,
   pasteAsFloating, previewColorOp, sampleDoc, selectAll, setFloatingPos, transformContent, type SelectMode, type TransformKind,
 } from './selection';
 import {
-  constrainLine, constrainSquare, ellipseCoverage, lineCoverage, newCoverage, rectCoverage, renderCoverage, strokeBrushLine, strokePencilLine, type Coverage, type ShapeFill,
+  brushFootprint, constrainLine, constrainSquare, ellipseCoverage, lineCoverage, newCoverage, rectCoverage, renderCoverage, strokeBrushLine, strokePencilLine, type Coverage, type ShapeFill,
 } from './stroke';
 import { resizeSquare, trimToCenter, type ResizeMode } from './transform';
 
@@ -133,7 +133,7 @@ export class PaintSession {
 
   /** 描いた内容が開いたときと違うか（閉じる前の確認に使う。選択だけの操作は数えない）。 */
   get changed(): boolean {
-    return !equalPixels(flatten(this.doc), this.initial);
+    return !equalPixels(this.displayPixels(), this.initial);
   }
 
   get dragging(): boolean {
@@ -258,11 +258,11 @@ export class PaintSession {
     return { size: this.settings.size, round: this.settings.round };
   }
 
-  /** 画面に出す筆先の枠（画素の大きさ）。ブラシは太さ × 太さの四角で近似する。 */
-  get hoverBrush(): Brush | null {
-    if (this.tool === 'pencil' || this.tool === 'eraser') return this.brush;
-    if (this.tool === 'brush') return { size: this.settings.brushSize, round: true };
-    if (this.tool === 'fill' || this.tool === 'picker' || this.tool === 'wand' || SHAPE_TOOLS.includes(this.tool)) return { size: 1, round: false };
+  /** 画面に出す筆先の枠（中心の画素からのずれの一覧）。描かれる範囲と同じ形にする。 */
+  get hoverCells(): [number, number][] | null {
+    if (this.tool === 'pencil' || this.tool === 'eraser') return brushOffsets(this.brush);
+    if (this.tool === 'brush') return brushFootprint({ size: this.settings.brushSize, hardness: this.settings.hardness, antialias: this.settings.antialias });
+    if (this.tool === 'fill' || this.tool === 'picker' || this.tool === 'wand' || SHAPE_TOOLS.includes(this.tool)) return [[0, 0]];
     return null;
   }
 
@@ -281,6 +281,8 @@ export class PaintSession {
   }
 
   pointerDown(p: PointerInfo): void {
+    // キーボードで描いている途中にマウスが押されたら、キーボードの描画を終える（そこまでを確定する）
+    if (this.kbdActive) this.releaseKeyboard();
     if (this.drag) return;
     this.arrow = null;
     const tool = this.effectiveTool(p);
@@ -332,6 +334,7 @@ export class PaintSession {
     if (!d) return;
     this.pointerMove(p);
     this.drag = null;
+    this.kbdActive = false;
     if (d.kind === 'stroke') {
       this.commit(d.label);
       this.colorUsed(d.color);
@@ -427,6 +430,7 @@ export class PaintSession {
     const label = tool === 'line' ? t('直線') : tool === 'rect' ? t('四角形') : t('楕円');
     const d: Extract<Drag, { kind: 'shape' }> = { kind: 'shape', tool, button: p.button, ax: p.x, ay: p.y, base: clonePixels(this.doc.pixels), end: { x: p.x, y: p.y }, label };
     this.drag = d;
+    if (this.settings.shapeFill === 'both' && (p.button === 2 ? this.primary : this.secondary).a === 0) this.onAnnounce(t('背景色が透明なので、塗りは付きません。塗りたいときは、背景色を選んでください'));
     this.renderShape(d, p.shift);
   }
 
@@ -445,9 +449,10 @@ export class PaintSession {
       return;
     }
     const cov = d.tool === 'rect' ? rectCoverage(size, d.ax, d.ay, x1, y1, s.shapeWidth) : ellipseCoverage(size, d.ax, d.ay, x1, y1, s.shapeWidth, s.antialias);
+    // 線と塗りで、塗りの色（背景色）が透明なら、塗らない（透明で塗ると、下の絵が消えてしまう）
     if (s.shapeFill === 'fill') renderCoverage(this.doc.pixels, cov.fill, lineColor, s.opacity, this.doc.selection);
     else {
-      if (s.shapeFill === 'both') renderCoverage(this.doc.pixels, cov.fill, fillColor, s.opacity, this.doc.selection);
+      if (s.shapeFill === 'both' && fillColor.a > 0) renderCoverage(this.doc.pixels, cov.fill, fillColor, s.opacity, this.doc.selection);
       renderCoverage(this.doc.pixels, cov.outline, lineColor, s.opacity, this.doc.selection);
     }
   }
@@ -552,6 +557,8 @@ export class PaintSession {
   transform(kind: TransformKind): void {
     const labels: Record<TransformKind, string> = { flipH: t('左右反転'), flipV: t('上下反転'), rotateCw: t('右へ 90° 回転'), rotateCcw: t('左へ 90° 回転') };
     this.step(labels[kind], () => transformContent(this.doc, kind));
+    const f = this.doc.floating;
+    if (f && (f.x < 0 || f.y < 0 || f.x + f.pixels.width > this.doc.size || f.y + f.pixels.height > this.doc.size)) this.onAnnounce(t('回した選択が絵からはみ出しています。はみ出した部分は、確定すると消えます'));
   }
 
   /** 選択範囲（なければ全体）に、色の変更を適用する。 */
@@ -559,6 +566,13 @@ export class PaintSession {
     this.step(label, () => {
       applyColorOp(this.doc, op);
     });
+  }
+
+  /** プレビュー中の色の変更を、そのまま適用する（［完了］のときに使う）。プレビューがなければ何もしない。 */
+  commitPreview(label: string): void {
+    const op = this.preview;
+    if (!op) return;
+    this.applyColor(label, op);
   }
 
   /** 色の変更のプレビューを出す（null で消す）。適用はしない。 */
@@ -663,10 +677,7 @@ export class PaintSession {
         this.copy();
         return true;
       }
-      if (k === 'x') {
-        this.cut();
-        return true;
-      }
+      if (k === 'x') return this.cut();
       if (k.startsWith('Arrow')) return this.arrowKey(k, e.shift, true);
       return false;
     }
@@ -714,17 +725,22 @@ export class PaintSession {
     return true;
   }
 
+  /** キーボードの描画を、いまの位置で確定して終える（ウィンドウが離れたとき・マウスが押されたとき）。 */
+  releaseKeyboard(): void {
+    if (!this.kbdActive) return;
+    this.kbdActive = false;
+    const c = this.cursor ?? { x: 0, y: 0 };
+    this.pointerUp({ x: c.x, y: c.y, button: 0, shift: false, alt: false, ctrl: false });
+  }
+
   /** Enter・Space：キーボードのカーソルの位置で、いまのツールを使い始める（離すまでがドラッグ。矢印で動かすと線になる）。 */
   private kbdDown(e: KeyInfo): boolean {
     if (e.repeat) return true;
     if (this.drag || this.kbdActive) return true;
     const c = this.ensureCursor();
-    this.kbdActive = true;
     this.pointerDown({ x: c.x, y: c.y, button: 0, shift: e.shift, alt: false, ctrl: false });
-    if (!this.drag) {
-      // 塗りつぶし・自動選択のように、押した瞬間に終わるツール
-      this.kbdActive = false;
-    }
+    // 塗りつぶし・自動選択のように、押した瞬間に終わるツールは、離すまで続ける描画がない
+    this.kbdActive = this.drag !== null;
     return true;
   }
 

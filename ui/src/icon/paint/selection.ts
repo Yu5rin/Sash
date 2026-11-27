@@ -115,6 +115,7 @@ export function setFloatingPos(doc: PaintDoc, x: number, y: number): void {
   if (!doc.floating) return;
   doc.floating.x = x;
   doc.floating.y = y;
+  delete doc.floating.center;
   syncSelection(doc);
 }
 
@@ -293,9 +294,18 @@ export function transformContent(doc: PaintDoc, kind: TransformKind): boolean {
       const dir = kind === 'rotateCw' ? 'cw' : 'ccw';
       f.pixels = rotatePixels(f.pixels, dir);
       f.mask = rotateMask(f.mask, w, h, dir);
-      // 中心が動かないように、左上の位置を直す
-      f.x = Math.round(f.x + w / 2 - h / 2);
-      f.y = Math.round(f.y + h / 2 - w / 2);
+      // 中心が動かないように、左上の位置を直す。中心は小数で持ち続ける（回すたびに丸めると、往復でずれる）
+      const c = f.center ?? { x: f.x + w / 2, y: f.y + h / 2 };
+      let nx = Math.round(c.x - h / 2);
+      let ny = Math.round(c.y - w / 2);
+      // 回した結果が絵からはみ出すなら、絵の中に収まる位置へ寄せる（収まらないときは、そのまま。呼び出し側が知らせる）
+      if (h <= doc.size) nx = Math.min(Math.max(nx, 0), doc.size - h);
+      if (w <= doc.size) ny = Math.min(Math.max(ny, 0), doc.size - w);
+      const moved = nx !== Math.round(c.x - h / 2) || ny !== Math.round(c.y - w / 2);
+      f.x = nx;
+      f.y = ny;
+      if (moved) delete f.center;
+      else f.center = c;
     }
     syncSelection(doc);
     return true;

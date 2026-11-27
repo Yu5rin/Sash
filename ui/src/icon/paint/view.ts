@@ -1,7 +1,6 @@
 // ペイント画面の canvas への描画（拡大・市松模様・グリッド・選択の点線・筆先の枠）と、ポインタの位置から画素への換算。
 // 絵の処理そのものは持たない（DOM と canvas だけ）。拡大は整数倍だけ。
 
-import { brushOffsets, type Brush } from './raster';
 import type { PaintDoc } from './doc';
 import type { Pixels } from './pixels';
 
@@ -50,7 +49,7 @@ export class PaintView {
   gridOn = true;
   /** 筆先の枠を出す画素（ポインタが絵の上にあるとき）。 */
   hover: { x: number; y: number } | null = null;
-  hoverBrush: Brush | null = null;
+  hoverCells: [number, number][] | null = null;
   /** キーボードのカーソルの画素（矢印で動かしているとき）。 */
   cursor: { x: number; y: number } | null = null;
   private panX = 0;
@@ -221,7 +220,7 @@ export class PaintView {
 
     if (this.gridOn && this.zoom >= 6) this.drawGrid(ctx, o, doc.size);
     if (doc.selection) this.drawSelection(ctx, o, doc);
-    if (this.hover && this.hoverBrush) this.drawHover(ctx, o, this.hover, false);
+    if (this.hover && this.hoverCells) this.drawHover(ctx, o, this.hover, false);
     if (this.cursor) this.drawHover(ctx, o, this.cursor, true);
   }
 
@@ -280,7 +279,7 @@ export class PaintView {
     ctx.save();
     ctx.lineWidth = 1;
     if (dashed) ctx.setLineDash([3, 2]);
-    for (const [dx, dy] of brushOffsets(this.hoverBrush ?? { size: 1, round: false })) {
+    for (const [dx, dy] of (this.hoverCells ?? [[0, 0]])) {
       const x = at.x + dx;
       const y = at.y + dy;
       if (x < 0 || y < 0 || x >= size || y >= size) continue;

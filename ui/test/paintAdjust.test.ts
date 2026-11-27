@@ -153,3 +153,48 @@ describe('そのほかの色の変更', () => {
     expect(COLORS['r']).toBeTruthy();
   });
 });
+
+describe('見直し：無彩色・低彩度への彩度・色相・明るさ', () => {
+  const run = (r: number, g: number, b: number, a: { hue?: number; saturation?: number; lightness?: number }) => {
+    const px = createPixels(1, 1);
+    px.data.set([r, g, b, 255]);
+    adjustHsl(px, null, { hue: 0, saturation: 0, lightness: 0, ...a });
+    return [px.data[0]!, px.data[1]!, px.data[2]!];
+  };
+  it('灰色・白・黒は、彩度を上げても変わらない（赤くならない）', () => {
+    for (const v of [0, 1, 64, 128, 200, 255]) {
+      for (const s of [10, 50, 100]) expect(run(v, v, v, { saturation: s })).toEqual([v, v, v]);
+    }
+  });
+  it('わずかに色かぶりのある灰色は、少ししか鮮やかにならない（赤に飛ばない）', () => {
+    const [r, g, b] = run(130, 128, 128, { saturation: 50 });
+    expect(r - g).toBeLessThan(10);
+    expect(g).toBe(b);
+    const [r2, g2] = run(130, 128, 128, { saturation: 100 });
+    expect(r2 - g2).toBeLessThan(20);
+  });
+  it('彩度は今の彩度に掛ける：+100 で 2 倍、−100 で灰色、負の途中は比例', () => {
+    // 彩度 0.5 の色（#bf4040）：+100 で最大（1.0）
+    const [r, g, b] = run(191, 64, 64, { saturation: 100 });
+    expect(g).toBe(b);
+    expect(r - g).toBeGreaterThan(191 - 64);
+    const [r2, g2, b2] = run(191, 64, 64, { saturation: -100 });
+    expect(r2).toBe(g2);
+    expect(g2).toBe(b2);
+    const half = run(191, 64, 64, { saturation: -50 });
+    expect(half[0]! - half[1]!).toBeCloseTo((191 - 64) / 2, -1);
+  });
+  it('色相を回しても、灰色は灰色のまま。明るさを変えても R=G=B のまま', () => {
+    for (const h of [-180, -90, 45, 120, 180]) expect(run(100, 100, 100, { hue: h })).toEqual([100, 100, 100]);
+    for (const l of [-100, -50, 50, 100]) {
+      const [r, g, b] = run(100, 100, 100, { lightness: l });
+      expect(r).toBe(g);
+      expect(g).toBe(b);
+    }
+  });
+  it('白と黒は、色相・彩度を変えても、明るさだけで動く', () => {
+    expect(run(255, 255, 255, { hue: 90, saturation: 100 })).toEqual([255, 255, 255]);
+    expect(run(0, 0, 0, { hue: 90, saturation: 100 })).toEqual([0, 0, 0]);
+    expect(run(0, 0, 0, { lightness: 100 })).toEqual([255, 255, 255]);
+  });
+});
