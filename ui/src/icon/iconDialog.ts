@@ -7,7 +7,7 @@ import { invoke } from '../bridge';
 import { openCatalog } from '../dialogs/catalogDialog';
 import { detailToBlobs, openLibrary } from '../dialogs/libraryDialog';
 import type { LibraryIconDetail } from '../bridge';
-import { openModal } from '../dialogs/modal';
+import { ask, openModal } from '../dialogs/modal';
 import { notify } from '../clipboard';
 import { h } from '../dom';
 import { elementAt, pathOf, samePath, setAttr, type Path } from '../model';
@@ -17,6 +17,7 @@ import { t as tr } from '../i18n';
 import type { FluentPick } from '../fluent/fluentDialog';
 import { approxIconCount, ICON_SET_NAMES } from '../fluent/fluent';
 import type { ColorPalette } from '../fluent/colorPalette';
+import type { CanvasSize } from './paint/doc';
 import { reportRefusal, type ImageEntry } from '../store';
 import {
   adjustBrightness, cornerColor, fitRect, keyOutColor, monochrome, opaqueBounds, parseHex, parseIco, pickIcoEntry,
@@ -32,6 +33,8 @@ interface Source {
   width: number;
   height: number;
   ico?: { entries: IcoEntry[]; selected: IcoEntry };
+  /** 描いた絵（ペイント画面で作った元画像）。canvas は描いた絵の大きさで、元画像はその整数倍の最近傍の拡大（SPEC §25）。 */
+  paint?: { canvas: CanvasSize };
 }
 
 type Badge = 'none' | 'dot' | 'plus' | 'check' | 'exclaim';
@@ -55,6 +58,8 @@ export interface IconOptions {
   badge: Badge;
   badgeColor: string;
   sharpen: number;
+  /** 元画像が、ペイント画面で描いた絵であることの印（SPEC §25.3）。なければ普通の画像。 */
+  paint?: { v: 1; canvas: CanvasSize };
 }
 
 const ACCEPT = '.png,.jpg,.jpeg,.bmp,.gif,.webp,.svg,.ico';
@@ -159,6 +164,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const opts: IconOptions = { ...defaultOptions(), ...((existing?.edit?.options as Partial<IconOptions>) ?? {}) };
   let name = existing?.id ?? `img_${el?.getAttribute('id') ?? 'icon'}`;
   let dragStart: { x: number; y: number } | null = null;
+  /** ペイント画面を開いている間 true。下のアイコンエディタが、貼り付けやドロップを受けて元画像を入れ替えないようにする。 */
+  let paintOpen = false;
 
   const fileInput = h('input', { type: 'file', accept: ACCEPT, hidden: true, onchange: () => fileInput.files?.[0] && void loadFile(fileInput.files[0]).catch(reportError) });
   const folderInput = h('input', { type: 'file', hidden: true, multiple: true, webkitdirectory: true, onchange: () => folderInput.files && void bulkImport(Array.from(folderInput.files)) });
@@ -171,6 +178,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     app.info.excelInstalled ? h('button', { type: 'button', title: tr('組み込みアイコン（imageMso）を元にする'), onclick: () => fromImageMso() }, tr('組み込みアイコン')) : null,
     h('button', { type: 'button', title: tr('アイコンライブラリから選ぶ（元画像と設定があれば加工し直せます）'), onclick: () => fromLibrary() }, tr('ライブラリ')),
     h('button', { type: 'button', title: tr('フォルダ内の画像を、今の加工設定でまとめて取り込む（コントロールには設定しません）'), onclick: () => folderInput.click() }, tr('フォルダを一括')),
+    h('button', { type: 'button', class: 'icon-draw-new', title: tr('空の絵を、鉛筆や塗りつぶしで一から描きます（16 × 16 のドット絵も描けます）'), onclick: () => void newPaint().catch(reportError) }, tr('新しく描く')),
     fileInput,
     folderInput,
   );
@@ -181,6 +189,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     h('p', { class: 'muted small icon-drop-hint' }, tr('ドロップ、または Ctrl+V でも取り込めます（PNG / JPG / BMP / GIF / WebP / SVG / ICO）')));
   const sourceView = h('canvas', { class: 'icon-source', title: tr('ドラッグで正方形に切り抜き、クリックで透過する色を選びます') });
   const sourceHint = h('div', { class: 'muted small' });
+  const paintButton = h('button', { type: 'button', class: 'icon-paint-edit', hidden: true, title: tr('今の見た目を下絵にして、鉛筆や塗りつぶしで直します'), onclick: () => void editInPaint().catch(reportError) }, tr('描いて編集…'));
   const icoList = h('div', { class: 'segmented wrap ico-sizes' });
   const exeList = h('div', { class: 'exe-icons' });
   const previews = h('div', { class: 'icon-previews' });
@@ -301,7 +310,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   const replacePalette = paletteGroup(['replaceFrom', 'replaceTo']);
   const badgePalette = paletteGroup(['badgeColor']);
   const select = <K extends 'size' | 'shape' | 'badge'>(key: K, options: [string, string][]) =>
-    h('select', { dataset: { opt: key }, onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (opts as unknown as Record<string, unknown>)[key] = key === 'size' ? Number(v) : v; if (key === 'size' && source?.ico) selectIco(pickIcoEntry(source.ico.entries, opts.size)); else render(); } },
+    h('select', { dataset: { opt: key }, onchange: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (opts as unknown as Record<string, unknown>)[key] = key === 'size' ? Number(v) : v; if (key === 'size' && source?.ico) selectIco(pickIcoEntry(source.ico.entries, opts.size)); else if (key === 'size' && source?.paint) void rebuildPaintSource().catch(reportError); else render(); } },
       options.map(([v, t]) => h('option', { value: v, selected: String(opts[key]) === v }, tr(t))));
   const keySwatch = h('span', { class: 'swatch' });
   const cropReset = h('button', { type: 'button', class: 'small', onclick: () => { opts.crop = null; render(); } }, tr('切り抜きを解除'));
@@ -340,7 +349,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   );
 
   // 左の列は、結果（プレビュー）を一番上に置く。設定を変える右の列から目が離れないように
-  const content = h('div', { class: 'icon-editor' }, h('div', { class: 'icon-left' }, h('h3', null, tr('プレビュー（実寸）')), previews, drop, sourceView, sourceHint, icoList, exeList), h('div', { class: 'icon-right' }, controls));
+  const content = h('div', { class: 'icon-editor' }, h('div', { class: 'icon-left' }, h('h3', null, tr('プレビュー（実寸）')), previews, drop, sourceView, sourceHint, paintButton, icoList, exeList), h('div', { class: 'icon-right' }, controls));
   const title = target ? tr('アイコンを作る：{name}', { name: el!.getAttribute('id') ?? el!.localName }) : tr('アイコンを作る');
   const modal = openModal(title, content, {
     wide: true,
@@ -359,6 +368,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   // ---- 入力 ----
 
   const onPaste = (e: ClipboardEvent) => {
+    // ペイント画面を開いている間の貼り付けは、ペイント画面が受ける（ここで受けると、元画像が入れ替わってしまう）
+    if (paintOpen) return;
     const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
     if (file) {
       e.preventDefault();
@@ -374,6 +385,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
   drop.addEventListener('drop', (e) => {
     e.preventDefault();
     drop.classList.remove('over');
+    if (paintOpen) return;
     const list = Array.from(e.dataTransfer?.files ?? []);
     if (list.length > 1) void bulkImport(list).catch(reportError);
     else if (list[0]) void loadFile(list[0]).catch(reportError);
@@ -436,8 +448,12 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     }
     if (!keepCrop) {
       opts.crop = null;
+      // 新しく読み込んだ画像は、描いた絵ではない（前の元画像の印を残さない）
+      delete opts.paint;
       // 背景色は四隅から推定しておく（透過を有効にしたときの初期値）
       opts.key = cornerColor(rasterize(source, Math.min(source.width, 256), Math.min(source.height, 256)));
+    } else if (opts.paint !== undefined) {
+      await checkPaintSource();
     }
     drop.classList.add('loaded');
     exeList.replaceChildren();
@@ -461,14 +477,154 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     await loadBlob(pick.blob, pick.fileName);
   }
 
-  /** 設定をコードで変えたときに、入力欄の表示を合わせる。 */
+  /** 設定をコードで変えたときに、入力欄の表示を合わせる（すべての設定欄と、色の入力）。 */
   function syncControls(): void {
-    const trim = controls.querySelector<HTMLInputElement>('[data-opt="trim"]');
-    if (trim) trim.checked = opts.trim;
-    const padding = controls.querySelector<HTMLInputElement>('input[type="range"][data-opt="padding"]');
-    if (padding) padding.value = String(opts.padding);
-    const label = controls.querySelector<HTMLElement>('[data-opt-value="padding"]');
-    if (label) label.textContent = `${opts.padding}${label.dataset['unit'] ?? ''}`;
+    for (const el of Array.from(controls.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-opt]'))) {
+      const key = el.dataset['opt'] as keyof IconOptions;
+      const value = opts[key];
+      if (el instanceof HTMLInputElement && el.type === 'checkbox') el.checked = value === true;
+      else el.value = String(value);
+      const label = controls.querySelector<HTMLElement>(`[data-opt-value="${key}"]`);
+      if (label) label.textContent = `${String(value)}${label.dataset['unit'] ?? ''}`;
+    }
+    for (const [key, input] of colorInputs) input.value = opts[key];
+    for (const refresh of colorRefresh.values()) refresh();
+  }
+
+  // ---- 描いて編集（ペイント画面。SPEC §25） ----
+
+  /** 元画像の画素を読む（描いた絵の復元用）。 */
+  function readSourcePixels(src: Source): { data: Uint8ClampedArray; width: number; height: number } {
+    const c = document.createElement('canvas');
+    c.width = src.width;
+    c.height = src.height;
+    const ctx = c.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(src.image, 0, 0);
+    const d = ctx.getImageData(0, 0, c.width, c.height);
+    return { data: new Uint8ClampedArray(d.data), width: d.width, height: d.height };
+  }
+
+  /**
+   * options.paint が、読み込んだ元画像と合っているか確かめる。共有フォルダの値は信用しない。
+   * 合わなければ印を外して、普通の画像として扱う（もっと新しい版の形式のときは、その旨を知らせる）。
+   */
+  async function checkPaintSource(): Promise<void> {
+    if (!source) return;
+    const { readPaintMeta, isNewerPaintMeta } = await import('./paint/doc');
+    const { recoverFromSource } = await import('./paint/transform');
+    if (isNewerPaintMeta(opts)) {
+      notify({ kind: 'info', message: tr('もっと新しい版の Sash で描いた絵です。見た目はそのまま使えますが、描き直しはできません') });
+      delete opts.paint;
+      return;
+    }
+    const meta = readPaintMeta(opts, source.width, source.height);
+    if (!meta || !recoverFromSource(readSourcePixels(source), meta.canvas)) {
+      delete opts.paint;
+      return;
+    }
+    opts.paint = meta;
+    source.paint = { canvas: meta.canvas };
+  }
+
+  /** 描いた絵（キャンバスの大きさ）から、出力の大きさに合わせた整数倍の元画像を作る。 */
+  async function paintedSource(pixels: { data: Uint8ClampedArray; width: number; height: number }, canvas: CanvasSize, fileName: string): Promise<Source> {
+    const { sourceScale, upscaleNearest } = await import('./paint/transform');
+    const big = upscaleNearest(pixels, sourceScale(canvas, opts.size));
+    const c = document.createElement('canvas');
+    c.width = big.width;
+    c.height = big.height;
+    c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(big.data), big.width, big.height), 0, 0);
+    const blob = await new Promise<Blob>((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error(tr('画像を作れませんでした')))), 'image/png'));
+    return { name: fileName, blob, image: await createImageBitmap(blob), isSvg: false, width: big.width, height: big.height, paint: { canvas } };
+  }
+
+  /** 出力の大きさを変えたとき、描いた絵から元画像を作り直す（拡大した元画像をさらに拡大すると、ぼけるため）。 */
+  async function rebuildPaintSource(): Promise<void> {
+    if (!source?.paint) return;
+    const { recoverFromSource } = await import('./paint/transform');
+    const px = recoverFromSource(readSourcePixels(source), source.paint.canvas);
+    if (!px) {
+      render();
+      return;
+    }
+    source = await paintedSource(px, source.paint.canvas, source.name);
+    render();
+  }
+
+  /** ペイント画面で描いた絵を、アイコンエディタの新しい元画像にする。 */
+  async function installPainted(pixels: { data: Uint8ClampedArray; width: number; height: number }, canvas: CanvasSize): Promise<void> {
+    // すでに描いた絵だったときは、仕上げ（余白・色・形・バッジ）をそのまま残す。そうでなければ、焼き込んだ（または空の）絵に
+    // 余白などをかけると描いた点がずれるので、加工は中立に戻す（描いたあとに、もう一度かけられる）
+    const keepFinish = source?.paint !== undefined;
+    source = await paintedSource(pixels, canvas, `${name}.png`);
+    opts.paint = { v: 1, canvas };
+    if (!keepFinish) {
+      Object.assign(opts, { padding: 0, trim: false, crop: null, transparent: false, mono: false, replace: false, brightness: 0, shape: 'none', badge: 'none', sharpen: 0 });
+    }
+    drop.classList.add('loaded');
+    exeList.replaceChildren();
+    renderIcoList();
+    syncControls();
+    render();
+  }
+
+  async function openPaint(canvas: CanvasSize, pixels: { data: Uint8ClampedArray; width: number; height: number } | undefined): Promise<void> {
+    if (paintOpen) return;
+    paintOpen = true;
+    try {
+      const { openPaintDialog } = await import('./paint/paintDialog');
+      openPaintDialog({
+        canvas,
+        pixels,
+        outputSize: opts.size,
+        name,
+        onDone: (r) => void installPainted(r.pixels, r.canvas).catch(reportError),
+        onClose: () => {
+          paintOpen = false;
+        },
+      });
+    } catch (e) {
+      paintOpen = false;
+      throw e;
+    }
+  }
+
+  /** ［新しく描く］：大きさを選んで、空の絵から描き始める。 */
+  async function newPaint(): Promise<void> {
+    if (paintOpen) return;
+    const answer = await ask<'16' | '32' | '64' | 'cancel'>(tr('新しく描く'), tr('描く絵の大きさを選んでください。16 × 16 はドット絵向きで、出力の大きさに合わせて拡大されます。'), [
+      { value: '16', label: '16 × 16' },
+      { value: '32', label: '32 × 32', primary: opts.size === 32 },
+      { value: '64', label: '64 × 64', primary: opts.size === 64 },
+      { value: 'cancel', label: tr('キャンセル') },
+    ]);
+    if (!answer || answer === 'cancel') return;
+    await openPaint(Number(answer) as CanvasSize, undefined);
+  }
+
+  let bakeNoticeShown = false;
+
+  /** ［描いて編集…］：描いた絵ならそのまま続きを、普通の画像なら今の加工の結果を下絵にして描き始める。 */
+  async function editInPaint(): Promise<void> {
+    if (!source || paintOpen) return;
+    if (source.paint) {
+      const { recoverFromSource } = await import('./paint/transform');
+      const px = recoverFromSource(readSourcePixels(source), source.paint.canvas);
+      if (px) {
+        await openPaint(source.paint.canvas, px);
+        return;
+      }
+    }
+    // 今の加工の結果（余白・色・形・バッジまで）を、出力の大きさで焼き込んで下絵にする
+    const canvas = opts.size as CanvasSize;
+    process(source, opts, output);
+    const d = output.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, canvas, canvas);
+    if (!bakeNoticeShown) {
+      bakeNoticeShown = true;
+      notify({ kind: 'info', message: tr('今の加工の結果を下絵にします。余白や色の設定は初期化されます（描いたあとに、もう一度かけられます）') });
+    }
+    await openPaint(canvas, { data: new Uint8ClampedArray(d.data), width: d.width, height: d.height });
+    // 描き終えて［完了］を押したときだけ、installPainted が設定を初期化する。取り消したときは、今のまま
   }
 
   /** EXE / DLL の埋め込みアイコンを一覧にして選ばせる（社内ツールのアイコンを流用する用途）。 */
@@ -533,7 +689,9 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     const entries: ImageEntry[] = [];
     const failed: string[] = [];
     const used = new Set(store!.images.keys());
-    const bulkOpts = { ...opts, crop: null };
+    // 取り込む画像は写真などで、描いた絵ではない。今の元画像の「描いた絵」の印は付けない（付けると、描き直しで壊れた絵になる）
+    const bulkOpts: IconOptions = { ...opts, crop: null };
+    delete bulkOpts.paint;
     for (const f of images) {
       try {
         await loadBlob(f, f.name);
@@ -550,6 +708,7 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       }
     }
     if (failed.length) notify({ kind: 'warning', message: tr('{n} 個の画像を読み込めませんでした：{list}', { n: failed.length, list: failed.slice(0, 5).join(tr('、')) + (failed.length > 5 ? '…' : '') }) });
+    if (paintOpen) return;
     if (entries.length) {
       store!.addImages(entries);
       applied = true;
@@ -595,6 +754,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     sourceView.width = Math.max(1, Math.round(source.width * ratio));
     sourceView.height = Math.max(1, Math.round(source.height * ratio));
     const ctx = sourceView.getContext('2d')!;
+    // 描いた絵は、拡大してもドットがにじまないように見せる
+    ctx.imageSmoothingEnabled = !source.paint;
     ctx.drawImage(source.image, 0, 0, sourceView.width, sourceView.height);
     if (opts.crop) {
       // 切り抜く範囲の外を暗くする
@@ -608,7 +769,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     keySwatch.style.background = `rgb(${opts.key.r},${opts.key.g},${opts.key.b})`;
     keySwatch.title = toHex(opts.key);
     cropReset.hidden = !opts.crop;
-    sourceHint.textContent = tr('{name}（{width} × {height}）', { name: source.name, width: source.width, height: source.height });
+    sourceHint.textContent = source.paint ? tr('描いた絵（{canvas} × {canvas}）', { canvas: source.paint.canvas }) : tr('{name}（{width} × {height}）', { name: source.name, width: source.width, height: source.height });
+    paintButton.hidden = false;
 
     process(source, opts, output);
     const url = output.toDataURL('image/png');

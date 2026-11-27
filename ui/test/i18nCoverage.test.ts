@@ -15,6 +15,9 @@ const FILES = [
   '../src/dialogs/importDialog.ts',
   '../src/ribbonImport.ts',
   '../src/distributionCheck.ts',
+  // 0.4.0：アイコンのペイント機能（SPEC §25）
+  '../src/icon/paint/paintDialog.ts',
+  '../src/icon/paint/session.ts',
 ];
 
 const sources = import.meta.glob(['../src/**/*.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
@@ -33,5 +36,24 @@ describe('英語の辞書（0.3.0 の文言）', () => {
     const keys = keysOf(text!);
     expect(keys.length).toBeGreaterThan(0);
     expect(missingKeys(keys)).toEqual([]);
+  });
+});
+
+// iconDialog.ts の文言は別名 tr('…') で書かれていて、上の数え方（t('…'）に入らない。ペイント機能で足した分を、ここに挙げて確かめる
+describe('英語の辞書（アイコンエディタに足した、描いて編集の文言）', () => {
+  it('tr(…) の文言がすべて辞書にある', () => {
+    const text = sources['../src/icon/iconDialog.ts']!;
+    const used = [
+      '新しく描く', '描いて編集…', '描いた絵（{canvas} × {canvas}）',
+      '空の絵を、鉛筆や塗りつぶしで一から描きます（16 × 16 のドット絵も描けます）',
+      '今の見た目を下絵にして、鉛筆や塗りつぶしで直します',
+      '描く絵の大きさを選んでください。16 × 16 はドット絵向きで、出力の大きさに合わせて拡大されます。',
+      '今の加工の結果を下絵にします。余白や色の設定は初期化されます（描いたあとに、もう一度かけられます）',
+      'もっと新しい版の Sash で描いた絵です。見た目はそのまま使えますが、描き直しはできません',
+      '画像を作れませんでした',
+    ];
+    // 挙げた文言が、実際に iconDialog.ts にあること（書き換えて、この一覧が古くならないように）
+    for (const k of used) expect(text, k).toContain(`tr('${k}'`);
+    expect(missingKeys(used)).toEqual([]);
   });
 });

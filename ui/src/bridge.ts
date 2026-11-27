@@ -508,6 +508,8 @@ const mockVbaModules: VbaModuleDto[] = [
 
 /** ブラウザ実行中の退避の置き場（?recovery を付けると、サンプルのブックの退避が残っているものとして始める）。 */
 const mockRecoveries = new Map<string, RecoveryEntryDto>();
+/** ブラウザ実行中のアイコンライブラリ（このページの間だけ。保存と読み込みの流れを画面で確かめるため）。 */
+const mockLibrary = new Map<string, LibraryIconDetail & { createdAt: string }>();
 if (mockParams.has('recovery')) {
   mockRecoveries.set('C:\\sample\\集計ツール.xlam', {
     path: 'C:\\sample\\集計ツール.xlam',
@@ -673,7 +675,20 @@ const mock = {
       case 'update.check':
         return r({ status: 'upToDate', current: 'dev', latest: null, notes: null, canInstall: false, reason: null, pageUrl: 'https://github.com/Yu5rin/Sash/releases/latest', source: 'https://github.com/Yu5rin/Sash', managedByAdmin: false });
       case 'library.list':
-        return r({ root: t('(ブラウザ実行中)'), icons: [] });
+        return r({
+          root: t('(ブラウザ実行中)'),
+          icons: [...mockLibrary.values()].map((d): LibraryIconDto => ({ id: d.id, name: d.name, tags: d.tags, createdAt: d.createdAt, hasSource: d.source !== null, favorite: false, png: d.png })),
+        });
+      case 'library.get':
+        return r(mockLibrary.get((payload as { id: string }).id) ?? null);
+      case 'library.save': {
+        // 本物のホストと同じく、同じ名前は上書きせず -2 を付けた別のアイコンにする
+        const p = payload as { name: string; tags: string[]; png: string; source?: string; sourceName?: string; sourceContentType?: string; options?: unknown };
+        let id = p.name;
+        for (let n = 2; mockLibrary.has(id); n++) id = `${p.name}-${n}`;
+        mockLibrary.set(id, { id, name: id, tags: p.tags, png: p.png, source: p.source ?? null, sourceName: p.sourceName ?? null, sourceContentType: p.sourceContentType ?? null, options: (p.options as Record<string, unknown> | undefined) ?? null, createdAt: new Date().toISOString() });
+        return r({ id });
+      }
       case 'vba.read':
         // ?excel を付けると、Excel で開いているブックの VBA（引数なしの Sub・Private・引数あり・Function・シートのもの）があるものとして動かせる
         return r(mockExcel ? { status: 'ok', modules: mockVbaModules } : { status: 'noExcel', modules: [] });
