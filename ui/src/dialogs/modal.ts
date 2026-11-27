@@ -8,7 +8,10 @@ import { t } from '../i18n';
 import { uiIcons } from '../icons';
 
 export interface ModalHandle {
+  /** すぐに閉じる（beforeClose は呼ばない。［完了］など、プログラムから閉じるとき）。 */
   close(): void;
+  /** 利用者が閉じようとしたときと同じ動き（beforeClose があれば先に確かめ、false なら閉じない）。 */
+  requestClose(): void;
   root: HTMLElement;
 }
 
@@ -19,11 +22,16 @@ export interface ModalOptions {
   tall?: boolean;
   /** Esc を押されたとき、先に呼ぶ。true を返したら、その Esc は処理済み（ダイアログは閉じない。ダイアログの中のポップアップを閉じるときに使う）。 */
   onEscape?: () => boolean;
-  /** 大きさ。sm=確認、md=既定、lg=一覧や編集。 */
-  size?: 'sm' | 'md' | 'lg';
+  /** 大きさ。sm=確認、md=既定、lg=一覧や編集、xl=画面いっぱいの作業画面（ペイント）。 */
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   /** 下部のボタン。primary クラスのボタンは右端に並べ、Enter で押されるものとして扱う。 */
   footer?: HTMLElement[];
   onClose?: () => void;
+  /**
+   * Esc・×・背景のクリックで閉じる前に確かめる。false（または false になる Promise）なら閉じない。
+   * 描いた内容を確かめずに捨ててしまわないためのもの。渡さないダイアログは今までどおり。handle.close() は確かめずに閉じる。
+   */
+  beforeClose?: () => boolean | Promise<boolean>;
   /** false なら Esc・×・背景のクリックで閉じない（更新中など、途中で閉じると困るもの）。 */
   closable?: boolean;
   /** 同じダイアログを二重に開かないための名前。開いていれば、そのダイアログを前に出して返す。 */
@@ -40,6 +48,7 @@ interface Layer {
   /** フォーカスを閉じ込める範囲（ダイアログ本体）。 */
   dialog: HTMLElement;
   close: () => void;
+  requestClose: () => void;
   closable: boolean;
   onEscape?: () => boolean;
   handle: ModalHandle;
@@ -77,7 +86,7 @@ function onDocumentKey(e: KeyboardEvent): void {
     e.stopPropagation();
     e.preventDefault();
     if (top.onEscape?.()) return;
-    if (top.closable) top.close();
+    if (top.closable) top.requestClose();
     return;
   }
   if (e.key === 'Tab') {
@@ -105,9 +114,10 @@ function onDocumentKey(e: KeyboardEvent): void {
  * レイヤーを積む（ダイアログ以外の重なるもの、例：コマンドパレットにも使う）。
  * element は document.body に追加済みでなくてよい。閉じるときは返り値の close を呼ぶ。
  */
-export function pushLayer(opts: { element: HTMLElement; dialog: HTMLElement; closable?: boolean; key?: string; onClose?: () => void; onEscape?: () => boolean }): ModalHandle {
+export function pushLayer(opts: { element: HTMLElement; dialog: HTMLElement; closable?: boolean; key?: string; onClose?: () => void; onEscape?: () => boolean; beforeClose?: () => boolean | Promise<boolean> }): ModalHandle {
   const previous = document.activeElement as HTMLElement | null;
   let closed = false;
+  let confirming = false;
   const layer: Layer = {
     id: nextLayerId++,
     key: opts.key,
@@ -131,9 +141,23 @@ export function pushLayer(opts: { element: HTMLElement; dialog: HTMLElement; clo
       if (previous && previous.isConnected && !previous.closest('[inert]')) previous.focus();
       else layers[layers.length - 1]?.dialog.focus();
     },
+    requestClose: () => {
+      if (!opts.beforeClose) return layer.close();
+      // 確認の途中で、もう一度 Esc や × が押されても、確認を二重に出さない
+      if (confirming) return;
+      confirming = true;
+      void Promise.resolve()
+        .then(() => opts.beforeClose!())
+        // 確かめる処理が失敗しても、閉じられなくならないようにする
+        .catch(() => true)
+        .then((ok) => {
+          confirming = false;
+          if (ok) layer.close();
+        });
+    },
     handle: undefined as unknown as ModalHandle,
   };
-  layer.handle = { close: layer.close, root: opts.dialog };
+  layer.handle = { close: layer.close, requestClose: layer.requestClose, root: opts.dialog };
   if (!opts.element.isConnected) document.body.append(opts.element);
   layers.push(layer);
   updateInert();
@@ -181,7 +205,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
     { class: `modal size-${size}${opts.wide ? ' wide' : ''}${opts.wide && opts.tall ? ' tall' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId, tabIndex: -1 },
     h('header', null,
       h('h2', { id: titleId }, title),
-      closable ? h('button', { type: 'button', class: 'icon-button modal-close', title: t('閉じる (Esc)'), 'aria-label': t('閉じる (Esc)'), onclick: () => handle.close() }, svg(uiIcons.close)) : null),
+      closable ? h('button', { type: 'button', class: 'icon-button modal-close', title: t('閉じる (Esc)'), 'aria-label': t('閉じる (Esc)'), onclick: () => handle.requestClose() }, svg(uiIcons.close)) : null),
     h('div', { class: 'modal-body' }, content),
     footerButtons ? h('footer', null, footerButtons) : null,
   );
@@ -190,7 +214,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
   let downOnBackdrop = false;
   backdrop.addEventListener('mousedown', (e) => (downOnBackdrop = e.target === backdrop));
   backdrop.addEventListener('mouseup', (e) => {
-    if (closable && downOnBackdrop && e.target === backdrop) handle.close();
+    if (closable && downOnBackdrop && e.target === backdrop) handle.requestClose();
     downOnBackdrop = false;
   });
   // Enter で主ボタンを押す。複数行の入力欄・ボタン・リンクの上、日本語の変換中は除く
@@ -203,7 +227,7 @@ export function openModal(title: string, content: HTMLElement, opts: ModalOption
     e.preventDefault();
     primary.click();
   });
-  const handle = pushLayer({ element: backdrop, dialog, closable, key: opts.key, onClose: opts.onClose, onEscape: opts.onEscape });
+  const handle = pushLayer({ element: backdrop, dialog, closable, key: opts.key, onClose: opts.onClose, onEscape: opts.onEscape, beforeClose: opts.beforeClose });
   (opts.initialFocus ?? initialFocusTarget(dialog)).focus();
   return handle;
 }

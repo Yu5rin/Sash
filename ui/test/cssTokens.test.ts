@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 // vitest は CSS を空にするので、ファイルを直接読む（node の型は tsconfig に含めていない）
 // @ts-expect-error node:fs の型がない
 const { readFileSync } = (await import('node:fs')) as { readFileSync: (p: string, enc: string) => string };
-const FILES = ['src/styles.css', 'src/styles-views.css', 'src/styles-w3.css', 'src/styles-v3.css', 'src/fluent/fluent.css'];
+const FILES = ['src/styles.css', 'src/styles-views.css', 'src/styles-w3.css', 'src/styles-v3.css', 'src/fluent/fluent.css', 'src/icon/paint/paint.css'];
 const css: Record<string, string> = Object.fromEntries(FILES.map((f) => [f, readFileSync(f, 'utf8')]));
 
 /** コメントを除く。 */

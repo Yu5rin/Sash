@@ -1,0 +1,62 @@
+/* ペイント画面（描いて編集）。色・大きさ・角丸はアプリのトークンだけを使う（SPEC §22.7）。市松模様とグリッド・選択の点線は canvas の中で描く。 */
+
+.paint-editor { display: flex; flex-direction: column; gap: var(--sp-2); height: 100%; min-height: 0; }
+.paint-top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); min-height: var(--ctl-h-xl); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--border); }
+.paint-group { display: flex; align-items: center; gap: var(--sp-1); }
+.paint-group .icon-button { min-width: var(--ctl-h); min-height: var(--ctl-h); font-size: var(--fs-md); }
+.paint-group select { min-width: 64px; }
+.paint-info { margin-left: auto; white-space: nowrap; }
+.paint-settings { display: flex; align-items: center; gap: var(--sp-3); }
+.paint-settings[hidden] { display: none; }
+.paint-settings label { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); }
+.paint-settings input[type="range"] { width: 120px; }
+.paint-tol-value { min-width: 28px; text-align: right; font-size: var(--fs-xs); color: var(--text-subtle); }
+
+.paint-main { display: grid; grid-template-columns: var(--ctl-h-xl) minmax(0, 1fr) 300px; gap: var(--sp-3); flex: 1; min-height: 0; }
+
+.paint-tools { display: flex; flex-direction: column; gap: var(--sp-1); }
+.paint-tools button.paint-tool { width: var(--ctl-h-xl); height: var(--ctl-h-xl); min-width: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: transparent; border-color: transparent; }
+.paint-tools button.paint-tool[aria-pressed="true"] { background: var(--sel-bg); border-color: var(--sel-border); color: var(--select); }
+.paint-tools button.paint-tool:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+
+.paint-stage-wrap { position: relative; min-width: 0; min-height: 0; background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.paint-stage { position: absolute; inset: 0; cursor: crosshair; touch-action: none; outline: none; user-select: none; }
+.paint-stage:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.paint-stage.space, .paint-stage.can-pan[data-tool="select"]:active { cursor: grab; }
+.paint-stage.panning { cursor: grabbing; }
+.paint-canvas { display: block; }
+
+.paint-guide { position: absolute; top: var(--sp-2); left: var(--sp-2); max-width: 340px; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); font-size: var(--fs-sm); line-height: 1.6; }
+.paint-guide p { margin: 0; }
+
+.paint-side { min-height: 0; overflow-y: auto; padding-right: var(--sp-1); display: flex; flex-direction: column; gap: var(--sp-2); }
+.paint-section { display: flex; flex-direction: column; gap: var(--sp-2); }
+.paint-section h3 { margin: 0; padding: 0 0 var(--sp-1); font-size: var(--fs-xs); font-weight: 600; color: var(--text-subtle); border-bottom: 1px solid var(--border); }
+.paint-colors { display: flex; align-items: center; gap: var(--sp-3); }
+.paint-swatch-pair { position: relative; width: 60px; height: 52px; flex: none; }
+.paint-swatch { position: absolute; width: 34px; height: 34px; min-width: 0; min-height: 0; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
+.paint-swatch[data-which="primary"] { left: 0; top: 0; z-index: 1; }
+.paint-swatch[data-which="secondary"] { right: 0; bottom: 0; }
+.paint-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--select); }
+.paint-swatch:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.paint-swatch-fill { display: block; width: 100%; height: 100%; border-radius: var(--radius-xs); }
+.paint-swatch-fill.transparent { background: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface) 0 50%) 0 0 / 8px 8px; }
+.paint-color-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+.paint-color-state { margin: 0; }
+.paint-previews .icon-preview { width: 68px; height: 68px; }
+.paint-note { margin: 0; color: var(--warning-text); line-height: 1.5; }
+.paint-note[hidden] { display: none; }
+
+.paint-status { display: flex; align-items: center; gap: var(--sp-3); flex: 1; min-width: 0; }
+.modal footer .paint-status .icon-button { min-width: var(--ctl-h); }
+.paint-coords { min-width: 150px; white-space: nowrap; }
+.paint-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.paint-help { border-collapse: collapse; font-size: var(--fs-sm); }
+.paint-help th { text-align: left; white-space: nowrap; padding: var(--sp-1) var(--sp-3) var(--sp-1) 0; font-weight: 400; vertical-align: top; }
+.paint-help td { padding: var(--sp-1) 0; color: var(--text-subtle); }
+
+@media (forced-colors: active) {
+  .paint-tools button.paint-tool[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .paint-swatch[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: 2px; }
+}
