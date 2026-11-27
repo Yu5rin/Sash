@@ -20,6 +20,7 @@ const check = (name, ok, detail = '') => {
 };
 
 const browser = await chromium.launch();
+console.log(`ブラウザ：Chromium ${browser.version()}（下限の WebView2 は Chromium 109。実機では確かめていない）`);
 
 /** ページが読み込んだのと同じモジュール（Vite は ?t=… を付けるので、同じ URL で読まないと別のインスタンスになる）。 */
 
@@ -242,6 +243,38 @@ console.log('== 2. 16×16 で描く → 出力 32 は 2 倍の最近傍');
   check('options.paint.canvas が 16', out.options?.paint?.canvas === 16);
   const legacy = await legacyOutput(page, 'img_btnSummary', 32);
   check('互換（16 → 32）：0.3.1 の手順でも一致', same(legacy, out.data));
+  // 出力の大きさを 64 に変える：描いた絵から元画像を作り直し、4 倍の最近傍で一致する（拡大した元画像をさらに拡大するとぼける）
+  await openIconEditor(page);
+  await drawNew(page, 16);
+  await setPrimary(page, '#0000ff');
+  await drag(page, 16, [[1, 1], [5, 1]]);
+  await click(page, 16, 8, 8);
+  await finishPaint(page);
+  await page.locator('select[data-opt="size"]').selectOption('64');
+  await page.waitForTimeout(500);
+  await apply(page);
+  const out64 = await storedPixels(page);
+  const want64 = blank(64);
+  for (let x = 1; x <= 5; x++) for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) put(want64, x * 4 + dx, 4 + dy, [0, 0, 255, 255]);
+  for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) put(want64, 32 + dx, 32 + dy, [0, 0, 255, 255]);
+  check('出力を 64 に変えると、16 の絵の 4 倍の最近傍で一致する（元画像を作り直す）', out64.width === 64 && same(out64.data, want64.data) && out64.options?.paint?.canvas === 16);
+  const legacy64 = await legacyOutput(page, 'img_btnSummary', 64);
+  check('互換（16 → 64）：0.3.1 の手順でも一致', same(legacy64, out64.data));
+  // 32 に戻すと、2 倍に戻る
+  await openIconEditor(page);
+  await drawNew(page, 16);
+  await setPrimary(page, '#0000ff');
+  await click(page, 16, 8, 8);
+  await finishPaint(page);
+  await page.locator('select[data-opt="size"]').selectOption('64');
+  await page.waitForTimeout(400);
+  await page.locator('select[data-opt="size"]').selectOption('32');
+  await page.waitForTimeout(500);
+  await apply(page);
+  const back = await storedPixels(page);
+  const want2 = blank(32);
+  for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) put(want2, 16 + dx, 16 + dy, [0, 0, 255, 255]);
+  check('64 から 32 に戻すと、2 倍の最近傍に戻る', back.width === 32 && same(back.data, want2.data));
   await page.context().close();
 }
 

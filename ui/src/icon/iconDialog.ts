@@ -549,6 +549,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       return;
     }
     source = await paintedSource(px, source.paint.canvas, source.name);
+    // 切り抜きの範囲は、前の元画像の画素の座標なので、元画像の大きさが変わったら外す（ICO の大きさを選び直したときと同じ）
+    opts.crop = null;
     render();
   }
 
@@ -750,7 +752,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     updateEnabled();
     if (!source) return;
     // SVG は拡大しても粗くならないので、小さなもの（アイコン集の 24px など）は 128px まで大きくして見せる
-    const ratio = source.isSvg ? Math.max(Math.min(256 / source.width, 256 / source.height, 1), Math.min(128 / source.width, 128 / source.height)) : Math.min(256 / source.width, 256 / source.height, 1);
+    // 描いた絵は小さい（16〜64px）ので、整数倍に拡大して見せる（拡大してもにじまない）
+    const ratio = source.paint ? Math.max(1, Math.floor(160 / Math.max(source.width, source.height))) : source.isSvg ? Math.max(Math.min(256 / source.width, 256 / source.height, 1), Math.min(128 / source.width, 128 / source.height)) : Math.min(256 / source.width, 256 / source.height, 1);
     sourceView.width = Math.max(1, Math.round(source.width * ratio));
     sourceView.height = Math.max(1, Math.round(source.height * ratio));
     const ctx = sourceView.getContext('2d')!;
