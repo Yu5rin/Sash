@@ -534,7 +534,8 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
     c.width = big.width;
     c.height = big.height;
     c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(big.data), big.width, big.height), 0, 0);
-    const blob = await new Promise<Blob>((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error(tr('画像を作れませんでした')))), 'image/png'));
+    // toBlob ではなく toDataURL（同期）で PNG にする。toBlob は、画面が忙しいと 1 秒ほど待たされることがある
+    const blob = dataUrlToBlob(c.toDataURL('image/png'));
     return { name: fileName, blob, image: await createImageBitmap(blob), isSvg: false, width: big.width, height: big.height, paint: { canvas } };
   }
 
@@ -708,7 +709,6 @@ export function openIconDialog(target: Path | null, files?: FileList | File[], e
       }
     }
     if (failed.length) notify({ kind: 'warning', message: tr('{n} 個の画像を読み込めませんでした：{list}', { n: failed.length, list: failed.slice(0, 5).join(tr('、')) + (failed.length > 5 ? '…' : '') }) });
-    if (paintOpen) return;
     if (entries.length) {
       store!.addImages(entries);
       applied = true;

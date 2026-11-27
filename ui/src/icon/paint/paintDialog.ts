@@ -5,7 +5,8 @@
 import './paint.css';
 import { h, svg } from '../../dom';
 import { ask, openModal, type ModalHandle } from '../../dialogs/modal';
-import { t } from '../../i18n';
+import { addDictionary, t } from '../../i18n';
+import { en as enPaint } from '../../i18n/en/paint';
 import { uiIcons } from '../../icons';
 import { buildColorPalette, colorLabel, type ColorPalette } from '../../fluent/colorPalette';
 import { normalizeHex, pushRecent } from '../../fluent/iconPalette';
@@ -18,6 +19,9 @@ import { maskBounds } from './selection';
 import { PaintSession, toolName, TOOL_IDS, type PointerInfo, type ToolId } from './session';
 import { sourceScale, upscaleNearest } from './transform';
 import { PaintView, ZOOMS, stepZoom } from './view';
+
+// この画面の英語の訳は、この塊の中で足す（アイコンエディタを開くだけでは、読み込まない）
+addDictionary(enPaint);
 
 export interface PaintDialogOptions {
   canvas: CanvasSize;
@@ -184,7 +188,6 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   const swapBtn = h('button', { type: 'button', class: 'icon-button', title: t('前景色と背景色を入れ替えます (X)'), 'aria-label': t('前景色と背景色を入れ替える'), onclick: () => session.swapColors() }, svg(ICONS.swap)) as HTMLButtonElement;
   const resetBtn = h('button', { type: 'button', class: 'small', title: t('前景色を灰色、背景色を透明に戻します (D)'), onclick: () => session.resetColors() }, t('既定の色')) as HTMLButtonElement;
   const transparentBtn = h('button', { type: 'button', class: 'small', title: t('選んでいるほうの色を「透明」にします。背景色を透明にしておくと、右クリックで描いたところが消えます'), onclick: () => session.setColor(target, TRANSPARENT) }, t('透明にする')) as HTMLButtonElement;
-  const colorState = h('p', { class: 'muted small paint-color-state' });
   const palette: ColorPalette = buildColorPalette({
     value: rgbaToHex(session.primary) ?? '#424242',
     recent: loadRecent(),
@@ -204,7 +207,6 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       h('div', { class: 'paint-colors' },
         h('div', { class: 'paint-swatch-pair', role: 'group', 'aria-label': t('パレットで変える色') }, secondaryBtn, primaryBtn),
         h('div', { class: 'paint-color-actions' }, swapBtn, resetBtn, transparentBtn)),
-      colorState,
       palette.el),
     h('section', { class: 'paint-section' },
       h('h3', null, t('プレビュー（実寸）')),
@@ -289,7 +291,6 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     const c = target === 'primary' ? session.primary : session.secondary;
     const hex = rgbaToHex(c);
     if (hex) palette.setValue(hex.slice(0, 7));
-    colorState.textContent = t('パレットで変える色：{name}（{color}）', { name: target === 'primary' ? t('前景色') : t('背景色'), color: hexOf(c) });
   }
 
   function updateZoomUi(): void {

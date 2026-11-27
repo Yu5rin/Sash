@@ -20,6 +20,9 @@ const FILES = [
   '../src/icon/paint/session.ts',
 ];
 
+// ペイント画面の英語の訳は、画面の塊を読み込んだときに足される（起動時の辞書に入れない）。その経路のまま確かめる
+await import('../src/icon/paint/paintDialog');
+
 const sources = import.meta.glob(['../src/**/*.ts'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
 /** t('…') の文字列を取り出す（エスケープした \' を含む）。変数の差し込みは {name} のまま。 */
@@ -50,7 +53,6 @@ describe('英語の辞書（アイコンエディタに足した、描いて編�
       '描く絵の大きさを選んでください。16 × 16 はドット絵向きで、出力の大きさに合わせて拡大されます。',
       '今の加工の結果を下絵にします。余白や色の設定は初期化されます（描いたあとに、もう一度かけられます）',
       'もっと新しい版の Sash で描いた絵です。見た目はそのまま使えますが、描き直しはできません',
-      '画像を作れませんでした',
     ];
     // 挙げた文言が、実際に iconDialog.ts にあること（書き換えて、この一覧が古くならないように）
     for (const k of used) expect(text, k).toContain(`tr('${k}'`);

@@ -26,7 +26,15 @@ function initialLang(): Lang {
 
 export const lang: Lang = initialLang();
 
-const dictionary: Readonly<Record<string, string>> = { ...enA, ...enB, ...enC, ...enD, ...enE, ...enF, ...enG, ...enH, ...enI };
+const dictionary: Record<string, string> = { ...enA, ...enB, ...enC, ...enD, ...enE, ...enF, ...enG, ...enH, ...enI };
+
+/**
+ * 辞書に文言を足す。大きな画面（ペイント画面など）が、自分の英語の訳を、開くときに読み込む塊の中に持つためのもの
+ * （起動時に読む辞書を増やさない）。既にある文言は、足したもので置き換える。
+ */
+export function addDictionary(extra: Readonly<Record<string, string>>): void {
+  Object.assign(dictionary, extra);
+}
 
 /** 言語を保存する。反映するには画面の読み込み直しが必要。 */
 export function storeLang(next: Lang): void {
