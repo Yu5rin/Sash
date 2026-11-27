@@ -706,6 +706,15 @@ console.log('== 10. キーボードのカーソルで描く・OS のクリップ
   const out = await storedPixels(page);
   const grey = [0x42, 0x42, 0x42, 255];
   check('キーボードのカーソルで描いた線（x 19〜21、y 16）', same(rgbaAt(out, 19, 16), grey) && same(rgbaAt(out, 21, 16), grey) && rgbaAt(out, 22, 16)[3] === 0, `${rgbaAt(out, 19, 16)} ${rgbaAt(out, 21, 16)}`);
+  // 元画像（source）は、画素をそのまま書いた PNG：半透明の色（66,66,66,128）が丸められずに残る
+  const srcPx = await page.evaluate(async () => {
+    const { app } = await window.__mod('app.ts');
+    const { decodePng } = await window.__mod('icon/paint/png.ts');
+    const e = app.store.images.get('img_btnSummary');
+    const d = decodePng(new Uint8Array(await e.edit.source.arrayBuffer()));
+    return d ? Array.from(d.data.slice((3 * d.width + 3) * 4, (3 * d.width + 3) * 4 + 4)) : null;
+  });
+  check('元画像の PNG が、半透明の画素をそのまま保つ（66,66,66,128）', same(srcPx ?? [], [66, 66, 66, 128]), String(srcPx));
   const half = rgbaAt(out, 3, 3);
   check('ブラシの不透明度 50%：半透明の画素になる（アルファ 128 付近）', half[3] > 100 && half[3] < 150, String(half));
   await ctx.close();
