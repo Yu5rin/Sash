@@ -148,6 +148,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   let spaceDown = false;
   /** Space を押して、まだ何にも使っていない（パンも描画も始まっていない）。 */
   let spacePending = false;
+  /** Space を押した時点の Shift（離したときに、前の点から直線にするため）。 */
+  let spaceShift = false;
   let panning: { x: number; y: number } | null = null;
   /** ドラッグを始めたポインタの情報（ボタン・消しゴム側）。 */
   let active: { id: number; button: 0 | 2; eraser: boolean } | null = null;
@@ -519,6 +521,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     }
     cursorShown = false;
     spacePending = false;
+    // 初回の手引きは、描き始めたら閉じる（左上の画素に重なって、押せなくなるため）
+    if (guide) dismissGuide();
     // 中ボタン・Space を押しながらのドラッグは、画面を動かす
     if (e.button === 1 || (spaceDown && e.button === 0)) {
       e.preventDefault();
@@ -595,6 +599,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
   });
   stage.addEventListener('wheel', (e) => {
     e.preventDefault();
+    spacePending = false;
     if (e.ctrlKey) view.setZoom(stepZoom(view.zoom, e.deltaY < 0 ? 1 : -1), e);
     else if (e.shiftKey) view.panBy(-e.deltaY, 0);
     else view.panBy(0, -e.deltaY);
@@ -630,10 +635,15 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       spaceDown = true;
       stage.classList.add('space');
       // すぐには描かない。マウスのドラッグが続けばパン、何も続かずに離したら（カーソルを出しているときだけ）カーソルの位置で描く
-      if (!e.repeat) spacePending = true;
+      if (!e.repeat) {
+        spacePending = true;
+        spaceShift = e.shiftKey;
+      }
       // カーソルを出していて、矢印で動かしながら押しているときは、押した位置から描き始める（下の矢印の処理で始める）
       return;
     }
+    // Space を押したまま、ほかのキー（数字・ツールのキーなど）を使ったときは、離したときに描かない
+    if (!['Shift', 'Control', 'Alt', 'Meta', ' '].includes(e.key) && !e.key.startsWith('Arrow')) spacePending = false;
     // Enter・Space でボタンを押す動きは、そのまま
     if (onButton && (e.key === 'Enter' || e.key === ' ')) return;
     const mod = e.ctrlKey || e.metaKey;
@@ -659,7 +669,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false });
     }
     const handled = session.key({ key: e.key, ctrl: mod, shift: e.shiftKey, alt: e.altKey, repeat: e.repeat });
-    if (handled && (e.key.startsWith('Arrow') || e.key === 'Enter')) cursorShown = true;
+    // カーソルを出すのは、キーボードのカーソルが実際に動いたり使われたとき（選択範囲を矢印で動かしただけ・浮いた選択を Enter で確定しただけでは出さない）
+    if (handled && session.cursor !== null && (e.key.startsWith('Arrow') || e.key === 'Enter')) cursorShown = true;
     // コピー・切り取りは、OS のクリップボードにも画像として入れる（ほかのアプリへ貼り付けられるように）
     if (handled && mod && (e.key === 'c' || e.key === 'C' || e.key === 'x' || e.key === 'X') && session.clipboard) void copyToOsClipboard(session.clipboard);
     // キャンバスの上の Enter は、［完了］を押さない（浮いた選択の確定だけ）
@@ -673,8 +684,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (e.key === ' ' && spacePending) {
       // Space だけを押して離した：カーソルを出していれば、その位置に 1 点（ツールを 1 回使う）
       spacePending = false;
-      if (cursorShown && stage === document.activeElement) {
-        session.key({ key: ' ', ctrl: false, shift: false, alt: false });
+      if (cursorShown && session.cursor !== null && stage === document.activeElement) {
+        session.key({ key: ' ', ctrl: false, shift: spaceShift, alt: false });
         session.keyUp(' ');
       }
       return;

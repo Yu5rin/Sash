@@ -384,7 +384,7 @@ describe('ツールのショートカット（第 2 段階）', () => {
 });
 
 import { brushFootprint, newCoverage, stampBrush } from '../src/icon/paint/stroke';
-import { transformContent } from '../src/icon/paint/selection';
+import { setFloatingPos, transformContent } from '../src/icon/paint/selection';
 import { createDoc } from '../src/icon/paint/doc';
 
 describe('見直し（第 2 段階）', () => {
@@ -487,5 +487,51 @@ describe('見直し（第 2 段階）', () => {
     s.setTool('brush');
     s.setSettings({ brushSize: 2 });
     expect(s.hoverCells).toHaveLength(4);
+  });
+});
+
+describe('最終確認の指摘', () => {
+  const band = (size: number, x0: number, y0: number, x1: number, y1: number) => {
+    const rowsT = Array.from({ length: size }, (_, y) => (y >= y0 && y <= y1 ? '.'.repeat(x0) + 'r'.repeat(x1 - x0 + 1) : '').padEnd(size, '.'));
+    const d = createDoc(size as 16, fromTable(rowsT));
+    const m = new Uint8Array(size * size);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) m[y * size + x] = 255;
+    d.selection = m;
+    return d;
+  };
+  it('端の近くの範囲でも、回転が元に戻る（右 4 回・右左・左右）', () => {
+    for (const [x0, y0, x1, y1] of [[0, 0, 15, 0], [0, 0, 2, 5], [10, 0, 14, 1], [0, 13, 15, 15]] as const) {
+      for (const seq of [['rotateCw', 'rotateCw', 'rotateCw', 'rotateCw'], ['rotateCw', 'rotateCcw'], ['rotateCcw', 'rotateCw']] as const) {
+        const d = band(16, x0, y0, x1, y1);
+        for (const k of seq) transformContent(d, k);
+        expect(d.floating, `${x0},${y0}-${x1},${y1} ${seq.join()}`).toMatchObject({ x: x0, y: y0 });
+        expect(d.floating!.pixels.width).toBe(x1 - x0 + 1);
+      }
+    }
+  });
+  it('選択を動かしたら、回転の中心は捨てる', () => {
+    const d = band(16, 2, 2, 4, 3);
+    transformContent(d, 'rotateCw');
+    expect(d.floating!.center).toBeDefined();
+    setFloatingPos(d, 5, 5);
+    expect(d.floating!.center).toBeUndefined();
+  });
+  it('はみ出しの知らせは、回転のときだけ（反転では出さない）', () => {
+    const s = fresh();
+    s.setTool('select');
+    drag(s, [[0, 15], [7, 15]]);
+    const said: string[] = [];
+    s.onAnnounce = (m) => said.push(m);
+    s.transform('flipH');
+    expect(said.some((m) => m.includes('はみ出'))).toBe(false);
+  });
+  it('選択を矢印で動かしても、キーボードのカーソルは作られない（Space を離したときに中央で描かないため）', () => {
+    const s = fresh(['rr']);
+    s.setTool('select');
+    drag(s, [[0, 0], [1, 0]]);
+    s.key(key('ArrowRight'));
+    expect(s.cursor).toBeNull();
+    s.key(key('Enter'));
+    expect(s.cursor).toBeNull();
   });
 });

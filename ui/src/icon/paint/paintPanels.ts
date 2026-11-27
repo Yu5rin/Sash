@@ -187,7 +187,7 @@ export function buildAdjustPanel(session: PaintSession, hooks: AdjustHooks): Pan
   const section = (title: string, ...children: (HTMLElement | null)[]) => h('section', { class: 'paint-section' }, h('h3', null, title), children);
   const el = h('div', { class: 'paint-adjust' },
     scope,
-    section(t('色相・彩度・明るさ'), hueRow.el, satRow.el, lightRow.el,
+    section(t('色相・彩度・明るさ'), h('p', { class: 'muted small paint-gray-hint' }, t('灰色は、色相・彩度では変わりません')), hueRow.el, satRow.el, lightRow.el,
       h('div', { class: 'paint-actions' },
         small(t('適用'), t('選択範囲（なければ全体）に、この色の変更を適用します'), () => { if (!hslNeutral()) apply(t('色相・彩度・明るさ'), hslOp()); }),
         small(t('取り消し'), t('プレビューをやめて、スライダーを元に戻します'), () => { reset(); preview(null); }))),

@@ -558,7 +558,7 @@ export class PaintSession {
     const labels: Record<TransformKind, string> = { flipH: t('左右反転'), flipV: t('上下反転'), rotateCw: t('右へ 90° 回転'), rotateCcw: t('左へ 90° 回転') };
     this.step(labels[kind], () => transformContent(this.doc, kind));
     const f = this.doc.floating;
-    if (f && (f.x < 0 || f.y < 0 || f.x + f.pixels.width > this.doc.size || f.y + f.pixels.height > this.doc.size)) this.onAnnounce(t('回した選択が絵からはみ出しています。はみ出した部分は、確定すると消えます'));
+    if (f && (kind === 'rotateCw' || kind === 'rotateCcw') && (f.x < 0 || f.y < 0 || f.x + f.pixels.width > this.doc.size || f.y + f.pixels.height > this.doc.size)) this.onAnnounce(t('回した選択が絵からはみ出しています。はみ出した部分は、確定すると消えます'));
   }
 
   /** 選択範囲（なければ全体）に、色の変更を適用する。 */

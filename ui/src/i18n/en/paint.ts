@@ -161,6 +161,7 @@ export const en: Readonly<Record<string, string>> = {
   '置き換える前の色を選んでください': 'Choose the color to replace first',
   '今の濃さの何 % にするか。0 で透明になります': 'What percentage of the current opacity to keep. 0 makes it transparent.',
   '色相・彩度・明るさ': 'Hue, saturation, brightness',
+  '灰色は、色相・彩度では変わりません': 'Gray does not change with hue or saturation',
   '適用': 'Apply',
   '選択範囲（なければ全体）に、この色の変更を適用します': 'Applies this color change to the selection (or the whole picture if nothing is selected)',
   '取り消し': 'Cancel',

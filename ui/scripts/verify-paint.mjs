@@ -762,6 +762,11 @@ console.log('== 11. 第 2 段階の見直し：Space+ドラッグ（パン）で
   await page.keyboard.press('r');
   await page.locator('.paint-tool-settings select[aria-label="塗り"], .paint-tool-settings select[aria-label="Fill"]').selectOption('fill');
   await drag(page, S, [[5, 5], [20, 20]]);
+  // 色のある四角形（#bf4040）も置く：彩度が実際に適用されたかを、こちらの画素の変化で確かめる
+  await setPrimary(page, '#bf4040');
+  await page.keyboard.press('0');
+  await page.keyboard.press('r');
+  await drag(page, S, [[30, 5], [45, 20]]);
   await page.locator('#paint-tab-adjust').click();
   const sat = page.locator('.paint-adjust input[type=range]').nth(1);
   await sat.fill('50');
@@ -782,7 +787,66 @@ console.log('== 11. 第 2 段階の見直し：Space+ドラッグ（パン）で
   await apply(page);
   const out = await storedPixels(page);
   check('灰色（128,128,128）に彩度 +50 をかけても、灰色のまま', same(rgbaAt(out, 7, 7), [128, 128, 128, 255]), String(rgbaAt(out, 7, 7))); // 64 の絵は出力 32 に縮むので、四角形（5〜20）の内側の (7,7)
+  const red = rgbaAt(out, 19, 7);
+  check('彩度 +50 が実際に適用されている（#bf4040 の色のある四角形は、赤みが増す）', red[0] - red[1] > 191 - 64 + 5 && red[3] === 255, String(red));
   check('パンした間に、絵に何も描かれていない（四角形の外は透明）', rgbaAt(out, 25, 25)[3] === 0 && rgbaAt(out, 1, 1)[3] === 0);
+  await ctx.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+console.log('== 12. 最終確認の指摘：カーソルを出していない Space・Space を押したままの操作・Shift+Space・手引き・レイアウト');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 32);
+  const S = 32;
+  check('新しい絵の［色］タブ：「まだ色がありません」が横に読める（幅が 100px 以上）', (await page.locator('.paint-used > span').evaluate((e) => e.getBoundingClientRect().width)) > 100);
+  await page.screenshot({ path: `${SHOTS}/50-guide-768.png` });
+  await click(page, S, 3, 3);
+  check('最初に描いたら、初回の手引きが閉じる', (await page.locator('.paint-guide').count()) === 0);
+  // 選択を矢印で動かし、Ctrl+D、Space だけを押して離す：中央 (16,16) に点が付かない
+  await page.keyboard.press('m');
+  await drag(page, S, [[2, 2], [4, 4]]);
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Control+d');
+  await page.keyboard.press('p');
+  await page.keyboard.press(' ');
+  // 矢印でカーソルを出してから、Space を押したまま数字キー（拡大）：離しても描かない
+  await page.keyboard.press('Control+ArrowLeft');
+  await page.keyboard.down(' ');
+  await page.keyboard.press('1');
+  await page.keyboard.up(' ');
+  await page.keyboard.down(' ');
+  await page.keyboard.press('b');
+  await page.keyboard.up(' ');
+  await page.keyboard.press('p');
+  // Shift+Space：前の点から直線（カーソルを 15,20 → 19,20 へ。中央 (16,16) とは別の行）
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Control+ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+ArrowRight');
+  await page.keyboard.press('Control+ArrowRight');
+  await page.keyboard.press('Control+ArrowRight');
+  await page.keyboard.press('Control+ArrowRight');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press(' ');
+  await page.keyboard.up('Shift');
+  await page.locator('#paint-tab-adjust').click();
+  await page.screenshot({ path: `${SHOTS}/51-adjust-768.png` });
+  const fit = await page.evaluate(() => { const b = document.querySelector('.paint-tabbody'); return { scroll: b.scrollHeight, client: b.clientHeight }; });
+  console.log(`      選択範囲の色タブ（768）：中身 ${fit.scroll}px／表示 ${fit.client}px`);
+  await finishPaint(page);
+  await apply(page);
+  const out = await storedPixels(page);
+  check('Space だけを離しても、中央（16,16）に点が付かない（選択を矢印で動かしたあと・カーソルを出していない）', rgbaAt(out, 16, 16)[3] === 0 && rgbaAt(out, 16, 15)[3] === 0);
+  check('選択を矢印で動かした結果（(4,3) に赤…前景色の灰）が残り、(3,3) は空', rgbaAt(out, 4, 3)[3] === 255 && rgbaAt(out, 3, 3)[3] === 0);
+  const line = [15, 16, 17, 18, 19].map((x) => rgbaAt(out, x, 20)[3] === 255);
+  check('Shift+Space で前の点（15,20）からカーソル（19,20）まで直線が引かれる', line.every(Boolean), String(line));
+  check('Space を押したまま数字キー・ツールのキーを使っても、離したときに描かない（描かれるのは 15,20 の 1 点と直線だけ）', rgbaAt(out, 20, 20)[3] === 0 && rgbaAt(out, 15, 19)[3] === 0 && rgbaAt(out, 15, 21)[3] === 0);
   await ctx.close();
 }
 

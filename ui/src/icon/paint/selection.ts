@@ -301,11 +301,11 @@ export function transformContent(doc: PaintDoc, kind: TransformKind): boolean {
       // 回した結果が絵からはみ出すなら、絵の中に収まる位置へ寄せる（収まらないときは、そのまま。呼び出し側が知らせる）
       if (h <= doc.size) nx = Math.min(Math.max(nx, 0), doc.size - h);
       if (w <= doc.size) ny = Math.min(Math.max(ny, 0), doc.size - w);
-      const moved = nx !== Math.round(c.x - h / 2) || ny !== Math.round(c.y - w / 2);
       f.x = nx;
       f.y = ny;
-      if (moved) delete f.center;
-      else f.center = c;
+      // 寄せたときも、寄せる前の本来の中心を持ち続ける（位置だけを寄せる）。捨てるのは、選択を動かしたときだけ。
+      // そうしないと、端の近くで回すと、元に戻らない
+      f.center = c;
     }
     syncSelection(doc);
     return true;
