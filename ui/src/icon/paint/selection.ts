@@ -313,7 +313,7 @@ export function applyColorOp(doc: PaintDoc, op: ColorOp): void {
 
 /** 色の変更を適用したあとの、見たままの絵（doc は変えない）。プレビューに使う。 */
 export function previewColorOp(doc: PaintDoc, op: ColorOp): Pixels {
-  const copy: PaintDoc = { size: doc.size, ...snapshotDoc(doc) };
+  const copy: PaintDoc = { ...snapshotDoc(doc) };
   applyColorOp(copy, op);
   return flatten(copy);
 }

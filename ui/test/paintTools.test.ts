@@ -195,11 +195,11 @@ describe('四角形の選択と移動', () => {
     expect(s.doc.floating).toBeNull();
     expect(s.history.count).toBe(1);
   });
-  it('Alt+ドラッグは複製', () => {
+  it('Ctrl+ドラッグは複製', () => {
     const s = fresh(['r']);
     s.setTool('select');
     drag(s, [[0, 0], [1, 1]]);
-    drag(s, [[0, 0], [2, 2]], { alt: true });
+    drag(s, [[0, 0], [2, 2]], { ctrl: true });
     expect(top(s)).toEqual(['r...', '....', '..r.', '....']);
   });
   it('選択の外をクリックすると、浮いた選択が確定する', () => {
@@ -275,8 +275,7 @@ describe('キー', () => {
     const s = fresh();
     expect(s.key(key('q'))).toBe(false);
     expect(s.key(key('v', { ctrl: true }))).toBe(false);
-    expect(s.key(key('Enter'))).toBe(false);
-    expect(s.key(key('ArrowLeft'))).toBe(false);
+    expect(s.key(key('Home'))).toBe(false);
   });
   it('矢印で選択を 1 画素（Shift で 4 画素）動かす。連続した分は 1 手', () => {
     let t = 0;
@@ -329,10 +328,13 @@ describe('コピー・切り取り・貼り付け', () => {
     expect(top(s, 1)).toEqual(['....']);
     expect(s.clipboard).not.toBeNull();
   });
-  it('選択がなければコピーしない。クリップボードが空なら貼り付けない', () => {
-    const s = fresh();
-    expect(s.copy()).toBe(false);
+  it('選択がなければ絵の全体をコピーする。クリップボードが空なら貼り付けない。選択がなければ切り取らない', () => {
+    const s = fresh(['rr']);
     expect(s.pasteInternal()).toBe(false);
+    expect(s.cut()).toBe(false);
+    expect(s.copy()).toBe(true);
+    expect(s.clipboard!.width).toBe(16);
+    expect(toTable(s.clipboard!)[0].slice(0, 4)).toBe('rr..');
   });
   it('OS の画像（pastePixels）も浮いた選択になる。貼り付けも 1 手', () => {
     const s = fresh();

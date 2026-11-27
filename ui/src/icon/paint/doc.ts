@@ -29,6 +29,8 @@ export function createDoc(size: CanvasSize, pixels?: Pixels): PaintDoc {
 
 /** 履歴に積む複製。 */
 export interface DocSnapshot {
+  /** キャンバスの大きさ（大きさを変える操作も、1 手として戻せるように持つ）。 */
+  size: CanvasSize;
   pixels: Pixels;
   selection: Uint8Array | null;
   floating: Floating | null;
@@ -36,6 +38,7 @@ export interface DocSnapshot {
 
 export function snapshotDoc(doc: PaintDoc): DocSnapshot {
   return {
+    size: doc.size,
     pixels: clonePixels(doc.pixels),
     selection: doc.selection ? new Uint8Array(doc.selection) : null,
     floating: doc.floating ? { pixels: clonePixels(doc.floating.pixels), mask: new Uint8Array(doc.floating.mask), x: doc.floating.x, y: doc.floating.y } : null,
@@ -44,7 +47,8 @@ export function snapshotDoc(doc: PaintDoc): DocSnapshot {
 
 /** 複製を絵に戻す（履歴の中の複製を壊さないよう、もう一度複製して入れる）。 */
 export function restoreDoc(doc: PaintDoc, snap: DocSnapshot): void {
-  const copy = snapshotDoc({ size: doc.size, ...snap });
+  const copy = snapshotDoc({ ...snap });
+  doc.size = copy.size;
   doc.pixels = copy.pixels;
   doc.selection = copy.selection;
   doc.floating = copy.floating;
@@ -62,7 +66,7 @@ function sameMask(a: Uint8Array | null, b: Uint8Array | null): boolean {
 }
 
 export function sameSnapshot(a: DocSnapshot, b: DocSnapshot): boolean {
-  if (!equalPixels(a.pixels, b.pixels) || !sameMask(a.selection, b.selection)) return false;
+  if (a.size !== b.size || !equalPixels(a.pixels, b.pixels) || !sameMask(a.selection, b.selection)) return false;
   if (a.floating === null || b.floating === null) return a.floating === b.floating;
   return a.floating.x === b.floating.x && a.floating.y === b.floating.y && equalPixels(a.floating.pixels, b.floating.pixels) && sameMask(a.floating.mask, b.floating.mask);
 }
