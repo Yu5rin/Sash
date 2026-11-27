@@ -103,14 +103,21 @@ export class PaintSession {
   clipboard: Pixels | null = null;
   /** この画面の中でコピーしたばかりか（OS のクリップボードの画像より先に使う）。 */
   clipboardFresh = false;
-  /** キーボードのカーソル（矢印で動かす）。まだ使っていなければ null。 */
-  cursor: { x: number; y: number } | null = null;
   /**
-   * キーボードのカーソルが「いま生きている」か。直前の操作が、カーソルを矢印で動かす・Enter／Space で使う、のどれかのときだけ true。
-   * それ以外の操作（マウス・ツールの切り替え・選択の作成／確定／解除・選択範囲の矢印移動・元に戻す／やり直し・色の変更・Esc）が来たら false。
-   * Space を離したときに描くのは、これが true のときだけ（SPEC §25.14 の遷移表）。
+   * キーボードのカーソル。**キーボードのカーソルの状態は、これ 1 つだけ**：null でない＝生きている＝画面に出ている。
+   * 変えるのは setCursor() だけ（直接代入しない。変わったら必ず onChange を呼んで、画面を合わせる）。
+   * キーボードでツールを使う操作（Enter／Space）は、null のときは使わず、カーソルを出すだけ（見えない場所に描かない）。SPEC §25.14。
    */
-  cursorLive = false;
+  private cursorPos: { x: number; y: number } | null = null;
+  /** 最後に出していたカーソルの位置（次に出すとき、ここから始める）。 */
+  private lastCursor: { x: number; y: number } | null = null;
+  /** kbdDown が pointerDown を呼んでいる間（そのとき、カーソルを下ろさない）。 */
+  private kbdStarting = false;
+
+  get cursor(): { x: number; y: number } | null {
+    return this.cursorPos;
+  }
+
   /** 色の変更のプレビュー（適用するまで、見た目だけに出す）。 */
   preview: ColorOp | null = null;
   /** 状態が変わったとき（画面の描き直しと、ボタンの表示の更新）。 */
@@ -154,7 +161,7 @@ export class PaintSession {
   // ---- 履歴 ----
 
   private begin(): void {
-    this.cursorLive = false;
+    if (!this.kbdStarting) this.setCursor(null);
     this.dropPreview();
     this.before = snapshotDoc(this.doc);
   }
@@ -183,7 +190,7 @@ export class PaintSession {
 
   undo(): boolean {
     if (this.drag) return false;
-    this.cursorLive = false;
+    this.setCursor(null);
     this.dropPreview();
     const e = this.history.undo();
     this.arrow = null;
@@ -199,7 +206,7 @@ export class PaintSession {
 
   redo(): boolean {
     if (this.drag) return false;
-    this.cursorLive = false;
+    this.setCursor(null);
     this.dropPreview();
     const e = this.history.redo();
     this.arrow = null;
@@ -217,7 +224,7 @@ export class PaintSession {
 
   setTool(id: ToolId): void {
     if (this.drag || id === this.tool) return;
-    this.cursorLive = false;
+    this.setCursor(null);
     // 浮いた選択は、動かせる選択ツールの間だけ持ち続ける（ほかのツールで描くと、枠の中に重ねて描けてしまうため）
     if (!MARQUEE_TOOLS.includes(id) && this.doc.floating) this.commitFloating();
     this.tool = id;
@@ -294,7 +301,7 @@ export class PaintSession {
     // キーボードで描いている途中にマウスが押されたら、キーボードの描画を終える（そこまでを確定する）
     if (this.kbdActive) this.releaseKeyboard();
     if (this.drag) return;
-    this.cursorLive = false;
+    if (!this.kbdStarting) this.setCursor(null);
     this.arrow = null;
     const tool = this.effectiveTool(p);
     if (tool === 'pencil' || tool === 'brush' || tool === 'eraser') this.downStroke(p, tool);
@@ -600,7 +607,6 @@ export class PaintSession {
       this.doc.pixels = resizeSquare(this.doc.pixels, size, mode);
       this.doc.size = size;
       this.doc.selection = null;
-      this.cursor = null;
     });
   }
 
@@ -647,7 +653,13 @@ export class PaintSession {
 
   /** Esc：ドラッグの取り消し → 浮いた選択の確定 → 選択の解除 の順に、できることを 1 つだけする。何もなければ false。 */
   escape(): boolean {
-    this.cursorLive = false;
+    // 何も処理しなかった Esc（閉じる確認へ進む）では、カーソルに触らない。処理したときだけ、下の setCursor で消す
+    const handled = this.escapeInner();
+    if (handled) this.setCursor(null);
+    return handled;
+  }
+
+  private escapeInner(): boolean {
     if (this.preview) {
       this.dropPreview();
       this.onChange();
@@ -732,55 +744,82 @@ export class PaintSession {
   keyUp(key: string): boolean {
     if ((key !== 'Enter' && key !== ' ') || !this.kbdActive) return false;
     this.kbdActive = false;
-    const c = this.cursor ?? { x: 0, y: 0 };
+    const c = this.cursorPos ?? this.lastCursor ?? { x: 0, y: 0 };
     this.pointerUp({ x: c.x, y: c.y, button: 0, shift: false, alt: false, ctrl: false });
     return true;
   }
 
-  /** マウスがキャンバスの上を動いた。キーボードのカーソルは、画面から消えたものとして、描かない。 */
+  /** マウスがキャンバスの上を動いた：キーボードのカーソルを消す（画面からも消える）。 */
   dropCursor(): void {
-    this.cursorLive = false;
+    this.setCursor(null);
+  }
+
+  /** キーボードのカーソルを変える唯一の入口。変わったら onChange（再描画）を呼ぶ。 */
+  private setCursor(pos: { x: number; y: number } | null): void {
+    const cur = this.cursorPos;
+    if (cur === pos || (cur && pos && cur.x === pos.x && cur.y === pos.y)) return;
+    if (cur) this.lastCursor = cur;
+    this.cursorPos = pos;
+    if (pos) this.lastCursor = pos;
+    this.onChange();
+  }
+
+  /** カーソルを出す（前回の位置があればそこ、なければ絵の中央）。位置と色を読み上げる。 */
+  private showCursor(): void {
+    const mid = Math.floor(this.doc.size / 2);
+    const from = this.lastCursor ?? { x: mid, y: mid };
+    const size = this.doc.size;
+    this.setCursor({ x: clamp(from.x, 0, size - 1), y: clamp(from.y, 0, size - 1) });
+    this.announceCursor();
+  }
+
+  private announceCursor(): void {
+    const c = this.cursorPos;
+    if (!c) return;
+    const hex = rgbaToHex(sampleDoc(this.doc, c.x, c.y));
+    this.onAnnounce(t('x {x}、y {y}、{color}', { x: c.x, y: c.y, color: hex ?? t('透明') }));
   }
 
   /** キーボードの描画を、いまの位置で確定して終える（ウィンドウが離れたとき・マウスが押されたとき）。 */
   releaseKeyboard(): void {
     if (!this.kbdActive) return;
     this.kbdActive = false;
-    const c = this.cursor ?? { x: 0, y: 0 };
+    const c = this.cursorPos ?? this.lastCursor ?? { x: 0, y: 0 };
     this.pointerUp({ x: c.x, y: c.y, button: 0, shift: false, alt: false, ctrl: false });
   }
 
-  /** Enter・Space：キーボードのカーソルの位置で、いまのツールを使い始める（離すまでがドラッグ。矢印で動かすと線になる）。 */
+  /**
+   * Enter・Space：カーソルが出ていなければ、カーソルを出すだけで、ツールは使わない（見えない場所に描かないため）。
+   * 出ていれば、その位置でいまのツールを使い始める（離すまでがドラッグ。矢印で動かすと線になる）。
+   */
   private kbdDown(e: KeyInfo): boolean {
     if (e.repeat) return true;
     if (this.drag || this.kbdActive) return true;
-    const c = this.ensureCursor();
-    this.pointerDown({ x: c.x, y: c.y, button: 0, shift: e.shift, alt: false, ctrl: false });
-    // 描画の入口（pointerDown）はカーソルを下ろすので、ここで、使ったカーソルを生かし直す
-    this.cursorLive = true;
+    if (!this.cursorPos) {
+      this.showCursor();
+      return true;
+    }
+    const c = this.cursorPos;
+    this.kbdStarting = true;
+    try {
+      this.pointerDown({ x: c.x, y: c.y, button: 0, shift: e.shift, alt: false, ctrl: false });
+    } finally {
+      this.kbdStarting = false;
+    }
     // 塗りつぶし・自動選択のように、押した瞬間に終わるツールは、離すまで続ける描画がない
     this.kbdActive = this.drag !== null;
     return true;
   }
 
-  private ensureCursor(): { x: number; y: number } {
-    if (!this.cursor) {
-      const mid = Math.floor(this.doc.size / 2);
-      this.cursor = { x: mid, y: mid };
-    }
-    return this.cursor;
-  }
-
-  /** キーボードのカーソルを動かす。描いている途中なら、そこまで線を引く。 */
+  /** キーボードのカーソルを動かす（出ていなければ、前回の位置か中央から）。描いている途中なら、そこまで線を引く。 */
   moveCursor(dx: number, dy: number, shift = false): void {
-    const c = this.ensureCursor();
+    const mid = Math.floor(this.doc.size / 2);
+    const c = this.cursorPos ?? this.lastCursor ?? { x: mid, y: mid };
     const size = this.doc.size;
-    this.cursor = { x: clamp(c.x + dx, 0, size - 1), y: clamp(c.y + dy, 0, size - 1) };
-    this.cursorLive = true;
-    if (this.kbdActive) this.pointerMove({ x: this.cursor.x, y: this.cursor.y, button: 0, shift, alt: false, ctrl: false });
-    const color = sampleDoc(this.doc, this.cursor.x, this.cursor.y);
-    const hex = rgbaToHex(color);
-    this.onAnnounce(t('x {x}、y {y}、{color}', { x: this.cursor.x, y: this.cursor.y, color: hex ?? t('透明') }));
+    this.setCursor({ x: clamp(c.x + dx, 0, size - 1), y: clamp(c.y + dy, 0, size - 1) });
+    const n = this.cursorPos!;
+    if (this.kbdActive) this.pointerMove({ x: n.x, y: n.y, button: 0, shift, alt: false, ctrl: false });
+    this.announceCursor();
     this.onChange();
   }
 
@@ -804,7 +843,7 @@ export class PaintSession {
     const dx = key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0;
     const dy = key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0;
     this.dropPreview();
-    this.cursorLive = false;
+    this.setCursor(null);
     const merge = this.arrow !== null && this.arrow.key === key && this.now() - this.arrow.at < ARROW_MERGE_MS && this.history.last === this.arrow.entry;
     const before = merge ? null : snapshotDoc(this.doc);
     if (!this.doc.floating && !liftSelection(this.doc, false)) return true;

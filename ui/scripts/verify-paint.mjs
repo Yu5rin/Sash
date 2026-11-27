@@ -507,6 +507,12 @@ for (const v of [{ name: 'light', o: {} }, { name: 'dark', o: { dark: true } }, 
   await drag(page, 32, [[6, 6], [12, 12]]);
   await page.screenshot({ path: `${SHOTS}/21-${v.name}-paint.png` });
   await page.locator('#paint-tab-adjust').click();
+  // ［そのほか］（summary）は、Enter で開閉できる（日本語・英語）
+  await page.locator('.paint-more > summary').focus();
+  await page.keyboard.press('Enter');
+  check(`${v.name}：［そのほか］が Enter で開く`, await page.locator('.paint-more').evaluate((e) => e.open));
+  await page.keyboard.press('Enter');
+  check(`${v.name}：［そのほか］が Enter で閉じる`, !(await page.locator('.paint-more').evaluate((e) => e.open)));
   await page.screenshot({ path: `${SHOTS}/22-${v.name}-adjust.png` });
   const sideOverflow = await page.evaluate(() => { const b = document.querySelector('.paint-tabbody'); return b.scrollWidth > b.clientWidth + 1; });
   check(`${v.name}：選択範囲の色のタブが横にあふれない`, !sideOverflow);
@@ -887,6 +893,55 @@ console.log('== 13. キーボードのカーソルを一度使ったあとの Sp
   check('カーソルを使ったあと、マウスで描き・選択して矢印で動かし・Ctrl+D のあとの Space で、古いカーソル位置 (15,16) に点が付かない', rgbaAt(out, 15, 16)[3] === 0 && rgbaAt(out, 14, 16)[3] === 0);
   check('ツールを替えたあとの Space でも、描かない', rgbaAt(out, 14, 16)[3] === 0 && rgbaAt(out, 14, 15)[3] === 0);
   check('マウスで引いた線 (2..6,2) は残っている', [2, 3, 4, 5, 6].every((x) => rgbaAt(out, x, 2)[3] === 255));
+  await ctx.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+console.log('== 14. キーボードのカーソルは 1 つの状態：見えないカーソルでは描かない・画面のカーソルと一致');
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, colorScheme: 'light' });
+  await ctx.addInitScript(() => { localStorage.setItem('sash.paint.guide', '1'); window.__mod = (name) => import(performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/src/' + name)) ?? '/src/' + name); });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
+  await page.goto(`${BASE}/?sample`);
+  await page.waitForTimeout(2200);
+  await openIconEditor(page);
+  await drawNew(page, 32);
+  const S = 32;
+  const cur = () => page.locator('.paint-stage').getAttribute('data-cursor');
+  await page.locator('.paint-stage').focus();
+  await page.keyboard.press('ArrowLeft');
+  check('矢印でカーソルが出る（画面のカーソルの位置 15,16）', (await cur()) === '15,16', String(await cur()));
+  await page.keyboard.press(' ');
+  await page.keyboard.press('Control+z');
+  check('元に戻すで、カーソルが消える（画面とも一致）', (await cur()) === '');
+  await drag(page, S, [[3, 8], [5, 8]]);
+  check('マウスで描くと、カーソルは消えたまま', (await cur()) === '');
+  await page.keyboard.press('Enter');
+  check('カーソルが出ていないときの Enter は、カーソルを出すだけ（前回の位置 15,16）', (await cur()) === '15,16', String(await cur()));
+  // 空の Ctrl+Z（履歴がなくなるまで戻す）でも、カーソルが消える
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+ArrowRight');
+  await page.keyboard.press('Control+z');
+  check('履歴が空の Ctrl+Z でも、カーソルが画面から消える', (await cur()) === '');
+  // 塗りつぶし：カーソルを出す → Enter で塗る → カーソルは出たまま
+  await page.keyboard.press('g');
+  await page.keyboard.press('Control+ArrowLeft');
+  const before = await cur();
+  await page.keyboard.press('Enter');
+  check('塗りつぶしをキーボードで使っても、カーソルは出たまま（位置も同じ）', (await cur()) === before && before !== '', String(before));
+  // 選択をマウスで作り、Enter：選択は消えない
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('m');
+  await drag(page, S, [[2, 2], [5, 5]]);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+d');
+  await page.keyboard.press('p');
+  await finishPaint(page);
+  await apply(page);
+  const out = await storedPixels(page);
+  check('見えない位置 (15,16) には、何も描かれていない', rgbaAt(out, 15, 16)[3] === 0 && rgbaAt(out, 14, 16)[3] === 0);
   await ctx.close();
 }
 

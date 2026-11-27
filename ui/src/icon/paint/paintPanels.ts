@@ -206,7 +206,11 @@ export function buildAdjustPanel(session: PaintSession, hooks: AdjustHooks): Pan
           apply(t('この色を透明にする'), (px, m) => makeTransparentMasked(px, m, from!, tolerance));
         }))),
     // 使う回数が少ないので、折りたたんでおく（768px の高さでも、スクロールを減らすため）
-    h('details', { class: 'paint-section paint-more' }, h('summary', null, t('そのほか')),
+    h('details', { class: 'paint-section paint-more', ontoggle: (e: Event) => {
+      // 開いたとき、中身が見える位置までスクロールする
+      const d = e.target as HTMLDetailsElement;
+      if (d.open) d.lastElementChild?.scrollIntoView({ block: 'nearest' });
+    } }, h('summary', null, t('そのほか')),
       h('div', { class: 'paint-actions' },
         small(t('単色化'), t('絵のシルエットを、前景色の 1 色にします（アルファは保ちます）'), () => {
           const c = { ...session.primary };

@@ -462,7 +462,9 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     hint.textContent = toolHint(session.tool);
     hint.title = hint.textContent;
     view.hoverCells = session.hoverCells;
-    view.cursor = session.cursorLive ? session.cursor : null;
+    // 画面のカーソルは、セッションのカーソルそのもの（食い違わない）。検査のために、描いている位置を属性にも出す
+    view.cursor = session.cursor;
+    stage.dataset['cursor'] = session.cursor ? `${session.cursor.x},${session.cursor.y}` : '';
     stage.dataset['tool'] = session.tool;
     syncColors();
     view.requestRender();
@@ -508,6 +510,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     // 色の置き換えの元の色を、絵から取るとき
     if (pickingHandler && e.button === 0) {
       e.preventDefault();
+      session.dropCursor();
       const p = view.toPixel(e.clientX, e.clientY);
       if (p.x >= 0 && p.y >= 0 && p.x < canvasSize() && p.y < canvasSize()) {
         const cb = pickingHandler;
@@ -619,7 +622,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     // ツールの並びの上下の矢印は、並びの中で移る
     if (target.closest('.paint-tools') && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return;
     if (target.closest('.paint-tabs') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
-    const onButton = target.closest('button') !== null;
+    // summary（［そのほか］の開閉）も、ボタンと同じく、Enter・Space はその要素のもの
+    const onButton = target.closest('button, summary') !== null;
     // Enter・Space・矢印（カーソルの移動と描画）は、キャンバス（か、フォーカスがどこにもないとき）だけのもの。
     // チェックボックスやスライダーの上の Enter で、描いてしまわない
     const onStage = target === stage || target === document.body || target.classList.contains('modal');
@@ -662,7 +666,7 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
       return;
     }
     // Space を押しながら矢印でカーソルを動かすときは、押した位置から描き始める
-    if (spacePending && session.cursorLive && e.key.startsWith('Arrow')) {
+    if (spacePending && session.cursor !== null && e.key.startsWith('Arrow')) {
       spacePending = false;
       session.key({ key: ' ', ctrl: false, shift: e.shiftKey, alt: false });
     }
@@ -681,7 +685,8 @@ export function openPaintDialog(o: PaintDialogOptions): ModalHandle {
     if (e.key === ' ' && spacePending) {
       // Space だけを押して離した：カーソルを出していれば、その位置に 1 点（ツールを 1 回使う）
       spacePending = false;
-      if (session.cursorLive && stage === document.activeElement) {
+      // カーソルが出ていなければ、カーソルを出すだけ（見えない場所には描かない）。出ていれば、その位置で使う
+      if (stage === document.activeElement) {
         session.key({ key: ' ', ctrl: false, shift: spaceShift, alt: false });
         session.keyUp(' ');
       }

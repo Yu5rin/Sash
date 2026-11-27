@@ -320,6 +320,8 @@ describe('キーボードのカーソルで描く', () => {
   });
   it('Space でも描く。Enter の繰り返し（押しっぱなし）は 1 回だけ', () => {
     const s = fresh();
+    s.key(key(' ')); // 1 回目はカーソルを出すだけ
+    s.keyUp(' ');
     s.key(key(' '));
     s.key(key(' ', { repeat: true }));
     s.keyUp(' ');
@@ -328,6 +330,8 @@ describe('キーボードのカーソルで描く', () => {
   });
   it('Shift+Enter で、前の点から直線。Ctrl+矢印は、選択があってもカーソルを動かす', () => {
     const s = fresh();
+    s.key(key('Enter')); // カーソルを出す
+    s.keyUp('Enter');
     s.key(key('Enter'));
     s.keyUp('Enter');
     s.key(key('ArrowRight', { ctrl: true, shift: true }));
@@ -343,6 +347,7 @@ describe('キーボードのカーソルで描く', () => {
   it('塗りつぶしはキーボードでも一度で終わる。カーソルは絵の中に収まる', () => {
     const s = fresh();
     s.setTool('fill');
+    s.key(key('Enter')); // カーソルを出す
     s.key(key('Enter'));
     expect(s.dragging).toBe(false);
     expect(getPixel(s.doc.pixels, 0, 0)).toEqual(COLORS['r']);
@@ -413,6 +418,8 @@ describe('見直し（第 2 段階）', () => {
   });
   it('キーボードで描いている途中にマウスが押されたら、キーボードの描画を終えてからマウスの操作を始める', () => {
     const s = fresh();
+    s.key(key('Enter')); // カーソルを出す
+    s.keyUp('Enter');
     s.key(key('Enter'));
     s.pointerDown(P(2, 2));
     s.pointerUp(P(2, 2));
@@ -536,81 +543,164 @@ describe('最終確認の指摘', () => {
   });
 });
 
-describe('キーボードのカーソルの状態（cursorLive）の遷移', () => {
-  const live = () => {
-    const s = fresh(['rr']);
-    s.key(key('ArrowRight', { ctrl: true }));
-    expect(s.cursorLive).toBe(true);
-    return s;
+describe('キーボードのカーソルの状態（session.cursor だけ）の遷移', () => {
+  /** 画面が見ているカーソル（onChange のたびに写す）と、実際のカーソルが、いつも同じか。 */
+  const watch = (s: PaintSession) => {
+    const seen = { v: s.cursor ? `${s.cursor.x},${s.cursor.y}` : '' };
+    s.onChange = () => (seen.v = s.cursor ? `${s.cursor.x},${s.cursor.y}` : '');
+    return () => {
+      const now = s.cursor ? `${s.cursor.x},${s.cursor.y}` : '';
+      expect(seen.v, '画面のカーソルと実際のカーソルが食い違っている').toBe(now);
+    };
   };
-  it('カーソルを動かす・Enter／Space で使うと、生きる', () => {
-    const s = fresh();
-    expect(s.cursorLive).toBe(false);
-    s.key(key('ArrowLeft'));
-    expect(s.cursorLive).toBe(true);
-    s.key(key('Enter'));
-    s.keyUp('Enter');
-    expect(s.cursorLive).toBe(true);
-    s.key(key(' '));
-    s.keyUp(' ');
-    expect(s.cursorLive).toBe(true);
-  });
-  it('マウスで描く・押す・動かす（dropCursor）と、止まる', () => {
-    const s = live();
-    drag(s, [[1, 1], [3, 1]]);
-    expect(s.cursorLive).toBe(false);
-    const t = live();
-    t.dropCursor();
-    expect(t.cursorLive).toBe(false);
-  });
-  it('ツールを替える・元に戻す・やり直す・Esc・選択の作成／確定／解除・色の変更で止まる', () => {
-    const steps: [string, (s: PaintSession) => void][] = [
-      ['ツール', (s) => s.setTool('brush')],
-      ['元に戻す', (s) => { drag(s, [[0, 0]]); s.key(key('ArrowRight', { ctrl: true })); s.undo(); }],
-      ['やり直す', (s) => { drag(s, [[0, 0]]); s.undo(); s.key(key('ArrowRight', { ctrl: true })); s.redo(); }],
-      ['Esc', (s) => { s.escape(); }],
-      ['すべて選択', (s) => s.selectAllPixels()],
-      ['選択を解除', (s) => { s.selectAllPixels(); s.key(key('ArrowRight', { ctrl: true })); s.clearSelection(); }],
-      ['色の変更', (s) => s.applyColor('x', () => undefined)],
-      ['反転', (s) => s.transform('flipH')],
-    ];
-    for (const [name, act] of steps) {
-      const s = live();
-      act(s);
-      expect(s.cursorLive, name).toBe(false);
+  const shown = (s: PaintSession) => {
+    s.key(key('ArrowRight', { ctrl: true }));
+    expect(s.cursor).not.toBeNull();
+  };
+  const pixelsOf = (s: PaintSession) => [...s.doc.pixels.data];
+
+  it('カーソルが出ていないときの Enter・Space は、カーソルを出すだけで、ツールを使わない（見えない場所に描かない）', () => {
+    for (const k of ['Enter', ' ']) {
+      const s = fresh();
+      const same = watch(s);
+      const before = pixelsOf(s);
+      s.key(key(k));
+      s.keyUp(k);
+      expect(s.cursor).toEqual({ x: 8, y: 8 });
+      expect(pixelsOf(s)).toEqual(before);
+      expect(s.history.count).toBe(0);
+      same();
+      // 2 回目から使う
+      s.key(key(k));
+      s.keyUp(k);
+      expect(s.history.count).toBe(1);
+      expect(getPixel(s.doc.pixels, 8, 8)).toEqual(COLORS['r']);
+      same();
     }
   });
-  it('選択範囲を矢印で動かす・Enter で浮いた選択を確定しても、生きない（以前にカーソルを使っていても）', () => {
-    const s = fresh(['rr']);
-    s.key(key('ArrowLeft')); // 一度カーソルを使う
-    s.setTool('select');
-    drag(s, [[0, 0], [1, 0]]); // マウスで選択（止まる）
-    expect(s.cursorLive).toBe(false);
-    s.key(key('ArrowDown')); // 選択範囲を動かす
-    expect(s.doc.floating).not.toBeNull();
-    expect(s.cursorLive).toBe(false);
-    s.key(key('Enter')); // 浮いた選択の確定
-    expect(s.cursorLive).toBe(false);
+  it('出すときは、前回の位置から始める', () => {
+    const s = fresh();
+    s.key(key('ArrowLeft'));
+    s.key(key('ArrowDown'));
+    const at = { ...s.cursor! };
+    s.dropCursor();
+    expect(s.cursor).toBeNull();
+    s.key(key('Enter'));
+    expect(s.cursor).toEqual(at);
   });
-  it('再現手順：カーソルで点 → Ctrl+Z → マウスで線 → 選択して矢印 → 止まったまま（古い位置で描かない）', () => {
+  it('再現 a1：カーソルで点 → Ctrl+Z ×2 → マウスで線 → Enter は、古い位置 (7,8) に描かない', () => {
     const s = fresh();
     s.key(key('ArrowLeft'));
     s.key(key(' '));
     s.keyUp(' ');
     s.undo();
-    drag(s, [[1, 1], [4, 1]]);
-    s.setTool('select');
-    drag(s, [[8, 8], [12, 12]]);
-    s.key(key('ArrowDown'));
-    s.key(key('ArrowDown'));
-    expect(s.cursorLive).toBe(false);
+    s.undo();
+    drag(s, [[3, 3], [5, 3]]);
+    const n = s.history.count;
+    s.key(key('Enter'));
+    s.keyUp('Enter');
+    expect(s.history.count).toBe(n);
+    expect(getPixel(s.doc.pixels, 7, 8).a).toBe(0);
   });
-  it('止まったあとで、Ctrl+矢印・矢印（選択なし）でカーソルを動かすと、また生きる', () => {
-    const s = live();
-    s.setTool('brush');
-    expect(s.cursorLive).toBe(false);
+  it('再現 a7：カーソル → Ctrl+Z → 四角形選択をマウスで作り → Enter は、選択を消さない', () => {
+    const s = fresh();
     s.key(key('ArrowLeft'));
-    expect(s.cursorLive).toBe(true);
+    s.key(key(' '));
+    s.keyUp(' ');
+    s.undo();
+    s.setTool('select');
+    drag(s, [[2, 2], [5, 5]]);
+    const sel = [...s.doc.selection!];
+    s.key(key('Enter'));
+    s.keyUp('Enter');
+    expect(s.doc.selection).not.toBeNull();
+    expect([...s.doc.selection!]).toEqual(sel);
+  });
+  it('再現 a6：塗りつぶしをカーソルで使ったあとも、カーソルは出たまま・画面と一致（もう一度で、見える位置にまた塗る）', () => {
+    const s = fresh();
+    const same = watch(s);
+    s.setTool('fill');
+    s.key(key('ArrowLeft'));
+    s.key(key('Enter'));
+    s.keyUp('Enter');
+    expect(s.cursor).not.toBeNull();
+    same();
+    expect(s.history.count).toBe(1);
+  });
+  it('自動選択をカーソルで使ったあとも、カーソルは出たまま', () => {
+    const s = fresh();
+    const same = watch(s);
+    s.setTool('wand');
+    s.key(key('ArrowLeft'));
+    s.key(key('Enter'));
+    s.keyUp('Enter');
+    expect(s.doc.selection).not.toBeNull();
+    expect(s.cursor).not.toBeNull();
+    same();
+  });
+  it('消える操作：マウス・ホバー・ツール・履歴を作る操作・元に戻す／やり直す（履歴が空でも）・処理した Esc・選択範囲の矢印移動・確定。画面とも一致', () => {
+    const acts: [string, (s: PaintSession) => void][] = [
+      ['マウス', (s) => drag(s, [[1, 1], [3, 1]])],
+      ['ホバー', (s) => s.dropCursor()],
+      ['ツール', (s) => s.setTool('brush')],
+      ['空の元に戻す', (s) => { s.undo(); }],
+      ['空のやり直し', (s) => { s.redo(); }],
+      ['すべて選択', (s) => s.selectAllPixels()],
+      ['反転', (s) => s.transform('flipH')],
+      ['色の変更', (s) => s.applyColor('x', () => undefined)],
+      ['キャンバスの大きさ', (s) => s.resizeCanvas(32, 'nearest')],
+      ['貼り付け', (s) => { s.clipboard = fromTable(['r']); s.pasteInternal(); }],
+      ['選択範囲の矢印移動', (s) => { s.setTool('select'); drag(s, [[0, 0], [1, 1]]); s.key(key('ArrowLeft', { ctrl: true })); s.key(key('ArrowDown')); }],
+      ['Esc（選択の解除）', (s) => { s.selectAllPixels(); s.key(key('ArrowLeft', { ctrl: true })); s.escape(); }],
+    ];
+    for (const [name, act] of acts) {
+      const s = fresh();
+      const same = watch(s);
+      shown(s);
+      act(s);
+      expect(s.cursor, name).toBeNull();
+      same();
+    }
+  });
+  it('何も処理しない Esc（閉じる確認へ進む）では、カーソルに触らない', () => {
+    const s = fresh();
+    const same = watch(s);
+    shown(s);
+    expect(s.escape()).toBe(false);
+    expect(s.cursor).not.toBeNull();
+    same();
+  });
+  it('Enter で浮いた選択を確定しても、カーソルは出ない（以前に使っていても）', () => {
+    const s = fresh(['rr']);
+    s.key(key('ArrowLeft'));
+    s.setTool('select');
+    drag(s, [[0, 0], [1, 0]]);
+    s.key(key('ArrowDown'));
+    expect(s.doc.floating).not.toBeNull();
+    expect(s.cursor).toBeNull();
+    s.key(key('Enter'));
+    expect(s.cursor).toBeNull();
+  });
+  it('カーソルを動かしながら描いている途中は、カーソルが消えない（描画が終わるまで）', () => {
+    const s = fresh();
+    s.key(key('ArrowLeft'));
+    s.key(key('Enter'));
+    s.key(key('ArrowRight'));
+    s.key(key('ArrowRight'));
+    expect(s.cursor).not.toBeNull();
+    s.keyUp('Enter');
+    expect(s.history.count).toBe(1);
+    expect(s.cursor).not.toBeNull();
+  });
+  it('Space+矢印：カーソルが出ているときだけ、描き始める（ダイアログの処理）。マウスが押されたら、キーボードの描画は終わる', () => {
+    const s = fresh();
+    s.key(key('Enter')); // 出すだけ
+    s.key(key('Enter'));
+    s.pointerDown(P(2, 2));
+    s.pointerUp(P(2, 2));
+    s.keyUp('Enter');
+    expect(s.cursor).toBeNull();
+    expect(s.history.count).toBe(2);
   });
 });
 
